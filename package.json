@@ -17,6 +17,8 @@
     "text.js",
     "pdfread.js",
     "cover.js",
+    "tocparse.js",
+    "prompts/*.md",
     "cordis.patch.yml",
     "icon.svg",
     "locale/*.json",
@@ -47,7 +49,7 @@
     "pdfjs-dist": "^6.5.438"
   },
   "scripts": {
-    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs"
+    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs"
   },
   "keywords": [
     "dsh-plugin",

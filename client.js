@@ -23,6 +23,10 @@ window.__ModuleLoader__.load({
     const DELETE_API = '/dsh-book-slides/delete';
     const REPARSE_API = '/dsh-book-slides/reparse';
     const CHAPTERS_API = '/dsh-book-slides/chapters';
+    const TOC_API = '/dsh-book-slides/toc';
+    const TOC_PREVIEW_API = '/dsh-book-slides/toc/preview';
+    const TOC_PARSE_API = '/dsh-book-slides/toc/parse';
+    const TOC_RANGE_API = '/dsh-book-slides/toc/range';
     const FILE_API = '/dsh-book-slides/file';
     const COVER_API = '/dsh-book-slides/cover';
     const STORAGE_API = '/dsh-book-slides/storage';
@@ -107,6 +111,15 @@ window.__ModuleLoader__.load({
 .bl-more-inline:focus-visible{outline:2px solid color-mix(in oklab,currentColor 45%,transparent);opacity:1}
 .bl-row-menu{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 11px 9px 34px;font-size:12px}
 .bl-row-menu .bl-btn{padding:3px 9px;font-size:11.5px}
+.bl-toc{border:1px solid var(--bl-line);border-radius:9px;padding:9px 11px;margin:10px 0 4px;background:color-mix(in oklab,currentColor 3%,transparent)}
+.bl-toc-title{font-size:12.5px;font-weight:600;margin-bottom:6px}
+.bl-toc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.bl-toc-row .bl-btn{padding:3px 9px;font-size:11.5px}
+.bl-input-num{width:62px;padding:3px 6px;font-size:12px}
+.bl-toc-msg{margin-top:6px;color:inherit;opacity:.85}
+.bl-source{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:11.5px;opacity:.68;margin:8px 0 0}
+.bl-source-warn{color:#d9484b;opacity:.95}
+.bl-toc-preview{max-height:180px;overflow:auto;margin:8px 0 0;padding:8px;border-radius:7px;background:color-mix(in oklab,currentColor 5%,transparent);font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 `;
 
     /* ------------------------------ 数据 ------------------------------ */
@@ -468,6 +481,47 @@ window.__ModuleLoader__.load({
      * 书籍详情：章节清单 + 勾选 + 手动修正。
      * 手动修正全部走服务端的章节操作接口，前端只负责收集意图、刷新结果。
      */
+    /** 目录页码范围 + 预览 + 按目录切章。单独拆出来是为了能直接渲染测。 */
+    function TocBox({ toc, onFrom, onTo, onPreview, onParse }) {
+      return h(
+        'div',
+        { className: 'bl-toc' },
+        h('div', { className: 'bl-toc-title' }, '按目录切章'),
+        h(
+          'div',
+          { className: 'bl-toc-row' },
+          h('span', { className: 'bl-hint' }, '目录页码范围'),
+          h('input', {
+            className: 'bl-input bl-input-num',
+            type: 'number',
+            placeholder: '起',
+            'aria-label': '目录起始页',
+            value: toc.from,
+            onChange: (event) => onFrom(event.target.value),
+          }),
+          h('span', { className: 'bl-hint' }, '–'),
+          h('input', {
+            className: 'bl-input bl-input-num',
+            type: 'number',
+            placeholder: '止',
+            'aria-label': '目录结束页',
+            value: toc.to,
+            onChange: (event) => onTo(event.target.value),
+          }),
+          h('button', { className: 'bl-btn', disabled: toc.busy, onClick: onPreview }, '看这几页'),
+          h('button', { className: 'bl-btn bl-btn-primary', disabled: toc.busy, onClick: onParse }, toc.busy ? '读目录中…' : '按目录切章'),
+        ),
+        h(
+          'div',
+          { className: 'bl-hint' },
+          toc.suggested
+            ? '建议 ' + toc.suggested.from + '–' + toc.suggested.to + ' 页（共 ' + toc.total + ' 页），猜得不对就改'
+            : '没猜出目录在哪，自己填页码（共 ' + toc.total + ' 页）',
+        ),
+        toc.message ? h('div', { className: 'bl-hint bl-toc-msg' }, toc.message) : null,
+        toc.preview ? h('pre', { className: 'bl-toc-preview' }, toc.preview) : null,
+      );
+    }
     function Detail({ bookId, onBack, error, setError }) {
       const [state, setState] = useState({ loading: true, book: null, chapters: [], modules: [] });
       const [refresh, setRefresh] = useState(0);
@@ -476,6 +530,7 @@ window.__ModuleLoader__.load({
       const [menu, setMenu] = useState(0);
       const [edit, setEdit] = useState(null);
       const [askReparse, setAskReparse] = useState(false);
+      const [toc, setToc] = useState({ from: '', to: '', suggested: null, total: 0, info: null, preview: '', busy: false, message: '' });
 
       useEffect(() => {
         let alive = true;
@@ -490,10 +545,51 @@ window.__ModuleLoader__.load({
             setState({ loading: false, book: null, chapters: [], modules: [] });
             setError(err);
           });
+        // 取目录范围：用户上次填的优先，其次是猜测值
+        getJson(TOC_API + '?bookId=' + encodeURIComponent(bookId))
+          .then((data) => {
+            if (!alive) return;
+            const suggested = data.suggested || null;
+            const saved = data.range || null;
+            const use = saved || suggested;
+            setToc((prev) => ({
+              ...prev,
+              total: data.total || 0,
+              suggested: suggested,
+              info: data.toc || null,
+              from: use ? String(use.from) : prev.from,
+              to: use ? String(use.to) : prev.to,
+            }));
+          })
+          .catch(() => {});
         return () => {
           alive = false;
         };
       }, [bookId, setError, refresh]);
+
+      /**
+       * 范围改了（含首次带出建议值）：防抖存盘 + 重新拉预览。
+       * 这样退出再进来，填过的页码和「看这几页」的内容都还在。
+       */
+      useEffect(() => {
+        const from = Number(toc.from);
+        const to = Number(toc.to);
+        if (!from || !to || to < from) return undefined;
+        const timer = setTimeout(async () => {
+          try {
+            await postJson(TOC_RANGE_API, { bookId: bookId, from: from, to: to });
+            const data = await postJson(TOC_PREVIEW_API, { bookId: bookId, from: from, to: to });
+            setToc((prev) =>
+              Number(prev.from) === from && Number(prev.to) === to
+                ? Object.assign({}, prev, { preview: data.preview || '' })
+                : prev,
+            );
+          } catch (err) {
+            /* 范围还没填完整时静默，别一边打字一边报错 */
+          }
+        }, 600);
+        return () => clearTimeout(timer);
+      }, [bookId, toc.from, toc.to]);
 
       const book = state.book;
       const chapters = state.chapters || [];
@@ -578,20 +674,77 @@ window.__ModuleLoader__.load({
       const doReparse = useCallback(
         async (force) => {
           setBusy(true);
-          setAskReparse(false);
+          setAskReparse('');
           try {
             await postJson(REPARSE_API, { bookId: bookId, force: !!force });
             setSelected({});
             setRefresh((v) => v + 1);
             setError(null);
           } catch (err) {
-            if (err && err.code === 'E_MANUAL_EDITS') setAskReparse(true);
+            // 两种「会覆盖好东西」的情况都要先问一声
+            if (err && err.code === 'E_MANUAL_EDITS') setAskReparse('manual');
             setError(err);
           } finally {
             setBusy(false);
           }
         },
         [bookId, setError],
+      );
+
+      /** 目录页预览：让用户确认自己选的是目录那几页。 */
+      const previewToc = useCallback(async () => {
+        setToc((prev) => ({ ...prev, busy: true, message: '' }));
+        try {
+          const data = await postJson(TOC_PREVIEW_API, { bookId: bookId, from: Number(toc.from), to: Number(toc.to) });
+          setToc((prev) => ({ ...prev, busy: false, preview: data.preview || '' }));
+        } catch (err) {
+          setToc((prev) => ({ ...prev, busy: false, preview: '' }));
+          setError(err);
+        }
+      }, [bookId, toc.from, toc.to, setError]);
+
+      /** 按目录切章：模型读目录 → 校准 → 落盘；失败会自动回退并说明原因。 */
+      const parseToc = useCallback(
+        async (force) => {
+          setToc((prev) => ({ ...prev, busy: true, message: '' }));
+          setBusy(true);
+          try {
+            const data = await postJson(TOC_PARSE_API, {
+              bookId: bookId,
+              from: Number(toc.from),
+              to: Number(toc.to),
+              force: !!force,
+            });
+            setSelected({});
+            setRefresh((v) => v + 1);
+            setError(null);
+            if (data.fallback) {
+              setToc((prev) => ({ ...prev, busy: false, message: '已按页眉回退：' + String(data.message || data.code) }));
+            } else {
+              setToc((prev) => ({
+                ...prev,
+                busy: false,
+                message:
+                  (data.cached ? '用的是上次结果：' : '') +
+                  data.status +
+                  ' · 偏移 ' +
+                  data.offset +
+                  ' 页 · 标题命中率 ' +
+                  Math.round((data.hitRate || 0) * 100) +
+                  '%',
+              }));
+            }
+          } catch (err) {
+            setToc((prev) => ({ ...prev, busy: false }));
+            if (err && err.code === 'E_MANUAL_EDITS') {
+              setToc((prev) => ({ ...prev, message: '有手动修改，确认后点「覆盖并重切」' }));
+            }
+            setError(err);
+          } finally {
+            setBusy(false);
+          }
+        },
+        [bookId, toc.from, toc.to, setError],
       );
 
       const submitEdit = useCallback(async () => {
@@ -774,7 +927,9 @@ window.__ModuleLoader__.load({
             ? h(
                 'div',
                 { className: 'bl-note' },
-                '这本书有手动改过的章节，重新解析会覆盖它们。',
+                askReparse === 'toc'
+                  ? '当前章节是按目录切出来的，按页眉重切会丢掉它。'
+                  : '这本书有手动改过的章节，重新解析会覆盖它们。',
                 h(
                   'button',
                   { className: 'bl-btn', style: { marginLeft: 8 }, disabled: busy, onClick: () => doReparse(true) },
@@ -782,7 +937,7 @@ window.__ModuleLoader__.load({
                 ),
                 h(
                   'button',
-                  { className: 'bl-btn', style: { marginLeft: 6 }, onClick: () => setAskReparse(false) },
+                  { className: 'bl-btn', style: { marginLeft: 6 }, onClick: () => setAskReparse('') },
                   '算了',
                 ),
               )
@@ -814,6 +969,13 @@ window.__ModuleLoader__.load({
                       ),
                     ),
                   ),
+                  h(TocBox, {
+                    toc: toc,
+                    onFrom: (value) => setToc((prev) => Object.assign({}, prev, { from: value, preview: '' })),
+                    onTo: (value) => setToc((prev) => Object.assign({}, prev, { to: value, preview: '' })),
+                    onPreview: previewToc,
+                    onParse: () => parseToc(false),
+                  }),
                   h(
                     'div',
                     { className: 'bl-toolbar' },
@@ -1160,7 +1322,7 @@ window.__ModuleLoader__.load({
       },
 
       /** 测试用：SSR 里直接渲染内部组件，生产代码不会碰它。 */
-      __components: { BookSlidesPanel: BookSlidesPanel, Shelf: Shelf, Detail: Detail, Settings: Settings, BookCard: BookCard },
+      __components: { BookSlidesPanel: BookSlidesPanel, Shelf: Shelf, Detail: Detail, Settings: Settings, BookCard: BookCard, TocBox: TocBox },
     };
   },
 });

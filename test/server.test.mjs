@@ -261,6 +261,55 @@ test('方法不对返回 405', async () => {
   assert.equal(res.status, 405);
 });
 
+/* ------------------------------ 目录切章 ------------------------------ */
+
+test('目录接口：建议范围、预览、非法范围都有明确响应', async () => {
+  const shelf = await fetch(base + '/dsh-book-slides/books').then((r) => r.json());
+  const id = shelf.books[0].id;
+
+  const info = await fetch(base + '/dsh-book-slides/toc?bookId=' + id).then((r) => r.json());
+  assert.equal(info.ok, true);
+  assert.ok(info.total > 0);
+  assert.equal(info.toc, null, '还没跑过目录解析');
+
+  const preview = await post('/dsh-book-slides/toc/preview', JSON.stringify({ bookId: id, from: 1, to: 1 })).then((r) => r.json());
+  assert.equal(preview.ok, true);
+  assert.ok(preview.chars > 0);
+
+  const bad = await post('/dsh-book-slides/toc/preview', JSON.stringify({ bookId: id, from: 5, to: 2 })).then((r) => r.json());
+  assert.equal(bad.code, 'E_BAD_RANGE');
+});
+
+test('目录解析：没有模型服务时回退机械切章，不报 500', async () => {
+  const shelf = await fetch(base + '/dsh-book-slides/books').then((r) => r.json());
+  const id = shelf.books[0].id;
+
+  const result = await post('/dsh-book-slides/toc/parse', JSON.stringify({ bookId: id, from: 1, to: 1 })).then((r) => r.json());
+  assert.equal(result.ok, true, '回退也算成功，不能把错误抛给面板');
+  assert.equal(result.fallback, true);
+  assert.ok(result.code);
+  assert.ok(result.chapterCount > 0, '回退之后仍然有章节');
+
+  const after = await fetch(base + '/dsh-book-slides/toc?bookId=' + id).then((r) => r.json());
+  assert.equal(after.toc.status, 'failed');
+  assert.ok(after.toc.message);
+});
+
+test('目录范围：填过就记住，并且优先于建议值', async () => {
+  const shelf = await fetch(base + '/dsh-book-slides/books').then((r) => r.json());
+  const id = shelf.books[0].id;
+
+  const saved = await post('/dsh-book-slides/toc/range', JSON.stringify({ bookId: id, from: 2, to: 3 })).then((r) => r.json());
+  assert.equal(saved.ok, true);
+  assert.deepEqual(saved.range, { from: 2, to: 3 });
+
+  const after = await fetch(base + '/dsh-book-slides/toc?bookId=' + id).then((r) => r.json());
+  assert.deepEqual(after.range, { from: 2, to: 3 }, '重新进来要拿得到上次填的范围');
+
+  const bad = await post('/dsh-book-slides/toc/range', JSON.stringify({ bookId: id, from: 3, to: 2 })).then((r) => r.json());
+  assert.equal(bad.code, 'E_BAD_RANGE');
+});
+
 /* ---------------------------- 章节手动修正 ---------------------------- */
 
 /** 五页两章：第 1 章占 1–3 页，第 2 章占 4–5 页，够拆分用。 */

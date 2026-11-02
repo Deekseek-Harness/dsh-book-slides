@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import {
   BOOKS_DIR,
   ROOT,
@@ -33,6 +34,17 @@ import {
 } from './store.js';
 import { PdfError, PDF_ERROR, extractPages, guessTitle, totalChars } from './pdfread.js';
 import { buildChapters, cleanPages, summarize } from './text.js';
+import {
+  TOC_PROMPT_VERSION,
+  buildTocMessages,
+  calibrate,
+  chaptersFromToc,
+  parseTocReply,
+  suggestTocRange,
+  tocTextOf,
+  validateEntries,
+  verifyChapters,
+} from './tocparse.js';
 import { coverSvg } from './cover.js';
 
 const require = createRequire(import.meta.url);
@@ -49,6 +61,10 @@ export const ROUTE_FILE = ROUTE_PREFIX + '/file';
 export const ROUTE_COVER = ROUTE_PREFIX + '/cover';
 export const ROUTE_REPARSE = ROUTE_PREFIX + '/reparse';
 export const ROUTE_CHAPTERS = ROUTE_PREFIX + '/chapters';
+export const ROUTE_TOC = ROUTE_PREFIX + '/toc';
+export const ROUTE_TOC_PREVIEW = ROUTE_PREFIX + '/toc/preview';
+export const ROUTE_TOC_PARSE = ROUTE_PREFIX + '/toc/parse';
+export const ROUTE_TOC_RANGE = ROUTE_PREFIX + '/toc/range';
 
 /** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -454,6 +470,279 @@ async function handleChapters(req, res) {
   sendJson(res, 200, { ok: true, chapters: chapters, chapterCount: book.chapterCount });
 }
 
+/* ------------------------------ 目录驱动切章 ------------------------------ */
+
+const PROMPT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompts');
+let promptCache = null;
+
+/** 提示词文件读一次就记住；开头那段「版本说明」对模型没用，切掉。 */
+function loadPrompt() {
+  if (promptCache !== null) return promptCache;
+  try {
+    const raw = fs.readFileSync(path.join(PROMPT_DIR, 'toc-extract-v1.md'), 'utf8');
+    const cut = raw.indexOf('## 角色');
+    promptCache = cut >= 0 ? raw.slice(cut) : raw;
+  } catch {
+    promptCache = '';
+  }
+  return promptCache;
+}
+
+/** 当前 DSH 默认模型。 */
+function resolveModel(ctx) {
+  let selection = null;
+  try {
+    selection = (ctx.get && ctx.get('agentDefaultModel') && ctx.get('agentDefaultModel').currentSelection
+      ? ctx.get('agentDefaultModel').currentSelection()
+      : null) || null;
+  } catch {
+    selection = null;
+  }
+  const provider = String((selection && selection.provider) || '').trim();
+  const model = String((selection && selection.model) || '').trim();
+  if (!provider || !model) throw new Error('DSH 还没选好模型，先去设置里挑一个再回来');
+  return { provider: provider, model: model };
+}
+
+/** 调一次模型，把增量拼成整段文本。 */
+async function callModel(ctx, system, user, maxTokens) {
+  const llm = ctx.get ? ctx.get('llm') : null;
+  if (!llm || typeof llm.prepareCall !== 'function') throw new Error('这个 DSH 里没有可用的模型服务');
+  const target = resolveModel(ctx);
+  const signal = AbortSignal.timeout(120000);
+  const prepared = await llm.prepareCall({ provider: target.provider, model: target.model, maxTokens: maxTokens || 4000 }, signal);
+  const messages = [{ role: 'user', content: [{ type: 'text', text: user }] }];
+  let text = '';
+  for await (const chunk of prepared.stream(Object.assign({}, prepared.config, { system: system, messages: messages, signal: signal }))) {
+    if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') {
+      text += chunk.text;
+      continue;
+    }
+    if (chunk && chunk.type === 'finish' && chunk.reason && chunk.reason.kind === 'error') {
+      throw new Error('模型报错：' + ((chunk.reason.failure && chunk.reason.failure.message) || '未知原因'));
+    }
+  }
+  return { text: text, model: target.model, provider: target.provider };
+}
+
+/** 把章节写回盘，并同步 book.json 的章数与字数。 */
+function persistChapters(loaded, pages, chapters) {
+  writeJson(path.join(loaded.dir, 'chapters.json'), chapters);
+  const book = loaded.book;
+  book.chapterCount = chapters.filter((c) => !c.front).length;
+  book.chars = pages.reduce((sum, page) => sum + String((page && page.text) || '').length, 0);
+  book.editedAt = new Date().toISOString();
+  writeJson(path.join(loaded.dir, 'book.json'), book);
+}
+
+/** 回退：机械切章，并把失败原因记进 toc.json。 */
+function fallbackToMechanical(loaded, pages, info) {
+  const chapters = buildChapters(cleanPages(pages));
+  for (const chapter of chapters) chapter.source = 'mechanical';
+  persistChapters(loaded, pages, chapters);
+  const toc = Object.assign({ status: 'failed', at: new Date().toISOString(), promptVersion: TOC_PROMPT_VERSION }, info || {});
+  writeJson(path.join(loaded.dir, 'toc.json'), toc);
+  return toc;
+}
+
+/** GET /toc：已保存的范围 + 已有结果 + 这次的建议范围。 */
+function handleTocGet(req, res) {
+  const bookId = String(query(req).get('bookId') || '').trim();
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  const toc = readJson(path.join(loaded.dir, 'toc.json'), null);
+  sendJson(res, 200, {
+    ok: true,
+    total: pages.length,
+    suggested: suggestTocRange(pages),
+    // 用户上次填的范围优先于建议值——否则重新进来又被打回猜测结果
+    range: toc && toc.range ? toc.range : null,
+    toc: toc,
+  });
+}
+
+/**
+ * POST /toc/range：把用户填的目录范围记下来。
+ *
+ * 之前范围只活在面板的状态里，一退出就退回猜测值；预览也要能凭这个范围重新生成，
+ * 所以范围本身必须落盘。这里只写 range，不动已有结果。
+ */
+async function handleTocRange(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const loaded = loadBook(String(body.bookId || ''));
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  const total = pages.length;
+  const from = Math.round(Number(body.from) || 0);
+  const to = Math.round(Number(body.to) || 0);
+  if (!(from >= 1 && to >= from && to <= total && to - from <= 40)) {
+    sendError(res, 'E_BAD_RANGE', '目录页码范围不合法', '范围要在 1–' + total + ' 之间，且不超过 40 页。');
+    return;
+  }
+  const tocFile = path.join(loaded.dir, 'toc.json');
+  const toc = readJson(tocFile, {}) || {};
+  toc.range = { from: from, to: to };
+  if (!toc.status) toc.status = 'draft';
+  toc.rangeUpdatedAt = new Date().toISOString();
+  writeJson(tocFile, toc);
+  sendJson(res, 200, { ok: true, range: toc.range });
+}
+
+/** POST /toc/preview：取目录原文前 800 字，让用户确认自己选对页了。 */
+async function handleTocPreview(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const loaded = loadBook(String(body.bookId || ''));
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  const total = pages.length;
+  const from = Math.round(Number(body.from) || 0);
+  const to = Math.round(Number(body.to) || 0);
+  if (!(from >= 1 && to >= from && to <= total)) {
+    sendError(res, 'E_BAD_RANGE', '页码范围不合法', '这本书一共 ' + total + ' 页。');
+    return;
+  }
+  const text = tocTextOf(pages, from, to, 3000);
+  sendJson(res, 200, { ok: true, chars: text.length, preview: text.slice(0, 800) });
+}
+
+/** POST /toc/parse：读目录 → 模型抽取 → 校准 → 落盘（失败回退机械切章）。 */
+async function handleTocParse(req, res, ctx) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const loaded = loadBook(String(body.bookId || ''));
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  if (!Array.isArray(pages) || pages.length === 0) {
+    sendError(res, 'E_NO_PAGES', '这本书没有存下逐页文本', '删掉重新导入一次。');
+    return;
+  }
+  const total = pages.length;
+  const from = Math.round(Number(body.from) || 0);
+  const to = Math.round(Number(body.to) || 0);
+  if (!(from >= 1 && to >= from && to <= total && to - from <= 40)) {
+    sendError(res, 'E_BAD_RANGE', '目录页码范围不合法', '范围要在 1–' + total + ' 之间，且不超过 40 页。');
+    return;
+  }
+  const manualCount = (Array.isArray(loaded.chapters) ? loaded.chapters : []).filter((c) => c && c.manual).length;
+  if (manualCount > 0 && !body.force) {
+    sendError(res, 'E_MANUAL_EDITS', '这本书有 ' + manualCount + ' 处手动修改', '按目录重切会覆盖它们；确认就带 force 再来一次。');
+    return;
+  }
+
+  const tocFile = path.join(loaded.dir, 'toc.json');
+  // 缓存键只认「书 + 范围 + 提示词版本」：读缓存不该要求现在还配着模型，
+  // 也避免换个模型就把已经算好的结果判成失效。
+  const cacheKey = sha256Of(Buffer.from([loaded.book.sha256 || '', from, to, TOC_PROMPT_VERSION].join('|'), 'utf8'));
+  const cached = readJson(tocFile, null);
+  if (!body.force && cached && cached.cacheKey === cacheKey && cached.status !== 'failed' && Array.isArray(cached.entries)) {
+    // 关键：不读 chapters.json —— 它可能已经被「重新解析」换成机械结果了。
+    // 目录结果以 toc.json 里的 entries 为准，每次都从它重建，这样「重放」才是幂等的。
+    const again = chaptersFromToc(pages, { status: cached.status, entries: cached.entries });
+    if (again) {
+      const hit = verifyChapters(pages, again);
+      persistChapters(loaded, pages, again);
+      cached.hitRate = hit;
+      writeJson(tocFile, cached);
+      sendJson(res, 200, {
+        ok: true,
+        cached: true,
+        status: cached.status,
+        offset: cached.offset,
+        hitRate: hit,
+        chapterCount: again.filter((c) => !c.front).length,
+        chapters: again,
+      });
+      return;
+    }
+  }
+
+  const prompt = loadPrompt();
+  if (!prompt) {
+    const toc = fallbackToMechanical(loaded, pages, { code: 'E_NO_PROMPT', stage: 'prompt', message: '提示词文件缺失', range: { from, to } });
+    sendJson(res, 200, { ok: true, fallback: true, code: toc.code, message: toc.message, chapterCount: loaded.book.chapterCount });
+    return;
+  }
+
+  const built = buildTocMessages({ promptFile: prompt, book: loaded.book, pages: pages, from: from, to: to });
+  let entries = null;
+  let lastError = '';
+  let usedModel = '';
+  for (let attempt = 0; attempt < 2 && !entries; attempt += 1) {
+    const user = attempt === 0 ? built.user : built.user + '\n\n【上一次的输出不合格】' + lastError + '\n请严格按规则重新输出，只输出 JSON。';
+    let reply;
+    try {
+      reply = await callModel(ctx, built.system, user, 4000);
+      usedModel = reply.model;
+    } catch (err) {
+      const toc = fallbackToMechanical(loaded, pages, { code: 'E_TOC_LLM', stage: 'llm', message: String((err && err.message) || err), range: { from, to } });
+      sendJson(res, 200, { ok: true, fallback: true, code: toc.code, message: toc.message, chapterCount: loaded.book.chapterCount });
+      return;
+    }
+    try {
+      const parsed = parseTocReply(reply.text);
+      const errors = validateEntries(parsed);
+      if (errors.length) {
+        lastError = errors.join('；');
+        continue;
+      }
+      entries = parsed;
+    } catch (err) {
+      lastError = String((err && err.message) || err);
+    }
+  }
+
+  if (!entries) {
+    const toc = fallbackToMechanical(loaded, pages, { code: 'E_TOC_LLM', stage: 'validate', message: lastError || '模型没给出可用的目录', range: { from, to } });
+    sendJson(res, 200, { ok: true, fallback: true, code: toc.code, message: toc.message, chapterCount: loaded.book.chapterCount });
+    return;
+  }
+
+  const calibrated = calibrate(pages, entries);
+  const chapters = chaptersFromToc(pages, calibrated);
+  if (calibrated.status === 'failed' || !chapters) {
+    const toc = fallbackToMechanical(loaded, pages, { code: 'E_TOC_ALIGN', stage: 'calibrate', message: '目录页码对不上 PDF 页', range: { from, to }, entries: calibrated.entries });
+    sendJson(res, 200, { ok: true, fallback: true, code: toc.code, message: toc.message, chapterCount: loaded.book.chapterCount });
+    return;
+  }
+
+  const hitRate = verifyChapters(pages, chapters);
+  const status = calibrated.status === 'verified' && hitRate >= 0.8 ? 'verified' : 'unverified';
+  persistChapters(loaded, pages, chapters);
+  const toc = {
+    status: status,
+    range: { from: from, to: to },
+    cacheKey: cacheKey,
+    promptVersion: TOC_PROMPT_VERSION,
+    model: usedModel,
+    offset: calibrated.offset,
+    offsetShare: calibrated.offsetShare,
+    hitRate: hitRate,
+    entries: calibrated.entries,
+    at: new Date().toISOString(),
+  };
+  writeJson(tocFile, toc);
+  sendJson(res, 200, {
+    ok: true,
+    status: status,
+    offset: calibrated.offset,
+    hitRate: hitRate,
+    chapterCount: chapters.filter((c) => !c.front).length,
+    chapters: chapters,
+  });
+}
+
 /* ------------------------------ 文件 ------------------------------ */
 
 /** 原始 PDF：支持 Range，浏览器内置阅读器才肯翻页。 */
@@ -653,6 +942,42 @@ export function apply(ctx) {
         return;
       }
       return handleChapters(req, res);
+    });
+
+    route(ROUTE_TOC, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handleTocGet(req, res);
+    });
+
+    route(ROUTE_TOC_PREVIEW, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleTocPreview(req, res);
+    });
+
+    route(ROUTE_TOC_PARSE, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleTocParse(req, res, ctx);
+    });
+
+    route(ROUTE_TOC_RANGE, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleTocRange(req, res);
     });
 
     route(ROUTE_PREFIX + '/storage', (req, res) => {

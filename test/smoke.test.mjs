@@ -262,6 +262,22 @@ test('buildChapters：标题和正文粘成一行的标题页，也能回溯到'
   assert.equal(chapters[1].from, 6, '第 6 章不该被正文里以「拍摄」开头的那行拽到第 3 页');
 });
 
+test('buildChapters：首行是乱码的标题页，靠次行的标题认出来', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '第9章 导演的发展策略\n' + body },
+    { page: 2, text: '第9章 导演的发展策略 149\n' + body },
+    // 第 10 章的标题页：首行「管 (意」是 OCR 把「第10章」认花了，次行才是标题
+    { page: 3, text: '管 (意\n可供选择的故事来源\n' + body },
+    { page: 4, text: '第10章 可供选择的故事来源 151\n' + body },
+    { page: 5, text: body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2, JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[1].from, 3, '起点应该是标题页第 3 页，而不是第一个页眉所在的第 4 页');
+  assert.equal(chapters[1].title, '第10章 可供选择的故事来源');
+});
 test('buildChapters：标题页字数多（>700）也能当标题页认', async () => {
   const { buildChapters, cleanPages } = await import('../text.js');
   const filler = '这段是正文，用来把标题页撑到七百字以上。'.repeat(30);

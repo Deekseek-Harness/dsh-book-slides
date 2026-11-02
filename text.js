@@ -502,7 +502,13 @@ function anchorOpeners(runs, pages) {
       // 标题页的头一行总是很短，且以「第」/Chapter/Part 开头；
       // 正文页的第一行是「页码 + 书名」或「章名 + 页码」，长度过不了这一关。
       const head = normalizeLine(lines[0] || '');
-      if (head.length > 12 || !/^(第|chapter|part)/i.test(head)) continue;
+      // 标题页有两条长相：
+      //   a) 首行是「第X章 / Chapter N」这类章号行（≤12 字）
+      //   b) 首行被 OCR 认花了（「管 (意」「5意笛」「笛」），但很短，而且紧接着的一行
+      //      正好就是本章标题——这是标题页的铁证，不能因为认不出章号就放过
+      const lookHead = head.length <= 12 && /^(第|chapter|part)/i.test(head);
+      const exactNext = lines.slice(1, 3).some((line) => normalizeLine(line).replace(/\s+/g, '') === tail);
+      if (!lookHead && !(head.length <= 8 && exactNext)) continue;
       if (lines.some((line) => matchesTitle(line, tail))) {
         run.fromIndex = j;
         break;
@@ -598,10 +604,17 @@ function repairOrder(runs) {
       continue;
     }
     if (next.no === expected) {
-      // 下一段才是正主，这一段是它的前半截：往前接
-      next.fromIndex = Math.min(next.fromIndex, run.fromIndex);
-      next.texts = run.texts.concat(next.texts);
-      continue;
+      // 「下一段才是正主，这一段是它的前半截」——只在两段真像同一章时才成立：
+      // 号相关（第5章 vs 第25章，OCR 丢了首位），或者标题相似。
+      // 否则这一段只是上一章里的一条杂号页眉（例如图表标签粘出来的「第6章 多发射和深流水线」），
+      // 并回前一段即可。少了这个判断，第 7 章会被拽到第 313 页、标题也变成图表标签。
+      const related = String(next.no).endsWith(String(run.no)) || String(run.no).endsWith(String(next.no));
+      const alike = run.tail && next.tail && Math.abs(run.tail.length - next.tail.length) <= 2 && editDistance(run.tail, next.tail) <= 2;
+      if (related || alike) {
+        next.fromIndex = Math.min(next.fromIndex, run.fromIndex);
+        next.texts = run.texts.concat(next.texts);
+        continue;
+      }
     }
     if (next.no > expected) {
       // 中间正好缺这一个号：是真章，只是页眉把号认错了，改回来
@@ -642,7 +655,7 @@ function titleTail(text) {
 }
 
 /** 编辑距离，只用来判「差一个字」，长度差超过 2 直接返回大数。 */
-function editDistance(a, b) {
+export function editDistance(a, b) {
   if (Math.abs(a.length - b.length) > 2) return 99;
   const rows = a.length + 1;
   const cols = b.length + 1;

@@ -139,3 +139,38 @@ test('设置页能渲染', () => {
   const html = renderToString(React.createElement(mod.__components.Settings, { onBack: () => {} }));
   assert.match(html, /正在读/);
 });
+
+test('目录切章面板：建议范围、预览、状态文案都能渲染', () => {
+  const { mod } = bootPlugin();
+  const base = { from: '9', to: '15', total: 608, suggested: { from: 9, to: 15 }, busy: false, message: '', preview: '' };
+  const html = renderToString(
+    React.createElement(mod.__components.TocBox, {
+      toc: base,
+      onFrom: () => {},
+      onTo: () => {},
+      onPreview: () => {},
+      onParse: () => {},
+    }),
+  );
+  assert.match(html, /按目录切章/);
+  assert.match(html, /建议 9–15 页（共 608 页）/);
+  assert.match(html, /value="9"/);
+  assert.match(html, /value="15"/);
+
+  const preview = renderToString(
+    React.createElement(mod.__components.TocBox, {
+      toc: Object.assign({}, base, { message: 'verified · 偏移 15 页 · 标题命中率 100%', preview: 'L1: 第1章 计算机概念和技术' }),
+      onFrom: () => {},
+      onTo: () => {},
+      onPreview: () => {},
+      onParse: () => {},
+    }),
+  );
+  assert.match(preview, /标题命中率 100%/);
+  assert.match(preview, /L1: 第1章/);
+
+  const busy = renderToString(
+    React.createElement(mod.__components.TocBox, { toc: Object.assign({}, base, { busy: true }), onFrom: () => {}, onTo: () => {}, onPreview: () => {}, onParse: () => {} }),
+  );
+  assert.match(busy, /读目录中/);
+});
