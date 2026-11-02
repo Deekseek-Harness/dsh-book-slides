@@ -310,6 +310,61 @@ test('目录范围：填过就记住，并且优先于建议值', async () => {
   assert.equal(bad.code, 'E_BAD_RANGE');
 });
 
+test('防覆盖：有目录结果时，机械重切先被拦住，force 才覆盖', async () => {
+  const shelf = await fetch(base + '/dsh-book-slides/books').then((r) => r.json());
+  const id = shelf.books[0].id;
+
+  // 造一份「目录切过且校验通过」的痕迹
+  fs.writeFileSync(
+    path.join(ROOT, 'books', id, 'toc.json'),
+    JSON.stringify({ status: 'verified', offset: 15, hitRate: 1, range: { from: 1, to: 1 } }),
+  );
+
+  const blocked = await post('/dsh-book-slides/reparse', JSON.stringify({ bookId: id })).then((r) => r.json());
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, 'E_TOC_EXISTS');
+  assert.match(blocked.error, /目录/);
+
+  const forced = await post('/dsh-book-slides/reparse', JSON.stringify({ bookId: id, force: true })).then((r) => r.json());
+  assert.equal(forced.ok, true);
+
+  const chapters = JSON.parse(fs.readFileSync(path.join(ROOT, 'books', id, 'chapters.json'), 'utf8'));
+  assert.ok(chapters.every((c) => c.source === 'mechanical'), '覆盖之后要标成机械来源，面板才看得出');
+});
+
+test('目录重放：chapters.json 被机械结果覆盖后，靠 toc.json 重放能恢复', async () => {
+  const shelf = await fetch(base + '/dsh-book-slides/books').then((r) => r.json());
+  const id = shelf.books[0].id;
+  const dir = path.join(ROOT, 'books', id);
+  const book = JSON.parse(fs.readFileSync(path.join(dir, 'book.json'), 'utf8'));
+
+  // 造一份「目录切过」的痕迹：条目对得上这本书（第 1 章从第 1 页起）
+  const entries = [
+    { title: '第1章 起点', printed: 1, physical: 1, level: 'chapter', anchor: 'header' },
+    { title: '第3章 收尾', printed: 3, physical: 3, level: 'chapter', anchor: 'header' },
+  ];
+  // 缓存键由服务端算：书 sha + 范围 + 提示词版本
+  const { sha256Of } = await import('../store.js');
+  const { TOC_PROMPT_VERSION } = await import('../tocparse.js');
+  const cacheKey = sha256Of(Buffer.from([book.sha256 || '', 1, 1, TOC_PROMPT_VERSION].join('|'), 'utf8'));
+  fs.writeFileSync(
+    path.join(dir, 'toc.json'),
+    JSON.stringify({ status: 'verified', offset: 0, hitRate: 1, entries: entries, cacheKey: cacheKey, range: { from: 1, to: 1 } }),
+  );
+
+  // 先把 chapters.json 换成机械结果
+  await post('/dsh-book-slides/reparse', JSON.stringify({ bookId: id, force: true })).then((r) => r.json());
+
+  // 不带 force 走缓存路径：服务端根本不比对 cacheKey 的模型部分时也该能重放
+  const replayed = await post('/dsh-book-slides/toc/parse', JSON.stringify({ bookId: id, from: 1, to: 1 })).then((r) => r.json());
+  assert.equal(replayed.ok, true);
+  assert.ok(Array.isArray(replayed.chapters));
+
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'chapters.json'), 'utf8'));
+  assert.ok(onDisk.every((c) => c.source === 'toc'), '重放之后章节应标回目录来源');
+  assert.ok(cacheKey);
+});
+
 /* ---------------------------- 章节手动修正 ---------------------------- */
 
 /** 五页两章：第 1 章占 1–3 页，第 2 章占 4–5 页，够拆分用。 */

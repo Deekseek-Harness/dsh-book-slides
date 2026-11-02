@@ -174,3 +174,29 @@ test('目录切章面板：建议范围、预览、状态文案都能渲染', ()
   );
   assert.match(busy, /读目录中/);
 });
+test('来源提示：目录结果、机械回退、以及「有更好的没被采用」都要看得出来', () => {
+  const { mod } = bootPlugin();
+  const tocInfo = { status: 'verified', offset: 15, hitRate: 1 };
+
+  const tocChapters = [
+    { n: 0, title: '前文', front: true, source: 'toc' },
+    { n: 1, title: '第1章 甲', source: 'toc' },
+    { n: 2, title: '第2章 乙', source: 'toc' },
+  ];
+  const fromToc = renderToString(React.createElement(mod.__components.SourceNote, { chapters: tocChapters, info: tocInfo }));
+  assert.match(fromToc, /结果来源：目录/);
+  assert.match(fromToc, /偏移 15 页 · 命中 100%/);
+  assert.doesNotMatch(fromToc, /没被采用/);
+
+  const mechChapters = [
+    { n: 1, title: '第1章 甲', source: 'mechanical' },
+    { n: 2, title: '第2章 乙', source: 'mechanical' },
+  ];
+  const mech = renderToString(React.createElement(mod.__components.SourceNote, { chapters: mechChapters, info: tocInfo }));
+  assert.match(mech, /结果来源：页眉（机械）/);
+  assert.match(mech, /没被采用/, '库里有目录结果却没在用时，必须提醒');
+
+  const plain = renderToString(React.createElement(mod.__components.SourceNote, { chapters: mechChapters, info: null }));
+  assert.match(plain, /结果来源：页眉（机械）/);
+  assert.doesNotMatch(plain, /没被采用/, '没有目录结果时不该提醒');
+});

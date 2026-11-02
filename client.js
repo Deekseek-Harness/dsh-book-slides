@@ -481,6 +481,30 @@ window.__ModuleLoader__.load({
      * 书籍详情：章节清单 + 勾选 + 手动修正。
      * 手动修正全部走服务端的章节操作接口，前端只负责收集意图、刷新结果。
      */
+    /**
+     * 结果来源提示：当前章节是目录切的还是页眉切的。
+     * 另外管一种情况——库里有更准的目录结果，但当前章节是机械重切出来的，
+     * 这里要显式提醒「可以重放」，不然用户永远不知道自己丢了什么。
+     */
+    function SourceNote({ chapters, info }) {
+      const list = (chapters || []).filter((c) => !c.front);
+      const fromToc = list.length > 0 && list.every((c) => c.source === 'toc');
+      const stale = !!(info && info.status === 'verified' && !fromToc);
+      return h(
+        'div',
+        { className: 'bl-source' },
+        h(
+          'span',
+          null,
+          '结果来源：' +
+            (fromToc ? '目录' : '页眉（机械）') +
+            (fromToc && info
+              ? ' · 偏移 ' + info.offset + ' 页 · 命中 ' + Math.round((Number(info.hitRate) || 0) * 100) + '%'
+              : ''),
+        ),
+        stale ? h('span', { className: 'bl-source-warn' }, '有更准的目录结果没被采用，点「按目录切章」可以重放') : null,
+      );
+    }
     /** 目录页码范围 + 预览 + 按目录切章。单独拆出来是为了能直接渲染测。 */
     function TocBox({ toc, onFrom, onTo, onPreview, onParse }) {
       return h(
@@ -683,6 +707,7 @@ window.__ModuleLoader__.load({
           } catch (err) {
             // 两种「会覆盖好东西」的情况都要先问一声
             if (err && err.code === 'E_MANUAL_EDITS') setAskReparse('manual');
+            else if (err && err.code === 'E_TOC_EXISTS') setAskReparse('toc');
             setError(err);
           } finally {
             setBusy(false);
@@ -976,6 +1001,7 @@ window.__ModuleLoader__.load({
                     onPreview: previewToc,
                     onParse: () => parseToc(false),
                   }),
+                  h(SourceNote, { chapters: chapters, info: toc.info }),
                   h(
                     'div',
                     { className: 'bl-toolbar' },
@@ -1322,7 +1348,7 @@ window.__ModuleLoader__.load({
       },
 
       /** 测试用：SSR 里直接渲染内部组件，生产代码不会碰它。 */
-      __components: { BookSlidesPanel: BookSlidesPanel, Shelf: Shelf, Detail: Detail, Settings: Settings, BookCard: BookCard, TocBox: TocBox },
+      __components: { BookSlidesPanel: BookSlidesPanel, Shelf: Shelf, Detail: Detail, Settings: Settings, BookCard: BookCard, TocBox: TocBox, SourceNote: SourceNote },
     };
   },
 });

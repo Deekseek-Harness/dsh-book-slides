@@ -328,7 +328,19 @@ async function handleReparse(req, res) {
     );
     return;
   }
+  // 目录切出来的结果比机械切章准，别让一次「重新解析」把它无声盖掉
+  const parsedToc = readJson(path.join(loaded.dir, 'toc.json'), null);
+  if (parsedToc && parsedToc.status === 'verified' && !body.force) {
+    sendError(
+      res,
+      'E_TOC_EXISTS',
+      '当前章节是按目录切出来的（标题命中率 ' + Math.round((Number(parsedToc.hitRate) || 0) * 100) + '%）',
+      '按页眉重切会丢掉这个结果；确认要覆盖就带上 force 再来一次。',
+    );
+    return;
+  }
   const chapters = buildChapters(cleanPages(rawPages));
+  for (const chapter of chapters) chapter.source = 'mechanical';
   const stats = summarize(rawPages, chapters);
   writeJson(path.join(loaded.dir, 'chapters.json'), chapters);
   const book = loaded.book;
