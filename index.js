@@ -48,6 +48,11 @@ export const ROUTE_DELETE = ROUTE_PREFIX + '/delete';
 export const ROUTE_FILE = ROUTE_PREFIX + '/file';
 export const ROUTE_COVER = ROUTE_PREFIX + '/cover';
 export const ROUTE_REPARSE = ROUTE_PREFIX + '/reparse';
+export const ROUTE_CHAPTERS = ROUTE_PREFIX + '/chapters';
+
+/** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
+export const MAX_MODULE_CHAPTERS = 5;
+export const MAX_MODULE_CHARS = 60000;
 
 /** 上传上限：和书库插件一致，200 MB。 */
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -296,6 +301,17 @@ async function handleReparse(req, res) {
     sendError(res, 'E_NO_PAGES', '这本书没有存下逐页文本', '删掉重新导入一次。');
     return;
   }
+  // 手改过的章节不能被一次「重新解析」无声抹掉
+  const manualCount = (Array.isArray(loaded.chapters) ? loaded.chapters : []).filter((c) => c && c.manual).length;
+  if (manualCount > 0 && !body.force) {
+    sendError(
+      res,
+      'E_MANUAL_EDITS',
+      '这本书有 ' + manualCount + ' 处手动修改',
+      '重新解析会覆盖它们；确认要覆盖就带上 force 再来一次。',
+    );
+    return;
+  }
   const chapters = buildChapters(cleanPages(rawPages));
   const stats = summarize(rawPages, chapters);
   writeJson(path.join(loaded.dir, 'chapters.json'), chapters);
@@ -331,6 +347,111 @@ async function handleDelete(req, res) {
     return;
   }
   sendJson(res, 200, { ok: true });
+}
+
+/* ------------------------------ 章节手动修正 ------------------------------ */
+
+/** 前文（n=0）不进编号；其余按出现顺序重排 1..k。 */
+function normalizeChapters(chapters) {
+  let k = 0;
+  for (const chapter of chapters) {
+    if (chapter.front) {
+      chapter.n = 0;
+      continue;
+    }
+    k += 1;
+    chapter.n = k;
+  }
+  return chapters;
+}
+
+/** 字数按页区间重算，手改过也不许对不上原文。 */
+function recomputeChapterChars(pages, chapters) {
+  for (const chapter of chapters) {
+    let sum = 0;
+    for (const page of pages) {
+      const no = Number((page && page.page) || 0);
+      if (no >= chapter.from && no <= chapter.to) sum += String((page && page.text) || '').length;
+    }
+    chapter.chars = sum;
+  }
+  return chapters;
+}
+
+/**
+ * 章节操作：rename / split / merge / exclude / include。
+ * 每个动作都只动结构，不动原文；写完把字数和章数一起刷新。
+ */
+async function handleChapters(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '');
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  if (!Array.isArray(pages) || pages.length === 0) {
+    sendError(res, 'E_NO_PAGES', '这本书没有存下逐页文本', '删掉重新导入一次。');
+    return;
+  }
+
+  const chapters = (Array.isArray(loaded.chapters) ? loaded.chapters : []).map((c) => Object.assign({}, c));
+  const op = String(body.op || '');
+  const n = Math.round(Number(body.n) || 0);
+  const idx = chapters.findIndex((c) => !c.front && Number(c.n) === n);
+  if (idx < 0) {
+    sendError(res, 'E_NO_CHAPTER', '没有第 ' + n + ' 章', '先刷新一下。');
+    return;
+  }
+  const chapter = chapters[idx];
+  const touched = [chapter];
+
+  if (op === 'rename') {
+    const title = cleanTitle(body.title);
+    if (!title) {
+      sendError(res, 'E_BAD_TITLE', '章节标题不能为空', '');
+      return;
+    }
+    chapter.title = title;
+  } else if (op === 'split') {
+    const page = Math.round(Number(body.page) || 0);
+    if (!(page > Number(chapter.from) && page <= Number(chapter.to))) {
+      sendError(res, 'E_BAD_PAGE', '拆分页要落在第 ' + chapter.from + '–' + chapter.to + ' 页之间', '新的一章从这一页开始。');
+      return;
+    }
+    const right = Object.assign({}, chapter, { from: page, to: chapter.to, manual: true });
+    chapter.to = page - 1;
+    chapters.splice(idx + 1, 0, right);
+    touched.push(right);
+  } else if (op === 'merge') {
+    const next = chapters[idx + 1];
+    if (!next || next.front) {
+      sendError(res, 'E_NO_NEXT', '后面没有可以合并的章', '');
+      return;
+    }
+    chapter.to = next.to;
+    if (chapter.hidden && !next.hidden) chapter.hidden = false;
+    chapters.splice(idx + 1, 1);
+  } else if (op === 'exclude' || op === 'include') {
+    chapter.hidden = op === 'exclude';
+  } else {
+    sendError(res, 'E_BAD_OP', '不认识的章节操作：' + op, '');
+    return;
+  }
+
+  for (const c of touched) c.manual = true;
+  normalizeChapters(chapters);
+  recomputeChapterChars(pages, chapters);
+
+  writeJson(path.join(loaded.dir, 'chapters.json'), chapters);
+  const book = loaded.book;
+  book.chapterCount = chapters.filter((c) => !c.front).length;
+  book.chars = pages.reduce((sum, p) => sum + String((p && p.text) || '').length, 0);
+  book.editedAt = new Date().toISOString();
+  writeJson(path.join(loaded.dir, 'book.json'), book);
+
+  sendJson(res, 200, { ok: true, chapters: chapters, chapterCount: book.chapterCount });
 }
 
 /* ------------------------------ 文件 ------------------------------ */
@@ -523,6 +644,15 @@ export function apply(ctx) {
         return;
       }
       return handleReparse(req, res);
+    });
+
+    route(ROUTE_CHAPTERS, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleChapters(req, res);
     });
 
     route(ROUTE_PREFIX + '/storage', (req, res) => {

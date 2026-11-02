@@ -260,3 +260,86 @@ test('方法不对返回 405', async () => {
   const res = await post('/dsh-book-slides/books', '{}');
   assert.equal(res.status, 405);
 });
+
+/* ---------------------------- 章节手动修正 ---------------------------- */
+
+/** 五页两章：第 1 章占 1–3 页，第 2 章占 4–5 页，够拆分用。 */
+function chapterPdf() {
+  return makePdf([
+    ['Chapter 1 Start', 'one '.repeat(40)],
+    ['one-b '.repeat(40)],
+    ['one-c '.repeat(40)],
+    ['Chapter 2 Turn', 'two '.repeat(40)],
+    ['two-b '.repeat(40)],
+  ]);
+}
+
+const op = (body) => post('/dsh-book-slides/chapters', JSON.stringify(body)).then((r) => r.json());
+let chapterBookId = '';
+
+test('章节操作：先确认两章各自跨页', async () => {
+  const imported = await importPdf('章节操作用书.pdf', chapterPdf());
+  assert.equal(imported.ok, true, JSON.stringify(imported));
+  chapterBookId = imported.bookId;
+  const detail = await fetch(base + '/dsh-book-slides/book?bookId=' + imported.bookId).then((r) => r.json());
+  const chapters = detail.chapters.filter((c) => !c.front);
+  assert.equal(chapters.length, 2);
+  assert.deepEqual([chapters[0].from, chapters[0].to], [1, 3]);
+  assert.deepEqual([chapters[1].from, chapters[1].to], [4, 5]);
+});
+
+test('章节操作：拆分、合并、改名、排除、恢复', async () => {
+  const id = chapterBookId;
+  assert.ok(id, '前面的测试应该先导入一本书');
+
+  let res = await op({ bookId: id, op: 'split', n: 1, page: 2 });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.chapterCount, 3);
+  const afterSplit = res.chapters.filter((c) => !c.front);
+  assert.deepEqual([afterSplit[0].from, afterSplit[0].to], [1, 1]);
+  assert.deepEqual([afterSplit[1].from, afterSplit[1].to], [2, 3]);
+  assert.equal(afterSplit[0].manual, true);
+
+  res = await op({ bookId: id, op: 'merge', n: 1 });
+  assert.equal(res.chapterCount, 2);
+  const afterMerge = res.chapters.filter((c) => !c.front);
+  assert.deepEqual([afterMerge[0].from, afterMerge[0].to], [1, 3]);
+
+  res = await op({ bookId: id, op: 'rename', n: 2, title: '改过的第二章' });
+  assert.equal(res.chapters.find((c) => c.n === 2).title, '改过的第二章');
+  assert.equal(res.chapters.find((c) => c.n === 2).manual, true);
+
+  res = await op({ bookId: id, op: 'exclude', n: 2 });
+  assert.equal(res.chapters.find((c) => c.n === 2).hidden, true);
+  res = await op({ bookId: id, op: 'include', n: 2 });
+  assert.equal(res.chapters.find((c) => c.n === 2).hidden, false);
+
+  // 字数要按页区间重算，不能停在旧值
+  const detail = await fetch(base + '/dsh-book-slides/book?bookId=' + id).then((r) => r.json());
+  const first = detail.chapters.filter((c) => !c.front)[0];
+  assert.ok(first.chars > 0);
+});
+
+test('章节操作：非法参数都有明确错误码', async () => {
+  const id = chapterBookId;
+  assert.equal((await op({ bookId: id, op: 'split', n: 1, page: 99 })).code, 'E_BAD_PAGE');
+  assert.equal((await op({ bookId: id, op: 'split', n: 1, page: 1 })).code, 'E_BAD_PAGE');
+  assert.equal((await op({ bookId: id, op: 'rename', n: 99, title: 'x' })).code, 'E_NO_CHAPTER');
+  assert.equal((await op({ bookId: id, op: 'rename', n: 1, title: '   ' })).code, 'E_BAD_TITLE');
+  assert.equal((await op({ bookId: id, op: 'explode', n: 1 })).code, 'E_BAD_OP');
+  assert.equal((await op({ bookId: '../../../etc', op: 'rename', n: 1, title: 'x' })).code, 'E_NOT_FOUND');
+});
+
+test('重新解析：有手改时先拦住，带 force 才覆盖', async () => {
+  const id = chapterBookId;
+  const guarded = await post('/dsh-book-slides/reparse', JSON.stringify({ bookId: id })).then((r) => r.json());
+  assert.equal(guarded.ok, false);
+  assert.equal(guarded.code, 'E_MANUAL_EDITS');
+
+  const forced = await post('/dsh-book-slides/reparse', JSON.stringify({ bookId: id, force: true })).then((r) => r.json());
+  assert.equal(forced.ok, true);
+  assert.equal(forced.chapterCount, 2);
+
+  const onDisk = JSON.parse(fs.readFileSync(path.join(ROOT, 'books', id, 'chapters.json'), 'utf8'));
+  assert.equal(onDisk.some((c) => c.manual), false, '覆盖之后不该还留着 manual 标记');
+});

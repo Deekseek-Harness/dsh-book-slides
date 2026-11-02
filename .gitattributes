@@ -1,0 +1,3 @@
+# 统一换行：源码一律 LF。
+# 起因：用 PowerShell 整段重写 client.js 时被写成了 CRLF，整文件看起来全改了。
+* text=auto eol=lf

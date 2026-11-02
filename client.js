@@ -22,10 +22,15 @@ window.__ModuleLoader__.load({
     const RENAME_API = '/dsh-book-slides/rename';
     const DELETE_API = '/dsh-book-slides/delete';
     const REPARSE_API = '/dsh-book-slides/reparse';
+    const CHAPTERS_API = '/dsh-book-slides/chapters';
     const FILE_API = '/dsh-book-slides/file';
     const COVER_API = '/dsh-book-slides/cover';
     const STORAGE_API = '/dsh-book-slides/storage';
     const PANEL_ID = 'book-slides';
+
+    /** 选章上限，和服务端 index.js 里那组数字保持一致。 */
+    const MAX_MODULE_CHAPTERS = 5;
+    const MAX_MODULE_CHARS = 60000;
 
     /* ------------------------------ 样式 ------------------------------ */
 
@@ -91,6 +96,17 @@ window.__ModuleLoader__.load({
 @keyframes bl-spin{to{transform:rotate(360deg)}}
 .bl-input{width:100%;box-sizing:border-box;font:inherit;color:inherit;background:transparent;border:1px solid var(--bl-line);border-radius:7px;padding:5px 8px}
 .bl-input:focus-visible{outline:2px solid color-mix(in oklab,currentColor 45%,transparent);outline-offset:1px}
+.bl-toolbar{display:flex;align-items:center;gap:8px;margin:10px 0 8px}
+.bl-hint{font-size:11px;opacity:.5}
+.bl-chapter{border-bottom:1px solid var(--bl-line)}
+.bl-chapter:last-child{border-bottom:none}
+.bl-row{border-bottom:none}
+.bl-row-off .bl-row-title{opacity:.45;text-decoration:line-through}
+.bl-more-inline{appearance:none;border:none;background:transparent;color:inherit;cursor:pointer;width:22px;height:22px;border-radius:6px;opacity:.4;font-size:14px;line-height:1;flex:0 0 auto}
+.bl-more-inline:hover{opacity:.9;background:color-mix(in oklab,currentColor 8%,transparent)}
+.bl-more-inline:focus-visible{outline:2px solid color-mix(in oklab,currentColor 45%,transparent);opacity:1}
+.bl-row-menu{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 11px 9px 34px;font-size:12px}
+.bl-row-menu .bl-btn{padding:3px 9px;font-size:11.5px}
 `;
 
     /* ------------------------------ 数据 ------------------------------ */
@@ -448,10 +464,18 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function Detail({ bookId, onBack, onDeleted, error, setError }) {
+    /**
+     * 书籍详情：章节清单 + 勾选 + 手动修正。
+     * 手动修正全部走服务端的章节操作接口，前端只负责收集意图、刷新结果。
+     */
+    function Detail({ bookId, onBack, error, setError }) {
       const [state, setState] = useState({ loading: true, book: null, chapters: [], modules: [] });
       const [refresh, setRefresh] = useState(0);
       const [busy, setBusy] = useState(false);
+      const [selected, setSelected] = useState(() => ({}));
+      const [menu, setMenu] = useState(0);
+      const [edit, setEdit] = useState(null);
+      const [askReparse, setAskReparse] = useState(false);
 
       useEffect(() => {
         let alive = true;
@@ -471,22 +495,247 @@ window.__ModuleLoader__.load({
         };
       }, [bookId, setError, refresh]);
 
-      /** 解析规则改了以后，旧书按新规则重切一遍，不用重传 PDF。 */
-      const doReparse = useCallback(async () => {
-        setBusy(true);
-        try {
-          await postJson(REPARSE_API, { bookId: bookId });
-          setRefresh((v) => v + 1);
-        } catch (err) {
-          setError(err);
-        } finally {
-          setBusy(false);
-        }
-      }, [bookId, setError]);
-
       const book = state.book;
       const chapters = state.chapters || [];
-      const selectable = useMemo(() => chapters.filter((c) => !c.front), [chapters]);
+      const visible = useMemo(() => chapters.filter((c) => !c.front), [chapters]);
+      const picked = useMemo(() => visible.filter((c) => selected[c.n]), [visible, selected]);
+      const pickedChars = picked.reduce((sum, c) => sum + (c.chars || 0), 0);
+      const estimate = pickedChars > 0 ? Math.max(6, Math.min(30, Math.round(pickedChars / 2000))) : 0;
+      const overLimit = picked.length > MAX_MODULE_CHAPTERS || pickedChars > MAX_MODULE_CHARS;
+
+      /** 勾选：超上限时不静默截断，直接说明为什么勾不上。 */
+      const toggle = useCallback(
+        (chapter) => {
+          if (selected[chapter.n]) {
+            setSelected((prev) => {
+              const next = { ...prev };
+              delete next[chapter.n];
+              return next;
+            });
+            return;
+          }
+          if (picked.length >= MAX_MODULE_CHAPTERS) {
+            setError(new Error('最多选 ' + MAX_MODULE_CHAPTERS + ' 章，先取消别的章'));
+            return;
+          }
+          if (pickedChars + (chapter.chars || 0) > MAX_MODULE_CHARS) {
+            setError(new Error('已选内容会超过 ' + MAX_MODULE_CHARS / 10000 + ' 万字，先取消别的章'));
+            return;
+          }
+          setSelected((prev) => ({ ...prev, [chapter.n]: true }));
+          setError(null);
+        },
+        [selected, picked, pickedChars, setError],
+      );
+
+      const selectAll = useCallback(() => {
+        const next = {};
+        let count = 0;
+        let chars = 0;
+        for (const chapter of visible) {
+          if (chapter.hidden || (chapter.chars || 0) < 50) continue;
+          if (count >= MAX_MODULE_CHAPTERS) break;
+          if (chars + (chapter.chars || 0) > MAX_MODULE_CHARS) break;
+          next[chapter.n] = true;
+          count += 1;
+          chars += chapter.chars || 0;
+        }
+        setSelected(next);
+        if (visible.filter((c) => !c.hidden && (c.chars || 0) >= 50).length > count) {
+          setError(new Error('书名下能选的章太多，已按上限选了前 ' + count + ' 章'));
+        } else {
+          setError(null);
+        }
+      }, [visible, setError]);
+
+      /** 章节操作：改标题、拆分、合并、排除、恢复。 */
+      const runOp = useCallback(
+        async (op, extra) => {
+          setBusy(true);
+          try {
+            const data = await postJson(CHAPTERS_API, Object.assign({ bookId: bookId, op: op }, extra || {}));
+            setState((prev) => ({
+              ...prev,
+              chapters: data.chapters || [],
+              book: Object.assign({}, prev.book, { chapterCount: data.chapterCount }),
+            }));
+            const alive = {};
+            for (const chapter of data.chapters || []) if (selected[chapter.n]) alive[chapter.n] = true;
+            setSelected(alive);
+            setMenu(0);
+            setError(null);
+            return true;
+          } catch (err) {
+            setError(err);
+            return false;
+          } finally {
+            setBusy(false);
+          }
+        },
+        [bookId, selected, setError],
+      );
+
+      const doReparse = useCallback(
+        async (force) => {
+          setBusy(true);
+          setAskReparse(false);
+          try {
+            await postJson(REPARSE_API, { bookId: bookId, force: !!force });
+            setSelected({});
+            setRefresh((v) => v + 1);
+            setError(null);
+          } catch (err) {
+            if (err && err.code === 'E_MANUAL_EDITS') setAskReparse(true);
+            setError(err);
+          } finally {
+            setBusy(false);
+          }
+        },
+        [bookId, setError],
+      );
+
+      const submitEdit = useCallback(async () => {
+        if (!edit) return;
+        if (edit.mode === 'rename') {
+          const title = String(edit.value || '').trim();
+          if (!title) {
+            setEdit(null);
+            return;
+          }
+          if (await runOp('rename', { n: edit.n, title: title })) setEdit(null);
+          return;
+        }
+        const page = Math.round(Number(edit.value) || 0);
+        if (!page) {
+          setError(new Error('填一个页码'));
+          return;
+        }
+        if (await runOp('split', { n: edit.n, page: page })) setEdit(null);
+      }, [edit, runOp, setError]);
+
+      const renderMenu = (chapter, hasNext) =>
+        h(
+          'div',
+          { className: 'bl-row-menu' },
+          h(
+            'button',
+            {
+              className: 'bl-btn',
+              disabled: busy,
+              onClick: () => setEdit({ n: chapter.n, mode: 'rename', value: chapter.title }),
+            },
+            '改名',
+          ),
+          h(
+            'button',
+            {
+              className: 'bl-btn',
+              disabled: busy,
+              onClick: () =>
+                setEdit({ n: chapter.n, mode: 'split', value: String(Math.floor((chapter.from + chapter.to) / 2) || chapter.from + 1) }),
+            },
+            '从这里拆分',
+          ),
+          h(
+            'button',
+            {
+              className: 'bl-btn',
+              disabled: busy || !hasNext,
+              onClick: () => runOp('merge', { n: chapter.n }),
+            },
+            '与下一章合并',
+          ),
+          h(
+            'button',
+            {
+              className: 'bl-btn',
+              disabled: busy,
+              onClick: () => runOp(chapter.hidden ? 'include' : 'exclude', { n: chapter.n }),
+            },
+            chapter.hidden ? '恢复本章' : '排除本章',
+          ),
+        );
+
+      const renderRow = (chapter, hasNext) => {
+        const editing = edit && edit.n === chapter.n;
+        const blank = (chapter.chars || 0) < 50;
+        return h(
+          'div',
+          { key: chapter.n, className: 'bl-chapter' },
+          h(
+            'div',
+            { className: 'bl-row' + (chapter.hidden ? ' bl-row-off' : '') + (blank ? ' blank' : '') },
+            h('input', {
+              type: 'checkbox',
+              checked: !!selected[chapter.n],
+              disabled: chapter.hidden || blank,
+              title: chapter.hidden ? '已排除' : blank ? '空白页，不能选' : '选中合成一个精讲模块',
+              'aria-label': '选择 ' + chapter.title,
+              onChange: () => toggle(chapter),
+            }),
+            h(
+              'div',
+              { className: 'bl-row-main' },
+              editing && edit.mode === 'rename'
+                ? h('input', {
+                    className: 'bl-input',
+                    autoFocus: true,
+                    value: edit.value,
+                    onChange: (event) => setEdit(Object.assign({}, edit, { value: event.target.value })),
+                    onBlur: submitEdit,
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter') submitEdit();
+                      if (event.key === 'Escape') setEdit(null);
+                    },
+                  })
+                : h('div', { className: 'bl-row-title' }, chapter.title),
+              h(
+                'div',
+                { className: 'bl-row-sub' },
+                '第 ' + chapter.from + (chapter.to !== chapter.from ? '–' + chapter.to : '') + ' 页 · ' + formatChars(chapter.chars),
+                chapter.hidden ? ' · 已排除' : '',
+                chapter.manual ? ' · 手改' : '',
+              ),
+            ),
+            h(
+              'button',
+              {
+                className: 'bl-more-inline',
+                'aria-label': '章节操作',
+                onClick: () => {
+                  setMenu(menu === chapter.n ? 0 : chapter.n);
+                  setEdit(null);
+                },
+              },
+              '\u22ef',
+            ),
+          ),
+          menu === chapter.n ? renderMenu(chapter, hasNext) : null,
+          editing && edit.mode === 'split'
+            ? h(
+                'div',
+                { className: 'bl-row-menu' },
+                h('span', { style: { fontSize: 11.5, opacity: 0.6 } }, '从第 ' + chapter.from + '–' + chapter.to + ' 页里切开：'),
+                h('input', {
+                  className: 'bl-input',
+                  style: { width: 70 },
+                  type: 'number',
+                  autoFocus: true,
+                  min: chapter.from + 1,
+                  max: chapter.to,
+                  value: edit.value,
+                  onChange: (event) => setEdit(Object.assign({}, edit, { value: event.target.value })),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter') submitEdit();
+                    if (event.key === 'Escape') setEdit(null);
+                  },
+                }),
+                h('button', { className: 'bl-btn bl-btn-primary', disabled: busy, onClick: submitEdit }, '切开'),
+                h('button', { className: 'bl-btn', onClick: () => setEdit(null) }, '取消'),
+              )
+            : null,
+        );
+      };
 
       return h(
         'div',
@@ -494,22 +743,13 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'bl-bar' },
-          h(
-            'button',
-            { className: 'bl-back', onClick: onBack },
-            '\u2039 书架',
-          ),
+          h('button', { className: 'bl-back', onClick: onBack }, '\u2039 书架'),
           h('div', { className: 'bl-grow' }),
           book
             ? h(
                 'button',
-                {
-                  className: 'bl-btn',
-                  disabled: busy,
-                  title: '按当前的切章规则重切一遍，不用重传 PDF',
-                  onClick: doReparse,
-                },
-                busy ? '重解析中…' : '重新解析',
+                { className: 'bl-btn', disabled: busy, title: '按当前的切章规则重切一遍，不用重传 PDF', onClick: () => doReparse(false) },
+                busy ? '处理中…' : '重新解析',
               )
             : null,
           book
@@ -530,6 +770,23 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'bl-body' },
           h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+          askReparse
+            ? h(
+                'div',
+                { className: 'bl-note' },
+                '这本书有手动改过的章节，重新解析会覆盖它们。',
+                h(
+                  'button',
+                  { className: 'bl-btn', style: { marginLeft: 8 }, disabled: busy, onClick: () => doReparse(true) },
+                  '覆盖并重解析',
+                ),
+                h(
+                  'button',
+                  { className: 'bl-btn', style: { marginLeft: 6 }, onClick: () => setAskReparse(false) },
+                  '算了',
+                ),
+              )
+            : null,
           state.loading
             ? h('div', { style: { padding: '26px 4px', opacity: 0.7 } }, h('span', { className: 'bl-spin' }), ' 正在打开…')
             : book
@@ -539,14 +796,7 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { className: 'bl-book' },
-                    h(
-                      'div',
-                      { className: 'bl-book-cover' },
-                      h('img', {
-                        src: COVER_API + '?bookId=' + encodeURIComponent(bookId),
-                        alt: '',
-                      }),
-                    ),
+                    h('div', { className: 'bl-book-cover' }, h('img', { src: COVER_API + '?bookId=' + encodeURIComponent(bookId), alt: '' })),
                     h(
                       'div',
                       { className: 'bl-book-info' },
@@ -555,49 +805,34 @@ window.__ModuleLoader__.load({
                       h(
                         'div',
                         { className: 'bl-book-meta' },
-                        (book.pages || 0) + ' 页 · ' + (book.chapterCount || 0) + ' 章 · ' + formatChars(book.chars),
+                        (book.pages || 0) + ' 页 · ' + visible.length + ' 章 · ' + formatChars(book.chars),
                       ),
                       h(
                         'div',
                         { className: 'bl-book-meta' },
-                        book.modules && book.modules.length
-                          ? book.modules.length + ' 个精讲模块'
-                          : '还没有精讲模块',
+                        book.modules && book.modules.length ? book.modules.length + ' 个精讲模块' : '还没有精讲模块',
                       ),
                     ),
                   ),
-                  h('div', { className: 'bl-note' }, 'M1 预览：导入、切章、书架已完成。勾选章节生成精讲在 M3，分屏播放器在 M4。'),
                   h(
                     'div',
-                    { className: 'bl-list' },
-                    selectable.length === 0
-                      ? h('div', { className: 'bl-row' }, h('div', { className: 'bl-row-main' }, h('div', { className: 'bl-row-title' }, '没有切出章节')))
-                      : selectable.map((chapter) =>
-                          h(
-                            'div',
-                            {
-                              key: chapter.n,
-                              className: 'bl-row' + (chapter.chars < 50 ? ' blank' : ''),
-                            },
-                            h('input', {
-                              type: 'checkbox',
-                              disabled: true,
-                              title: 'M2 才开放勾选',
-                              'aria-label': '选择 ' + chapter.title,
-                            }),
-                            h(
-                              'div',
-                              { className: 'bl-row-main' },
-                              h('div', { className: 'bl-row-title' }, chapter.title),
-                              h(
-                                'div',
-                                { className: 'bl-row-sub' },
-                                '第 ' + chapter.from + (chapter.to !== chapter.from ? '–' + chapter.to : '') + ' 页 · ' + formatChars(chapter.chars),
-                              ),
-                            ),
-                          ),
-                        ),
+                    { className: 'bl-toolbar' },
+                    h('button', { className: 'bl-btn', disabled: busy, onClick: selectAll }, '全选'),
+                    h(
+                      'button',
+                      { className: 'bl-btn', disabled: busy || picked.length === 0, onClick: () => setSelected({}) },
+                      '清空',
+                    ),
+                    h('div', { className: 'bl-grow' }),
+                    h('span', { className: 'bl-hint' }, '上限 ' + MAX_MODULE_CHAPTERS + ' 章 · ' + MAX_MODULE_CHARS / 10000 + ' 万字'),
                   ),
+                  visible.length === 0
+                    ? h('div', { className: 'bl-note' }, '这本书没切出章节，点右上角「重新解析」试试。')
+                    : h(
+                        'div',
+                        { className: 'bl-list' },
+                        visible.map((chapter, index) => renderRow(chapter, index + 1 < visible.length)),
+                      ),
                 )
               : h('div', { style: { opacity: 0.7 } }, '这本书打不开了。'),
         ),
@@ -606,8 +841,10 @@ window.__ModuleLoader__.load({
           { className: 'bl-foot' },
           h(
             'div',
-            { className: 'bl-grow', style: { fontSize: 11.5, opacity: 0.55 } },
-            book ? '共 ' + (book.chapters || 0) + ' 章' : '',
+            { className: 'bl-grow', style: { fontSize: 11.5, opacity: overLimit ? 1 : 0.62, color: overLimit ? '#d9484b' : 'inherit' } },
+            picked.length === 0
+              ? '勾选章节，合成一个精讲模块'
+              : '已选 ' + picked.length + ' 章 · ' + formatChars(pickedChars) + ' · 预计 ' + estimate + ' 页' + (overLimit ? ' · 超上限' : ''),
           ),
           h(
             'button',
@@ -921,6 +1158,9 @@ window.__ModuleLoader__.load({
           ),
         );
       },
+
+      /** 测试用：SSR 里直接渲染内部组件，生产代码不会碰它。 */
+      __components: { BookSlidesPanel: BookSlidesPanel, Shelf: Shelf, Detail: Detail, Settings: Settings, BookCard: BookCard },
     };
   },
 });
