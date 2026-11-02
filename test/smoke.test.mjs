@@ -204,6 +204,109 @@ test('isChapterLine：正文里的跨章引用不算标题', async () => {
   assert.equal(isChapterLine('第13章 潜文本：类型和原型'), true);
 });
 
+test('buildChapters：章首页的章号被 OCR 吃掉时，起点回到标题页', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '书名页' },
+    // 标题页：章号「1」被认没了，只剩「第章」
+    { page: 2, text: '第章\n电影导演的世界\n' + body },
+    { page: 3, text: body },
+    // 第一个能认出来的页眉出现在第 4 页
+    { page: 4, text: '第1章 电影导演的世界 3\n' + body },
+    { page: 5, text: body },
+    { page: 6, text: '第章\n确立电影主题\n' + body },
+    { page: 7, text: '第2章 确立电影主题 5\n' + body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2);
+  assert.equal(chapters[0].from, 2, '起点应该是标题页，而不是第一个页眉所在的第 4 页');
+  assert.equal(chapters[0].to, 5);
+  assert.equal(chapters[1].from, 6);
+});
+
+test('buildChapters：分卷页不算进上一章的尾巴', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '第1章 起点\n' + body },
+    { page: 2, text: body },
+    { page: 3, text: 'Part 2\n第二部分' },
+    { page: 4, text: '第二部分（第2章至第3章）讲的是后面三段内容。' },
+    { page: 5, text: '第2章 转折\n' + body },
+    { page: 6, text: body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2);
+  assert.deepEqual([chapters[0].from, chapters[0].to], [1, 2], '分卷页 3–4 不该算进第 1 章');
+  assert.deepEqual([chapters[1].from, chapters[1].to], [5, 6]);
+});
+
+test('buildChapters：标题和正文粘成一行的标题页，也能回溯到', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(150) + '。';
+  const raw = [
+    { page: 1, text: '书名页' },
+    // 真书里第 5 章就这样：章号「5」被认成「意」，标题紧跟正文、没有换行
+    { page: 2, text: '第意\n站在电影制作者的角度思考本章的四个练习项目会让你对画面构图有个基本认识。' + body },
+    // 第 3 页是密集正文，第一行以「拍摄」开头——挡住「差两个字就算命中」的误判
+    { page: 3, text: '88 某书\n拍摄夜景或月光场景几乎是不可能实现的，' + body },
+    { page: 4, text: '第5章 站在电影制作者的的度思考 65\n' + body },
+    { page: 5, text: body },
+    { page: 6, text: '第6章\n拍摄练习\n' + body },
+    { page: 7, text: '第6章 拍摄练习 67\n' + body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2, JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[0].from, 2, '起点应该是第 2 页的标题页');
+  assert.equal(chapters[1].from, 6, '第 6 章不该被正文里以「拍摄」开头的那行拽到第 3 页');
+});
+
+test('buildChapters：标题页字数多（>700）也能当标题页认', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const filler = '这段是正文，用来把标题页撑到七百字以上。'.repeat(30);
+  const raw = [
+    { page: 1, text: '书名页' },
+    // 标题页本身就有七百多字：章号被认成「4/」，标题单独一行
+    { page: 2, text: '第4/章\n进军电影界\n' + filler },
+    { page: 3, text: '第47章 进军电影界 519\n' + filler },
+    { page: 4, text: filler },
+    { page: 5, text: '第48章\n新的一程\n' + filler },
+    { page: 6, text: '第48章 新的一程 521\n' + filler },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2, '应该切出两章；实际：' + JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[0].from, 2, '起点应该是第 2 页，而不是第一个页眉所在的第 3 页');
+  assert.equal(chapters[0].to, 4);
+});
+
+test('buildChapters：不写页码的条目式目录也要整块去掉', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const toc = [
+    '目 录',
+    '致中国读者',
+    '序言',
+    'PART Ⅰ作家和故事艺术',
+    'CHAPTER 01 故事问题',
+    'PART Ⅱ故事诸要素',
+    'CHAPTER 02 结构图谱',
+    'CHAPTER 03 结构与背景',
+    'CHAPTER 04 结构与类型',
+    'CHAPTER 05 结构与人物',
+  ].join('\n');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: toc },
+    { page: 2, text: 'CHAPTER 01\n故事问题\n' + body },
+    { page: 3, text: body },
+    { page: 4, text: 'CHAPTER 02\n结构图谱\n' + body },
+    { page: 5, text: body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2, '目录页没有页码，也要认出来；实际：' + JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[0].from, 2);
+});
+
 /* --------------------------------- 存储 --------------------------------- */
 
 test('store：原子写读、ID 校验、改名、软删除', async () => {

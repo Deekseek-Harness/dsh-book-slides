@@ -234,10 +234,10 @@ export function buildChapters(pages) {
   if (!Array.isArray(pages) || pages.length === 0) return [];
 
   let scan = scanCandidates(pages, false);
-  let runs = buildRuns(scan.candidates);
+  let runs = buildRuns(scan.candidates, pages);
   if (runs.length < 2) {
     const withParts = scanCandidates(pages, true);
-    const partRuns = buildRuns(withParts.candidates);
+    const partRuns = buildRuns(withParts.candidates, pages);
     if (partRuns.length > runs.length) {
       scan = withParts;
       runs = partRuns;
@@ -285,9 +285,19 @@ export function buildChapters(pages) {
   }
 
   for (let k = 0; k < runs.length; k += 1) {
-    const from = pageNo(runs[k].fromIndex);
-    const nextFrom = k + 1 < runs.length ? pageNo(runs[k + 1].fromIndex) : pageNo(total - 1) + 1;
-    const to = Math.max(from, nextFrom - 1);
+    const fromIndex = runs[k].fromIndex;
+    let toIndex;
+    if (k + 1 < runs.length) {
+      const nextIndex = runs[k + 1].fromIndex;
+      // 下一章开篇之前若是「第X部分 / Part N」的分卷页，那几页不算本章
+      toIndex = nextIndex - 1 - partBlockBefore(pages, nextIndex, fromIndex);
+    } else {
+      toIndex = total - 1;
+    }
+    // 尾部的空白页也不算（印刷留白，不该进章节）。阈值要小：短页不等于空页。
+    while (toIndex > fromIndex && String((pages[toIndex] && pages[toIndex].text) || '').length < 10) toIndex -= 1;
+    const from = pageNo(fromIndex);
+    const to = Math.max(from, pageNo(toIndex));
     chapters.push({
       n: k + 1,
       title: consistentTitle(titleOfRun(runs[k].texts), runs[k].no),
@@ -333,39 +343,53 @@ function scanCandidates(pages, allowParts) {
     const text = String((pages[i] && pages[i].text) || '');
     const lines = text.split('\n').filter(Boolean);
     const shortWithPageNo = lines.filter((line) => line.length <= 46 && TRAILING_PAGE_NO.test(line)).length;
+    const totalLen = lines.reduce((sum, line) => sum + line.length, 0);
     pageStats[i] = {
       lines: lines.length,
       chars: text.length,
+      avgLen: lines.length ? totalLen / lines.length : 0,
       tocScore: lines.length ? shortWithPageNo / lines.length : 0,
+      text: text,
+      cands: 0,
     };
 
     for (let j = 0; j < lines.length; j += 1) {
       const line = lines[j];
       const hit = matchHead(line, j, allowParts);
       if (!hit) continue;
-      const text = withNextLine(lines, j);
+      const candText = withNextLine(lines, j);
+      pageStats[i].cands += 1;
       candidates.push({
         pageIndex: i,
-        text: text,
+        text: candText,
         headKey: hit.head.replace(/\s+/g, '').toLowerCase(),
         no: chapterNumberOf(hit.head),
-        tail: titleTail(text),
+        tail: titleTail(candText),
         toc: false,
       });
     }
   }
 
-  // 目录页：短行多、行尾带页码的多。正文页是长段落，这两条都过不了。
-  const tocPages = new Set();
-  for (let i = 0; i < pages.length; i += 1) {
+  /**
+   * 是不是目录页。三条判据，任一成立即可：
+   *   1. 短行多 + 行尾带页码多（常见的中文目录）
+   *   2. 平均行长很短 + 有足够多的章节候选（不写页码的条目式目录）
+   *   3. 页面上写着「目录/简目」+ 行尾页码不算少
+   * 正文页是长段落，三条都过不了。
+   */
+  function looksToc(i) {
     const stat = pageStats[i];
-    if (stat.lines >= 8 && stat.tocScore >= 0.5) tocPages.add(i);
+    if (!stat || stat.chars < 20) return false;
+    if (stat.lines >= 8 && stat.tocScore >= 0.5) return true;
+    // 下面两条弱一些，必须同时有够多的章节候选，免得把练习清单、片目页当成目录
+    if (stat.cands < 3) return false;
+    if (stat.lines >= 8 && stat.avgLen <= 25) return true;
+    if (TOC_MARK.test(stat.text) && stat.tocScore >= 0.3) return true;
+    return false;
   }
-  // 写着「目录/简目」而形态又不像正文的，也算
-  for (let i = 0; i < pages.length; i += 1) {
-    if (!TOC_MARK.test(String((pages[i] && pages[i].text) || ''))) continue;
-    if (pageStats[i].tocScore >= 0.3) tocPages.add(i);
-  }
+
+  const tocPages = new Set();
+  for (let i = 0; i < pages.length; i += 1) if (looksToc(i)) tocPages.add(i);
   // 目录跨好几页时把它们连成一块：紧挨着的目录页、中间隔一页空白，都算同一块
   const seeds = Array.from(tocPages).sort((a, b) => a - b);
   for (const seed of seeds) {
@@ -380,7 +404,7 @@ function scanCandidates(pages, allowParts) {
           tocPages.add(k);
           continue;
         }
-        if (stat.tocScore >= 0.45) {
+        if (looksToc(k)) {
           blanks = 0;
           tocPages.add(k);
           continue;
@@ -395,7 +419,7 @@ function scanCandidates(pages, allowParts) {
 }
 
 /** 把候选连成段：页眉并回当前章，标题只差一个字也算同一章。 */
-function buildRuns(candidates) {
+function buildRuns(candidates, pages) {
   const runs = [];
   for (const cand of candidates) {
     if (cand.toc) continue;
@@ -414,7 +438,67 @@ function buildRuns(candidates) {
       lastIndex: cand.pageIndex,
     });
   }
-  return repairOrder(runs);
+  return anchorOpeners(repairOrder(runs), pages);
+}
+
+/**
+ * 把章节起点往前挪到真正的「标题页」。
+ *
+ * 章节首页常把章号印成「第章」（数字被 OCR 吃掉），或者干脆只有一行书名式的标题，
+ * 于是第一个能认出来的页眉往往落在这章的第 2、3 页上。往回找 5 页以内、字数很少（标题页）
+ * 且含本章标题的那一页，把它当成真正的起点。
+ */
+function anchorOpeners(runs, pages) {
+  for (let k = 0; k < runs.length; k += 1) {
+    const run = runs[k];
+    const tail = String(run.tail || '').replace(/\s+/g, '');
+    if (tail.length < 2) continue;
+    const floor = k > 0 ? runs[k - 1].fromIndex + 1 : 0;
+    for (let j = run.fromIndex - 1; j >= floor && run.fromIndex - j <= 5; j -= 1) {
+      const text = String((pages[j] && pages[j].text) || '');
+      if (text.length >= 1600) continue; // 太密的正文页当不了标题页
+      const lines = text.split('\n').slice(0, 3);
+      // 标题页的头一行总是很短，且以「第」/Chapter/Part 开头；
+      // 正文页的第一行是「页码 + 书名」或「章名 + 页码」，长度过不了这一关。
+      const head = normalizeLine(lines[0] || '');
+      if (head.length > 12 || !/^(第|chapter|part)/i.test(head)) continue;
+      if (lines.some((line) => matchesTitle(line, tail))) {
+        run.fromIndex = j;
+        break;
+      }
+    }
+  }
+  return runs;
+}
+
+/**
+ * 这一行是不是本章标题。
+ *
+ * 标题页上常见三种写法：整行就是标题、标题后面紧跟正文（没有换行）、标题被 OCR 认错一两个字。
+ * 所以只比「行首 tail 长度那一段」，容错随标题长度缩放——短标题容 1 字，长标题容 2 字，
+ * 否则 4 个字的标题允许错 2 个，什么都能算命中。
+ */
+function matchesTitle(line, tail) {
+  const text = normalizeLine(line).replace(/\s+/g, '');
+  if (!text || text.length < tail.length - 2) return false;
+  const tolerance = tail.length >= 10 ? 2 : 1;
+  return editDistance(text.slice(0, tail.length), tail) <= tolerance;
+}
+
+/**
+ * 分卷页（第X部分 / Part N 及其导语）不属于任何一章。
+ * 不做这一步，下一部分的分卷页会被算进上一章的尾巴里。
+ */
+function partBlockBefore(pages, index, floor) {
+  let block = 0;
+  for (let j = index - 1; j >= floor && block < 3; j -= 1) {
+    const text = String((pages[j] && pages[j].text) || '');
+    const first = normalizeLine(text.split('\n')[0] || '');
+    if (!PART_HEAD.test(first)) break;
+    if (text.length > 900) break;
+    block += 1;
+  }
+  return block;
 }
 
 /**
