@@ -307,6 +307,53 @@ test('buildChapters：不写页码的条目式目录也要整块去掉', async (
   assert.equal(chapters[0].from, 2);
 });
 
+test('buildChapters：译注/索引里重复的章号不算新章', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: 'CHAPTER 01\n故事问题\n' + body },
+    { page: 2, text: body },
+    { page: 3, text: 'CHAPTER 02\n结构图谱\n' + body },
+    { page: 4, text: body },
+    { page: 5, text: '附录：文中涉及影片列表\n' + body },
+    // 译注部分：标题照抄正文章号，没有任何标题文字
+    { page: 6, text: 'CHAPTER 01\n1. 格式塔（Gestalt）：意为“完形”，' + body },
+    { page: 7, text: 'CHAPTER 02\n2. 刻板故事：参见译注。' + body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 3, '译注里的重复章号不是新章；实际：' + JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[2].to, 5, '附录的尾巴不该吞掉后面的译注页');
+});
+
+test('buildChapters：第二个「序言」不算章', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '序言\n' + body },
+    { page: 2, text: '第一章 起点\n' + body },
+    { page: 3, text: body },
+    // 附录后面的译者补记，标题又叫「序言」
+    { page: 4, text: '序言\n译者补记。' + body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2, '实际：' + JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[0].title, '序言');
+  assert.equal(chapters[1].title, '第一章 起点');
+});
+
+test('buildChapters：分部重新编号（同号不同题）不误杀', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '第一部\n第一章 开头\n' + body },
+    { page: 2, text: body },
+    { page: 3, text: '第二部\n第一章 重新开始\n' + body },
+    { page: 4, text: body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2, '同号但标题不同，应该各算一章；实际：' + JSON.stringify(chapters.map((c) => c.title)));
+});
+
 /* --------------------------------- 存储 --------------------------------- */
 
 test('store：原子写读、ID 校验、改名、软删除', async () => {

@@ -247,12 +247,18 @@ export function buildChapters(pages) {
   const total = pages.length;
   const pageNo = (i) => Number((pages[i] && pages[i].page) || i + 1);
 
-  if (runs.length < 2) {
+  // 章号已经出现过的，是「引用」不是「新章」：译注、索引、附录里的小标题会照抄正文章号。
+  markReferences(runs);
+  const kept = [];
+  for (let k = 0; k < runs.length; k += 1) if (!runs[k].repeat) kept.push(k);
+
+  if (kept.length < 2) {
+    const only = kept.length === 1 ? runs[kept[0]] : null;
     const chars = pages.reduce((sum, p) => sum + String((p && p.text) || '').length, 0);
     return [
       {
         n: 1,
-        title: runs.length === 1 ? titleOfRun(runs[0].texts) : '全文',
+        title: only ? titleOfRun(only.texts) : '全文',
         from: pageNo(0),
         to: pageNo(total - 1),
         chars: chars,
@@ -265,9 +271,10 @@ export function buildChapters(pages) {
 
   const chapters = [];
   // 第一章之前的内容：单独一段「前文」。目录页不算进字数，那是目录不是正文。
-  if (runs[0].fromIndex > 0) {
+  const firstIndex = runs[kept[0]].fromIndex;
+  if (firstIndex > 0) {
     let chars = 0;
-    for (let i = 0; i < runs[0].fromIndex; i += 1) {
+    for (let i = 0; i < firstIndex; i += 1) {
       if (scan.tocPages.has(i)) continue;
       chars += String((pages[i] && pages[i].text) || '').length;
     }
@@ -276,7 +283,7 @@ export function buildChapters(pages) {
         n: 0,
         title: '前文',
         from: pageNo(0),
-        to: pageNo(runs[0].fromIndex - 1),
+        to: pageNo(firstIndex - 1),
         chars: chars,
         toc: false,
         front: true,
@@ -284,22 +291,18 @@ export function buildChapters(pages) {
     }
   }
 
-  for (let k = 0; k < runs.length; k += 1) {
+  for (let i = 0; i < kept.length; i += 1) {
+    const k = kept[i];
     const fromIndex = runs[k].fromIndex;
-    let toIndex;
-    if (k + 1 < runs.length) {
-      const nextIndex = runs[k + 1].fromIndex;
-      // 下一章开篇之前若是「第X部分 / Part N」的分卷页，那几页不算本章
-      toIndex = nextIndex - 1 - partBlockBefore(pages, nextIndex, fromIndex);
-    } else {
-      toIndex = total - 1;
-    }
+    // 终点止于「下一个段」的起点，哪怕那一段是引用——这样译注页不会被并进附录的尾巴
+    const nextIndex = k + 1 < runs.length ? runs[k + 1].fromIndex : total;
+    let toIndex = nextIndex - 1 - partBlockBefore(pages, nextIndex, fromIndex);
     // 尾部的空白页也不算（印刷留白，不该进章节）。阈值要小：短页不等于空页。
     while (toIndex > fromIndex && String((pages[toIndex] && pages[toIndex].text) || '').length < 10) toIndex -= 1;
     const from = pageNo(fromIndex);
     const to = Math.max(from, pageNo(toIndex));
     chapters.push({
-      n: k + 1,
+      n: chapters.filter((c) => !c.front).length + 1,
       title: consistentTitle(titleOfRun(runs[k].texts), runs[k].no),
       from: from,
       to: to,
@@ -309,6 +312,33 @@ export function buildChapters(pages) {
     });
   }
   return chapters;
+}
+
+/**
+ * 标出「引用」段：同一本书里章号或标题重复出现的，是译注、索引、附录里的小标题，不是新章。
+ *
+ * 判据要保守，否则会把「第一部 / 第二部各自从第 1 章数起」这种书吃掉：
+ *   同号 + 标题也重名，或者同号 + 根本没有标题（译注里就写「CHAPTER 01」）；
+ *   没有编号的（序言、附录）只按标题重名判断。
+ */
+function markReferences(runs) {
+  const seenNo = new Set();
+  const seenTail = new Set();
+  const seenHead = new Set();
+  for (const run of runs) {
+    const tail = String(run.tail || '');
+    const head = String(run.headKey || '');
+    // 有编号的：同号 + 标题重名，或者同号 + 根本没有标题（译注里就写「CHAPTER 01」）
+    const repeatNo = run.no > 0 && seenNo.has(run.no) && (!tail || seenTail.has(tail));
+    // 没编号的：判重名。这类章的「标题」就是章号本身（序言、附录），tail 是空的
+    const repeatNamed = run.no === 0 && head !== '' && seenHead.has(head);
+    run.repeat = repeatNo || repeatNamed;
+    if (run.repeat) continue;
+    if (run.no > 0) seenNo.add(run.no);
+    if (tail) seenTail.add(tail);
+    if (head) seenHead.add(head);
+  }
+  return runs;
 }
 
 /**
@@ -665,9 +695,11 @@ function titleOfRun(texts) {
 
 /** 去掉行尾的页码：「第 1 章 电影导演的世界 5」→「第 1 章 电影导演的世界」。 */
 function stripTrailingPageNo(text) {
-  return String(text || '')
-    .replace(/[\s·—–-]*\d{1,4}$/, '')
-    .trim();
+  const raw = String(text || '').trim();
+  // 「CHAPTER 01」「第1章」这种整行只有章号的，行尾的数字就是章号本身，不能当页码剥掉
+  const m = CHAPTER_RE.exec(raw);
+  if (m && !String((m.groups && m.groups.tail) || '').trim() && /\d{1,4}$/.test(raw)) return raw;
+  return raw.replace(/[\s·—–-]*\d{1,4}$/, '').trim();
 }
 
 /** 统计一段页区间内的字数。 */
