@@ -18,7 +18,7 @@
  * 「部分」必须排在「部」前面，否则「第三部分」会被切成「第三部 + 分」。
  */
 export const CHAPTER_RE =
-  /^\s*(?<head>第\s*[0-9一二三四五六七八九十百千零〇两]+\s*(?:部分|[章节回讲课篇卷部])|(?:序章|序言|前言|引子|楔子|尾声|结尾|后记|附录[一二三四五六七八九十\d]*|番外(?:篇)?[一二三四五六七八九十\d]*)|(?:chapter|part)\s+[0-9ivxlcdm]+)\s*(?<tail>.*)$/i;
+  /^\s*(?<head>第\s*[0-9一二三四五六七八九十百千零〇两]+\s*(?:部分|[章节回讲课篇卷部])|(?:序章|序言|前言|引子|楔子|尾声|结尾|后记|附录\s*[一二三四五六七八九十\dA-Za-z]*|番外(?:篇)?[一二三四五六七八九十\d]*)|(?:chapter|part)\s+[0-9ivxlcdm]+)\s*(?<tail>.*)$/i;
 
 /**
  * 标题里不该出现的标点：出现这些基本就是正文句子。
@@ -55,7 +55,7 @@ export function normalizeLine(line) {
  * @param {number} at 这一行在页面内的行号（0 起）
  * @param {boolean} allowParts 是否把「第X部分 / Part N」也算进来
  */
-function matchHead(line, at, allowParts) {
+function matchHead(line, at, allowParts, prose) {
   const text = normalizeLine(line);
   if (!text) return null;
   if (text.length > 48) return null;
@@ -73,6 +73,11 @@ function matchHead(line, at, allowParts) {
   // 没有编号的标题（序章/前言/引子/后记…）出现在页面深处，多半是图注或正文
   const isNumbered = /^第/.test(head) || /^chapter/i.test(head);
   if (!isNumbered && !isPart && !tail && (at || 0) > 2) return null;
+
+  // 正文里常有「第6章中主要内容……」这种跨章引用：位置在页面中段、句子又长。
+  // 真标题要么在页首几行，要么本身很短，所以中段的长句一律不认。
+  // 只对「散文页」生效：目录页本来就满是中段的长条目，不能按正文的规矩卡它。
+  if (prose !== false && isNumbered && !isPart && tail && (at || 0) > 2 && text.length > 14) return null;
 
   return { head: head, tail: tail, isPart: isPart };
 }
@@ -258,7 +263,7 @@ export function buildChapters(pages) {
     return [
       {
         n: 1,
-        title: only ? titleOfRun(only.texts) : '全文',
+        title: only ? titleOfRun(only) : '全文',
         from: pageNo(0),
         to: pageNo(total - 1),
         chars: chars,
@@ -303,7 +308,7 @@ export function buildChapters(pages) {
     const to = Math.max(from, pageNo(toIndex));
     chapters.push({
       n: chapters.filter((c) => !c.front).length + 1,
-      title: consistentTitle(titleOfRun(runs[k].texts), runs[k].no),
+      title: consistentTitle(titleOfRun(runs[k]), runs[k].no),
       from: from,
       to: to,
       chars: charsBetween(pages, from, to),
@@ -383,9 +388,12 @@ function scanCandidates(pages, allowParts) {
       cands: 0,
     };
 
+    // 散文页：行长、行少。目录页是一列短条目，不能按散文的规矩卡它
+    const prose = !(lines.length >= 8 && pageStats[i].avgLen <= 25);
+
     for (let j = 0; j < lines.length; j += 1) {
       const line = lines[j];
-      const hit = matchHead(line, j, allowParts);
+      const hit = matchHead(line, j, allowParts, prose);
       if (!hit) continue;
       const candText = withNextLine(lines, j);
       pageStats[i].cands += 1;
@@ -448,21 +456,24 @@ function scanCandidates(pages, allowParts) {
   return { candidates: candidates, tocPages: tocPages };
 }
 
-/** 把候选连成段：页眉并回当前章，标题只差一个字也算同一章。 */
+/**
+ * 把候选连成段：页眉并回当前章，标题只差一个字也算同一章。
+ * 每条候选都记下所在页——定标题时要用「开篇页上那一条」，那里写得最完整。
+ */
 function buildRuns(candidates, pages) {
   const runs = [];
   for (const cand of candidates) {
     if (cand.toc) continue;
     const last = runs[runs.length - 1];
     if (last && shouldFold(last, cand)) {
-      last.texts.push(cand.text);
+      last.texts.push({ text: cand.text, pageIndex: cand.pageIndex });
       last.lastIndex = cand.pageIndex;
       continue;
     }
     runs.push({
       headKey: cand.headKey,
       no: cand.no,
-      texts: [cand.text],
+      texts: [{ text: cand.text, pageIndex: cand.pageIndex }],
       tail: cand.tail,
       fromIndex: cand.pageIndex,
       lastIndex: cand.pageIndex,
@@ -596,8 +607,8 @@ function repairOrder(runs) {
       // 中间正好缺这一个号：是真章，只是页眉把号认错了，改回来
       const text = '第' + expected + '章' + (run.tail ? ' ' + run.tail : '');
       run.no = expected;
-      run.texts = [text];
-      run.tail = run.tail;
+      // 换成改好的标题，但页面归属要保留：texts 里存的是 {text, pageIndex}，别退化成字符串
+      run.texts = [{ text: text, pageIndex: run.fromIndex }];
       out.push(run);
       expected += 1;
       continue;
@@ -672,14 +683,23 @@ function withNextLine(lines, index) {
 }
 
 /**
- * 一段之内的标题：页眉与章首页的写法会不一样，取出现次数最多的那个；
- * 次数一样时取最短的。OCR 只错一处时，高频的那个通常是对的。
+ * 一段的标题。
+ *
+ * 先看开篇页上那一条：标题页写的标题永远是最完整的（页眉经常只印章号，或者把标题和页码粘一起）。
+ * 开篇页上没有可用候选时（章号被 OCR 吃掉、压根不成候选）才退回去投票。
+ * 投票时跳过「只有章号、没有标题」的候选——它们对定标题零信息量，却在版面上出现得最多，
+ * 一旦参与投票就会把真标题投掉（真书里第 1–8 章就是这样丢的标题）。
  */
-function titleOfRun(texts) {
+function titleOfRun(run) {
+  const texts = (run && run.texts) || [];
+  const opener = texts.find((item) => item.pageIndex === run.fromIndex);
+  const openerTitle = opener ? stripTrailingPageNo(opener.text) : '';
+  if (openerTitle && hasTitlePart(openerTitle)) return openerTitle;
+
   const counts = new Map();
-  for (const raw of texts) {
-    const text = stripTrailingPageNo(raw);
-    if (!text) continue;
+  for (const item of texts) {
+    const text = stripTrailingPageNo(item.text);
+    if (!text || !hasTitlePart(text)) continue;
     counts.set(text, (counts.get(text) || 0) + 1);
   }
   let best = '';
@@ -690,7 +710,21 @@ function titleOfRun(texts) {
       bestCount = count;
     }
   }
-  return best || (texts[0] ? stripTrailingPageNo(texts[0]) : '未命名');
+  if (best) return best;
+  // 全都没有标题：退回最短的写法（通常就是「第1章」）
+  let shortest = '';
+  for (const item of texts) {
+    const text = stripTrailingPageNo(item.text);
+    if (text && (!shortest || text.length < shortest.length)) shortest = text;
+  }
+  return shortest || '未命名';
+}
+
+/** 这一行除了章号之外还有没有标题文字。 */
+function hasTitlePart(text) {
+  const m = CHAPTER_RE.exec(String(text || ''));
+  if (!m) return true;
+  return String((m.groups && m.groups.tail) || '').trim() !== '';
 }
 
 /** 去掉行尾的页码：「第 1 章 电影导演的世界 5」→「第 1 章 电影导演的世界」。 */

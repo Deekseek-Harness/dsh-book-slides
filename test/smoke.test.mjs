@@ -354,6 +354,78 @@ test('buildChapters：分部重新编号（同号不同题）不误杀', async (
   assert.equal(chapters.length, 2, '同号但标题不同，应该各算一章；实际：' + JSON.stringify(chapters.map((c) => c.title)));
 });
 
+test('buildChapters：页眉只印章号时，标题取开篇页那条', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '第1章 计算机概念和技术\n' + body },
+    // 三种页眉轮流出现，其中只有一种能成为候选——但它没有标题
+    { page: 2, text: '2 第1章\n' + body },
+    { page: 3, text: '计算机概念和技术 3\n' + body },
+    { page: 4, text: '第1章\n' + body },
+    { page: 5, text: '第2章 计算机指令\n' + body },
+    { page: 6, text: '第2章\n' + body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2);
+  assert.equal(chapters[0].title, '第1章 计算机概念和技术', '裸页眉不该把真标题投掉');
+  assert.equal(chapters[1].title, '第2章 计算机指令');
+});
+
+test('buildChapters：正文中段的跨章引用不算章', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '第5章 处理器\n' + body },
+    // 页面中段的一句跨章引用：位置靠后、句子又长
+    { page: 2, text: body + '\n' + body + '\n' + body + '\n第6章中主要内容流水线几乎总被用来\n' + body },
+    { page: 3, text: '第6章 利用流水线提高性能\n' + body },
+    { page: 4, text: body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 2, '实际：' + JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[0].title, '第5章 处理器');
+  assert.equal(chapters[0].to, 2, '引用那页仍属于第 5 章');
+  assert.equal(chapters[1].title, '第6章 利用流水线提高性能');
+  assert.equal(chapters[1].from, 3);
+});
+
+test('buildChapters：附录 A/B/C 各自成段', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '附录A 汇编器、链接器和SPIM模拟器\n' + body },
+    { page: 2, text: body },
+    { page: 3, text: '附录B 逻辑设计基础\n' + body },
+    { page: 4, text: body },
+    { page: 5, text: '附录 C 控制器的硬件实现\n' + body },
+    { page: 6, text: body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 3, '不该把几个附录并成一章；实际：' + JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[0].title, '附录A 汇编器、链接器和SPIM模拟器');
+  assert.equal(chapters[1].title, '附录B 逻辑设计基础');
+  assert.equal(chapters[2].title, '附录 C 控制器的硬件实现');
+});
+
+test('buildChapters：页眉认错章号、被改号之后，标题不丢', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = '正文'.repeat(80) + '。';
+  const raw = [
+    { page: 1, text: '第30章 编写分镜头剧本\n' + body },
+    { page: 2, text: '第30章 编写分镜头剧本 371\n' + body },
+    // 真·第 31 章，页眉把「31」认成了「3」
+    { page: 3, text: '第3章 开机之前\n' + body },
+    { page: 4, text: '第3章 开机之前 383\n' + body },
+    { page: 5, text: '第32章 开机\n' + body },
+    { page: 6, text: '第32章 开机 386\n' + body },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.equal(chapters.length, 3, '实际：' + JSON.stringify(chapters.map((c) => c.title)));
+  assert.equal(chapters[1].title, '第31章 开机之前', '改号之后标题不能丢');
+  assert.equal(chapters[1].from, 3);
+});
+
 /* --------------------------------- 存储 --------------------------------- */
 
 test('store：原子写读、ID 校验、改名、软删除', async () => {
