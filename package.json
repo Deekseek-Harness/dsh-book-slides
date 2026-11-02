@@ -1,0 +1,65 @@
+{
+  "name": "dsh-book-slides",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 左侧栏「精讲」面板：导入带文字层的 PDF，自动切章，勾选章节生成幻灯片式精讲（配图位只出提示词），分屏对照原文播放。",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "store.js",
+    "text.js",
+    "pdfread.js",
+    "cover.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md"
+  ],
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "dsh": ">=0.2.0-rc.2"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^6.5.438"
+  },
+  "scripts": {
+    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "pdf",
+    "slides",
+    "book",
+    "tts"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

@@ -1,0 +1,10 @@
+# 依赖与缓存
+node_modules/
+.npm-cache/
+
+# 文档暂时不进这次提交；要收 README 时删掉这一行
+README.md
+
+# 杂项
+*.log
+.DS_Store

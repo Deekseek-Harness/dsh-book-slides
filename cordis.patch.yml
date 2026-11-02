@@ -1,0 +1,4 @@
+- insert:
+    - id: book-slides
+      name: 'dsh-book-slides'
+      config: {}
