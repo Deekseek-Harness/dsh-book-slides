@@ -30,6 +30,8 @@ const BODY_PUNCT = /[，。！？；,.!?;:]/;
 const QUOTE_MARKS = /[“”"「」『』]/;
 /** 行尾是这些字符，说明这句没说完，要与下一行合并。 */
 const CONTINUES = /[^。！？；：」』”"’）)】》\u300f]$/;
+/** 有汉字的行才参与软换行合并；英文行不合并。 */
+const CJK_TEXT = /[\u2e80-\u9fff]/;
 const ZERO_WIDTH = /[\u200b-\u200f\u202a-\u202e\ufeff]/g;
 const PAGE_NO_LINE = /^[-—\s]*\d{1,4}[-—\s]*$/;
 const TOC_MARK = /(目\s*录|简目|细目|总目|contents)/i;
@@ -200,6 +202,10 @@ export function cleanPages(pages) {
 /**
  * 合并软换行：中文排版里一句话被排版折断，行尾没有句末标点就接下一行。
  * 章节标题行不参与合并，否则「第一章」会被粘到正文第一句上。
+ *
+ * 只合并中文：英文技术书的一行就是一句话，把行尾当成软换行会把标题并进正文
+ * （《Effective Modern C++》的「Deducing Types」就是这样被并成
+ * 「Deducing TypesC++98 had…」，章标题最后只剩「CHAPTER 1」）。
  */
 export function mergeSoftBreaks(lines) {
   const out = [];
@@ -213,6 +219,9 @@ export function mergeSoftBreaks(lines) {
     const joinable =
       prev.length >= 12 &&
       CONTINUES.test(prev) &&
+      // 只有中文段落才做软换行合并：英文书的一行就是一句话，合并会把章标题并进正文
+      CJK_TEXT.test(prev) &&
+      CJK_TEXT.test(line) &&
       !isChapterLine(prev) &&
       !isChapterLine(line) &&
       !/^[-*·•▲■]/.test(line) &&
@@ -692,15 +701,23 @@ function withNextLine(lines, index) {
   const m = CHAPTER_RE.exec(text);
   const tail = String((m && m.groups && m.groups.tail) || '').trim();
   if (tail) return text;
-  for (let k = index + 1; k < lines.length; k += 1) {
+
+  // 英文书把章名单独排一行（「CHAPTER 5」/「Rvalue References, Move Semantics,」/「and Perfect
+  // Forwarding」），中文书一行就够。英文标题行放行到 40 字符，并且允许再接一行小写开头的折行；
+  // 中文仍按 20 字卡，保持原来的保守度。
+  const picked = [];
+  for (let k = index + 1; k < lines.length && picked.length < 2; k += 1) {
     const next = normalizeLine(lines[k]);
     if (!next) continue;
-    if (next.length <= 20 && !NEXT_LINE_BAD.test(next) && !QUOTE_MARKS.test(next) && !matchHead(next, k, true)) {
-      return text + ' ' + next;
-    }
-    break;
+    const latin = !/[\u2e80-\u9fff]/.test(next);
+    const limit = latin ? 40 : 20;
+    if (next.length > limit || NEXT_LINE_BAD.test(next) || QUOTE_MARKS.test(next) || matchHead(next, k, true)) break;
+    picked.push(next);
+    if (!latin) break;
+    const after = lines[k + 1] === undefined ? '' : normalizeLine(lines[k + 1]);
+    if (!after || after.length > 40 || !/^[a-z]/.test(after)) break;
   }
-  return text;
+  return picked.length ? text + ' ' + picked.join(' ') : text;
 }
 
 /**

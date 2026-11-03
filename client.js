@@ -87,7 +87,7 @@ window.__ModuleLoader__.load({
 .bl-row input[type=checkbox]{margin:2px 0 0;accent-color:currentColor;flex:0 0 auto}
 .bl-row input[type=checkbox]:disabled{opacity:.35}
 .bl-row-main{min-width:0;flex:1 1 auto}
-.bl-row-title{font-size:12.5px;line-height:1.45;word-break:break-word}
+.bl-row-title{font-size:12.5px;line-height:1.45;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .bl-row-sub{font-size:11px;opacity:.55;margin-top:1px}
 .bl-row.blank .bl-row-title{opacity:.45}
 .bl-foot{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--bl-line);flex:0 0 auto}
@@ -865,7 +865,7 @@ window.__ModuleLoader__.load({
                       if (event.key === 'Escape') setEdit(null);
                     },
                   })
-                : h('div', { className: 'bl-row-title' }, chapter.title),
+                : h('div', { className: 'bl-row-title', title: chapter.title }, chapter.title),
               h(
                 'div',
                 { className: 'bl-row-sub' },

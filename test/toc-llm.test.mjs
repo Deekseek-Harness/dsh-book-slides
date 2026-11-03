@@ -157,6 +157,26 @@ test('正常 JSON：只留内容章节，分卷/前言不单独成章', async ()
   assert.equal(calls[0].maxTokens, 16000);
 });
 
+test('长英文标题不触发整份回退：60 字符也能过校验', async () => {
+  // 《Effective Modern C++》第 5 章标题正好 60 个字符；按旧的 40 字上限，
+  // 整份目录会被判死、回退页眉，用户看到的就是「第 6 条标题过长（60 字）」。
+  queue.push([
+    {
+      type: 'text-delta',
+      text: JSON.stringify({
+        entries: [
+          { title: '5. Rvalue References, Move Semantics, and Perfect Forwarding', printed_page: 1, level: 'front', fixed_char: false },
+          ...ENTRIES,
+        ],
+      }),
+    },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]);
+  const data = await post('/dsh-book-slides/toc/parse', { bookId: bookId, from: 1, to: 1, force: true });
+  assert.equal(data.fallback, undefined, JSON.stringify(data));
+  assert.equal(data.chapterCount, 3);
+});
+
 test('模型只回一段话：错误里带原文开头，预算不翻倍', async () => {
   const prose = '抱歉，这段目录有太多 OCR 错误，我无法可靠地配对页码。';
   for (let i = 0; i < 2; i += 1) {

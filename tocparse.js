@@ -179,6 +179,22 @@ export function isContentEntry(entry) {
 }
 
 /**
+ * 标题长度上限，按「显示宽度」算：中文 2、英文 1。
+ *
+ * 原来写死 40 个字符，是照中文书的目录定的；英文技术书的章名经常 50–60 个字符
+ * （《Effective Modern C++》第 5 章就是 60 个），一条超长就把整份目录判死、回退页眉。
+ * 80 字宽 = 40 个中文字，中文行为不变；英文能放到 80 个字符。
+ */
+export const TOC_TITLE_MAX_WIDTH = 80;
+
+/** 标题显示宽度：CJK / 全角算 2，其余算 1。 */
+export function titleWidth(title) {
+  let width = 0;
+  for (const ch of String(title || '')) width += (ch.codePointAt(0) || 0) >= 0x2e80 ? 2 : 1;
+  return width;
+}
+
+/**
  * 校验模型给的目录表。返回错误列表（空 = 通过）。
  * 这些错误会连同原文一起回灌给模型重试一次。
  */
@@ -193,7 +209,9 @@ export function validateEntries(entries) {
   entries.forEach((entry, index) => {
     const at = '第 ' + (index + 1) + ' 条';
     if (!entry.title) errors.push(at + '没有标题');
-    else if (entry.title.length > 40) errors.push(at + '标题过长（' + entry.title.length + ' 字）');
+    else if (titleWidth(entry.title) > TOC_TITLE_MAX_WIDTH) {
+      errors.push(at + '标题过长（' + entry.title.length + ' 字，超过 ' + TOC_TITLE_MAX_WIDTH + ' 字宽上限）');
+    }
     if (!(entry.printed > 0)) errors.push(at + '页码不是正整数');
     if (index > 0) {
       const prev = entries[index - 1];
@@ -209,20 +227,42 @@ export function validateEntries(entries) {
 
 /**
  * 从页眉/页脚里读印刷页码。返回 0 表示这页看不出页码。
- * 只认三种形态：行首数字（「220 第5章」）、行尾数字（「处理器 219」）、首行全数字。
+ *
+ * 页码既可能印在页眉（「220 第5章」），也可能印在页脚（「10 | Item 1」）：
+ * 英文技术书几乎都把页码放在页脚，只读首行会让偏移投票几乎没有样本
+ * （《Effective Modern C++》实测只有 5% 占比、算出 -93 页）。
+ * 所以首行与末行都看，但只认三种形态：纯页码行、行首页码、行尾页码。
  */
 export function printedPageOf(text) {
-  const lines = String(text || '').split('\n').filter(Boolean);
+  const lines = String(text || '').split('\n').map(normalizeLine).filter(Boolean);
   if (!lines.length) return 0;
-  const head = normalizeLine(lines[0]);
-  const lead = /^(\d{1,4})\s*\D/.exec(head);
-  if (lead) return Number(lead[1]);
-  if (head.length <= 60) {
-    const trail = /\D\s*(\d{1,4})$/.exec(head);
-    if (trail) return Number(trail[1]);
+  const head = lines[0];
+  const last = lines[lines.length - 1];
+  // 页脚优先：页眉的「CHAPTER 1」会被行尾数字规则误读成第 1 页，页脚才是真页码
+  if (last !== head) {
+    const fromFooter = pageNoOfLine(last, true);
+    if (fromFooter) return fromFooter;
   }
-  const first = /^(\d{1,4})$/.exec(head);
-  if (first) return Number(first[1]);
+  return pageNoOfLine(head, false);
+}
+
+/**
+ * 一行里的印刷页码；「CHAPTER 1」这种整行只有章号的，数字不是页码。
+ * 页脚比页眉严一档：页脚正文里常出现「1. xxx」这种编号列表，
+ * 不能把行首的 1 当成页码，所以要求数字与文字之间有空白或竖线。
+ */
+function pageNoOfLine(line, footer) {
+  const text = normalizeLine(line);
+  if (!text || text.length > 60) return 0;
+  const chapter = CHAPTER_RE.exec(text);
+  const chapterTail = chapter ? String((chapter.groups && chapter.groups.tail) || '').trim() : '';
+  if (chapter && !chapterTail) return 0;
+  const pure = /^(\d{1,4})$/.exec(text);
+  if (pure) return Number(pure[1]);
+  const lead = (footer ? /^(\d{1,4})\s+[^\d\s]/ : /^(\d{1,4})\s*\D/).exec(text);
+  if (lead) return Number(lead[1]);
+  const trail = (footer ? /[^\d\s]\s+(\d{1,4})$/ : /\D\s*(\d{1,4})$/).exec(text);
+  if (trail) return Number(trail[1]);
   return 0;
 }
 
@@ -270,10 +310,17 @@ export function isTrustedOffset(vote) {
   return vote.share >= 0.6;
 }
 
+/** 英文书的目录写法：「5. Rvalue References…」——数字加点也是章号。 */
+const NUMBERED_TITLE_RE = /^\s*(\d{1,3})\s*[.、:：]\s*(.+)$/;
+
 /** 标题去掉章号后的部分：「第7章 层次结构的存储器」→「层次结构的存储器」。 */
 export function titleTailOf(title) {
-  const m = CHAPTER_RE.exec(String(title || '').replace(/\s+/g, ' ').trim());
-  return m ? String((m.groups && m.groups.tail) || '').replace(/\s+/g, '').trim() : '';
+  const text = String(title || '').replace(/\s+/g, ' ').trim();
+  const m = CHAPTER_RE.exec(text);
+  if (m) return String((m.groups && m.groups.tail) || '').replace(/\s+/g, '').trim();
+  // 英文技术书常写成「5. Rvalue References…」：不认这一种，60 字的标题永远锚不上页
+  const n = NUMBERED_TITLE_RE.exec(text);
+  return n ? String(n[2]).replace(/\s+/g, '').trim() : '';
 }
 
 /**
@@ -300,6 +347,14 @@ export function pageHasTitle(text, title) {
   // 在中文里到处都是，实测把《导演创作完全手册》第 32 章提前了 3 页。
   const numberedHead = /^第\s*[0-9一二三四五六七八九十百千零〇两]+\s*[章回讲课篇卷部]$/.test(titleHead);
   const pageHasSameHead = numberedHead && lines.some((line) => headOf(normalizeLine(line)) === titleHead);
+  // 英文「2. auto」这类短标题：正文里到处是「auto x = 27;」，只凭 4 个字母就会锚错页。
+  // 章号（CHAPTER 2 / 第2章）必须和标题里的号对上，才允许命中最前面几行。
+  const numberedTitle = NUMBERED_TITLE_RE.exec(String(title || '').trim());
+  const shortNumbered = numberedTitle && tail.length < 8;
+  if (shortNumbered) {
+    const want = Number(numberedTitle[1]);
+    if (!lines.some((line) => chapterNumberOf(line) === want)) return false;
+  }
   // 分卷页上会列出这一部分的章名（「第 1 章 逃逸分析 / 第 1 部分 / 语言基础」），
   // 它不是章的标题页，认成锚点会让整章前移一页。
   if (lines.some((line) => PART_RE.test(normalizeLine(line)))) return false;
@@ -324,6 +379,26 @@ export function pageHasTitle(text, title) {
     const pageTail = titleTailOf(text2);
     if (pageTail.length >= 3 && tail.length >= pageTail.length) {
       if (editDistance(tail.slice(0, pageTail.length), pageTail) <= toleranceWhole) return true;
+    }
+  }
+  // 英文长标题经常被排版折成两行（「Rvalue References, Move Semantics,」/「and Perfect Forwarding」），
+  // 单行比对永远对不上。把标题页前几行接起来再比；只对足够长的标题生效，
+  // 免得两三个字的短标题在正文首行里随便撞上。
+  //
+  // 只接两种页：首行是裸章号（「CHAPTER 5」）的标题页，或者标题本身没有中文。
+  // 中文标题页不能随便接：上一行印着「第18章 积分的方法 I」，接起来会和
+  // 「第19章 积分的方法 II」只差两个字，被这条规则误判成命中。
+  if (whole.length >= 8 || tail.length >= 8) {
+    const body = lines.map((line) => normalizeLine(line)).filter(Boolean);
+    const firstHead = body[0] ? CHAPTER_RE.exec(body[0]) : null;
+    const bareHead = firstHead && !String((firstHead.groups && firstHead.groups.tail) || '').trim();
+    if (bareHead || !/[\u2e80-\u9fff]/.test(whole)) {
+      const joined = (bareHead ? body.slice(1) : body)
+        .slice(0, 3)
+        .join('')
+        .replace(/\s+/g, '');
+      if (tail.length >= 8 && editDistance(joined.slice(0, tail.length), tail) <= toleranceWhole) return true;
+      if (whole.length >= 8 && editDistance(joined.slice(0, whole.length), whole) <= toleranceWhole) return true;
     }
   }
   return false;
@@ -448,6 +523,10 @@ export function chaptersFromToc(pages, calibrated) {
     }
     return sum;
   };
+  const textOfPage = (no) => {
+    for (const page of pages) if (Number((page && page.page) || 0) === no) return String((page && page.text) || '');
+    return '';
+  };
 
   const chapters = [];
   const firstFrom = list[0].physical;
@@ -459,7 +538,9 @@ export function chaptersFromToc(pages, calibrated) {
   }
   for (let i = 0; i < list.length; i += 1) {
     const from = list[i].physical;
-    const to = i + 1 < list.length ? Math.max(from, list[i + 1].physical - 1) : pageNo(total - 1);
+    let to = i + 1 < list.length ? Math.max(from, list[i + 1].physical - 1) : pageNo(total - 1);
+    // 章末的空白页不属于任何一章（和机械路径保持一致），否则区间会白白多带一页
+    while (to > from && textOfPage(to).length < 10) to -= 1;
     chapters.push({
       n: chapters.filter((c) => !c.front).length + 1,
       title: list[i].title,

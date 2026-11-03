@@ -110,12 +110,35 @@ test('validateEntries：页码倒退、条目过多都要报错', () => {
   assert.match(validateEntries(many).join('；'), /正文章节太多/);
 });
 
+test('validateEntries：60 字符英文标题不能判死整份目录', () => {
+  const english = [
+    { title: 'Introduction', printed: 1, level: 'front', fixedChar: false },
+    { title: '1. Deducing Types', printed: 9, level: 'chapter', fixedChar: false },
+    // 《Effective Modern C++》第 5 章，正好 60 个字符；按 40 字上限会被整份丢弃
+    { title: '5. Rvalue References, Move Semantics, and Perfect Forwarding', printed: 157, level: 'chapter', fixedChar: false },
+    { title: '6. Lambda Expressions', printed: 215, level: 'chapter', fixedChar: false },
+  ];
+  assert.equal(english[2].title.length, 60);
+  assert.deepEqual(validateEntries(english), [], '英文 60 字符 = 60 字宽，没超 80');
+
+  const chinese = [
+    { title: '第1章 ' + '很长的标题'.repeat(9), printed: 1, level: 'chapter', fixedChar: false },
+    { title: '第2章 乙', printed: 5, level: 'chapter', fixedChar: false },
+    { title: '第3章 丙', printed: 9, level: 'chapter', fixedChar: false },
+  ];
+  assert.ok(chinese[0].title.length > 40, '中文 49 字');
+  assert.match(validateEntries(chinese).join('；'), /标题过长/, '中文仍按 40 字（80 字宽）卡');
+});
+
 /* -------------------------------- 校准 -------------------------------- */
 
-test('printedPageOf：三种页眉都能读出印刷页码', () => {
+test('printedPageOf：页眉与页脚都能读出印刷页码', () => {
   assert.equal(printedPageOf('220 第5章\n正文'), 220);
   assert.equal(printedPageOf('处 理 器 219\n正文'), 219);
-  assert.equal(printedPageOf('正文正文\n' + '结尾 88'), 0, '末行不算，只看首行');
+  assert.equal(printedPageOf('正文正文\n结尾 88'), 88, '页码印在页脚的英文书很常见');
+  assert.equal(printedPageOf('正文正文\n10 | Item 1'), 10);
+  assert.equal(printedPageOf('正文正文\nItem 1 | 11'), 11);
+  assert.equal(printedPageOf('CHAPTER 1\nDeducing Types\n正文正文'), 0, '章号不是页码');
   assert.equal(printedPageOf(''), 0);
 });
 
@@ -123,6 +146,27 @@ test('校准：页码差恒定，直接加成物理页', () => {
   const pages = makeBook();
   const result = calibrate(pages, ENTRIES);
   assert.equal(result.offset, -100, '页眉投票应该得出 物理页 - 印刷页 = -100');
+});
+
+test('校准：页码只印在页脚时也能定出偏移', () => {
+  const pages = [];
+  for (let physical = 1; physical <= 12; physical += 1) {
+    const printed = physical + 10;
+    const lines = [];
+    if (physical === 5) lines.push('1. Start');
+    if (physical === 9) lines.push('2. Turn');
+    for (let i = 0; i < 5; i += 1) lines.push('body text for a practical book page. ');
+    lines.push(printed + ' | Sample Book');
+    pages.push({ page: physical, text: lines.join('\n') });
+  }
+  const entries = [
+    { title: '1. Start', printed: 15, level: 'chapter', fixedChar: false },
+    { title: '2. Turn', printed: 19, level: 'chapter', fixedChar: false },
+  ];
+  const result = calibrate(pages, entries);
+  assert.equal(result.offset, -10, '页脚 11–22 对物理页 1–12，偏移是 -10');
+  assert.deepEqual(result.entries.map((entry) => entry.physical), [5, 9]);
+  assert.ok(result.entries.every((entry) => entry.anchor === 'header'), '页脚一致时直接用偏移，不必每题找标题');
 });
 
 test('校准：印刷页整体偏移时，靠标题锚定纠正', () => {
@@ -336,6 +380,20 @@ test('标题命中：章号对不上的行一律不认', async () => {
   assert.equal(pageHasTitle(page, '第 19 章 积分的方法 II'), false, '只差两个字也必须拒');
   // 页眉没有章号时不受这条约束
   assert.equal(pageHasTitle('控制器的硬件实现 545', '附录C 控制器的硬件实现'), true);
+});
+
+test('标题命中：英文「N. 标题」与折成两行的长标题', async () => {
+  const { pageHasTitle } = await import('../tocparse.js');
+  assert.equal(pageHasTitle('CHAPTER 2\nauto\nIn concept, auto is as simple', '2. auto'), true);
+  assert.equal(pageHasTitle('CHAPTER 8\nTweaks\nFor every general technique', '8. Tweaks'), true);
+  assert.equal(
+    pageHasTitle(
+      'CHAPTER 5\nRvalue References, Move Semantics,\nand Perfect Forwarding\nWhen you first learn about them',
+      '5. Rvalue References, Move Semantics, and Perfect Forwarding',
+    ),
+    true,
+    '标题印成两行也要能锚上',
+  );
 });
 
 test('校准：跳过目录页，不会把第 1 章钉在目录页上', async () => {

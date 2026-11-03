@@ -323,6 +323,29 @@ test('buildChapters：不写页码的条目式目录也要整块去掉', async (
   assert.equal(chapters[0].from, 2);
 });
 
+test('buildChapters：英文书的章名不会被并进正文', async () => {
+  const { buildChapters, cleanPages } = await import('../text.js');
+  const body = 'This is a line of English prose that is long enough to be a real paragraph line. ';
+  const raw = [
+    { page: 1, text: 'CHAPTER 1\nDeducing Types\n' + body.repeat(3) },
+    { page: 2, text: body.repeat(6) },
+    { page: 3, text: 'CHAPTER 2\nauto\n' + body.repeat(3) },
+    { page: 4, text: body.repeat(6) },
+    { page: 5, text: 'CHAPTER 5\nRvalue References, Move Semantics,\nand Perfect Forwarding\n' + body.repeat(3) },
+    { page: 6, text: body.repeat(6) },
+  ];
+  const chapters = buildChapters(cleanPages(raw)).filter((c) => !c.front);
+  assert.deepEqual(
+    chapters.map((c) => c.title),
+    [
+      'CHAPTER 1 Deducing Types',
+      'CHAPTER 2 auto',
+      'CHAPTER 5 Rvalue References, Move Semantics, and Perfect Forwarding',
+    ],
+    '标题行不能被软换行并进正文，否则就只剩「CHAPTER 1」',
+  );
+});
+
 test('buildChapters：译注/索引里重复的章号不算新章', async () => {
   const { buildChapters, cleanPages } = await import('../text.js');
   const body = '正文'.repeat(80) + '。';
