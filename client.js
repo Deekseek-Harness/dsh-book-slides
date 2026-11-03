@@ -549,6 +549,19 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         .filter((rect) => rect.left >= 0 && rect.top >= 0 && rect.width > 0 && rect.height > 0);
     }
 
+    /**
+     * pdf.js 在 canvas 已有未完成 RenderTask 时会报
+     * "Cannot use the same canvas during multiple render() operations"。
+     * 取消任务时抛的是 RenderingCancelledException，属于正常控制流，不当作失败。
+     */
+    function isRenderCancelled(err) {
+      const name = String((err && err.name) || '');
+      const message = String((err && err.message) || err || '').trim();
+      // pdf.js 的取消异常名固定；不能只看 message 里有没有 "cancelled"，
+      // 「same canvas ... cancelled or completed」也含这个词，但那是真错误。
+      return /RenderingCancel/i.test(name) || /^Rendering cancelled/i.test(message);
+    }
+
     /* ------------------------------ 组件 ------------------------------ */
 
     function SlideIcon({ size = 18 }) {
@@ -1106,6 +1119,9 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     function SourcePane({ pdfDoc, pdfLoading, pdfError, slide, bookId }) {
       const rootRef = useRef(null);
       const canvasRefs = useRef(new Map());
+      const renderTasksRef = useRef(new Map());
+      const renderChainRef = useRef(Promise.resolve());
+      const renderGenerationRef = useRef(0);
       const [width, setWidth] = useState(0);
       const [highlights, setHighlights] = useState({});
       const [renderError, setRenderError] = useState(null);
@@ -1119,37 +1135,68 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const slideKey = slide ? slide.slide_index : 0;
       const quote = slide ? slide.source_quote : '';
 
-      // 窗格宽度决定 canvas 分辨率；百分比高亮不依赖具体像素，所以拖动分隔条不用重算坐标
+      // 窗格宽度决定 canvas 分辨率；百分比高亮不依赖具体像素，所以拖动分隔条不用重算坐标。
+      // 防抖：全屏/拖分隔条会连续触发 ResizeObserver，每个像素都重画会把 pdf.js 拖死。
       useEffect(() => {
         const element = rootRef.current;
         if (!element) return undefined;
-        const measure = () => {
-          const next = Math.floor(element.clientWidth - 32);
-          if (next > 0) setWidth(next);
+        let timer = null;
+        let last = 0;
+        const schedule = () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            timer = null;
+            const next = Math.floor(element.clientWidth - 32);
+            if (next > 0 && Math.abs(next - last) >= 8) {
+              last = next;
+              setWidth(next);
+            }
+          }, 150);
         };
-        measure();
+        schedule();
         if (typeof ResizeObserver === 'function') {
-          const observer = new ResizeObserver(measure);
+          const observer = new ResizeObserver(schedule);
           observer.observe(element);
-          return () => observer.disconnect();
+          return () => {
+            if (timer) clearTimeout(timer);
+            observer.disconnect();
+          };
         }
-        window.addEventListener('resize', measure);
-        return () => window.removeEventListener('resize', measure);
+        window.addEventListener('resize', schedule);
+        return () => {
+          if (timer) clearTimeout(timer);
+          window.removeEventListener('resize', schedule);
+        };
       }, []);
 
       useEffect(() => {
         if (!pdfDoc || !width) return undefined;
-        let alive = true;
+        const generation = renderGenerationRef.current + 1;
+        renderGenerationRef.current = generation;
+        const canvasMap = canvasRefs.current;
         setRenderError(null);
         setHighlights({});
         setHighlightMiss(false);
-        const canvasMap = canvasRefs.current;
 
-        const renderPages = async () => {
+        const cancelTasks = () => {
+          for (const task of renderTasksRef.current.values()) {
+            try {
+              task.cancel();
+            } catch {
+              /* 已经完成 */
+            }
+          }
+          renderTasksRef.current.clear();
+        };
+
+        // 所有渲染串行排队：前一轮 cancel 后必须等它的 promise 落地，
+        // 才能对同一个 canvas 再调 page.render（pdf.js 的硬约束）。
+        const job = renderChainRef.current.then(async () => {
+          if (generation !== renderGenerationRef.current) return;
           const pdfjs = await loadPdfJs();
           const found = {};
           for (let pageNo = from; pageNo <= to; pageNo += 1) {
-            if (!alive) return;
+            if (generation !== renderGenerationRef.current) return;
             const page = await pdfDoc.getPage(pageNo);
             const base = page.getViewport({ scale: 1 });
             const cssScale = Math.max(0.05, width / base.width);
@@ -1159,24 +1206,43 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             if (!canvas) continue;
             canvas.width = Math.max(1, Math.floor(renderViewport.width));
             canvas.height = Math.max(1, Math.floor(renderViewport.height));
-            await page.render({ canvas: canvas, viewport: renderViewport }).promise;
-            if (!alive) return;
+            let task;
+            try {
+              task = page.render({ canvas: canvas, viewport: renderViewport });
+            } catch (err) {
+              if (isRenderCancelled(err) || generation !== renderGenerationRef.current) return;
+              throw err;
+            }
+            renderTasksRef.current.set(pageNo, task);
+            try {
+              await task.promise;
+            } catch (err) {
+              if (isRenderCancelled(err) || generation !== renderGenerationRef.current) return;
+              throw err;
+            } finally {
+              if (renderTasksRef.current.get(pageNo) === task) renderTasksRef.current.delete(pageNo);
+            }
+            if (generation !== renderGenerationRef.current) return;
             if (pageNo === anchorPage && quote) {
               const text = await page.getTextContent();
               const rects = pdfHighlightRects(text.items, quote, page.getViewport({ scale: cssScale }), pdfjs);
               if (rects.length) found[pageNo] = rects;
             }
           }
-          if (!alive) return;
+          if (generation !== renderGenerationRef.current) return;
           setHighlights(found);
           setHighlightMiss(!!anchorPage && !!quote && !Object.keys(found).length);
-        };
-
-        renderPages().catch((err) => {
-          if (alive) setRenderError(err);
         });
+
+        renderChainRef.current = job.catch(() => {});
+        job.catch((err) => {
+          if (generation === renderGenerationRef.current && !isRenderCancelled(err)) setRenderError(err);
+        });
+
         return () => {
-          alive = false;
+          // 先让 generation 失效，再 cancel；新 effect 会排在旧 job 之后
+          if (renderGenerationRef.current === generation) renderGenerationRef.current += 1;
+          cancelTasks();
         };
       }, [pdfDoc, width, from, to, slideKey, quote, anchorPage]);
 
@@ -3153,7 +3219,11 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       },
 
       /** 测试用：PDF 高亮几何是纯函数，单独验证，不用起浏览器。 */
-      __utils: { normalizePdfText: normalizePdfText, pdfHighlightRects: pdfHighlightRects },
+      __utils: {
+        normalizePdfText: normalizePdfText,
+        pdfHighlightRects: pdfHighlightRects,
+        isRenderCancelled: isRenderCancelled,
+      },
     };
   },
 });

@@ -312,6 +312,16 @@ test('PDF 高亮几何：把 source_quote 映射成页内百分比矩形', () =>
   assert.equal(mod.__utils.pdfHighlightRects(items, '完全不存在的句子', viewport, pdfjs).length, 0);
 });
 
+test('PDF 渲染取消：取消异常不显示为渲染失败', () => {
+  const { mod } = bootPlugin();
+  assert.equal(mod.__utils.isRenderCancelled({ name: 'RenderingCancelledException', message: 'cancelled' }), true);
+  assert.equal(mod.__utils.isRenderCancelled(new Error('Rendering cancelled')), true);
+  assert.equal(
+    mod.__utils.isRenderCancelled(new Error('Cannot use the same canvas during multiple render() operations.')),
+    false,
+  );
+});
+
 test('书架「继续听」：有播放进度时显示页码入口', () => {
   const { mod } = bootPlugin();
   const books = [
