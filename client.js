@@ -563,6 +563,44 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       return /RenderingCancel/i.test(name) || /^Rendering cancelled/i.test(message);
     }
 
+    /* ------------------------------ 弹出菜单 ------------------------------ */
+
+    /**
+     * 卡片右上「⋯」菜单的关闭规则（M5 体验修复）：
+     *   - 点菜单内部 → 交给菜单按钮自己处理；
+     *   - 点「⋯」按钮 → 交给它的 onClick 做开/关切换，避免这里抢先关掉；
+     *   - 点屏幕上其它任何区域（卡片本体、别的卡片、面板空白、面板外）→ 关闭；
+     *   - Esc → 关闭。
+     * 挂在 document 上是因为面板外的点击也要能关；走捕获阶段是因为卡片里的「⋯」「继续听」
+     * 自己会 stopPropagation，冒泡的监听会被截断、收不到。用 click 而不是 pointerdown 是为了
+     * 只认真实点击——拖滚动条、选字、右键按下都不会误关菜单。
+     * 这里只关菜单、不拦这次点击：点卡片本体时菜单收起后，点击照常走到卡片自己的 onClick，
+     * 于是直接打开这本书（实测就是这样，用户也认可）。返回清理函数，反复开关不堆监听。
+     */
+    function bindPopupDismiss(doc, options) {
+      if (!doc || typeof doc.addEventListener !== 'function') return () => {};
+      const opts = options || {};
+      const dismiss = typeof opts.onDismiss === 'function' ? opts.onDismiss : null;
+      if (!dismiss) return () => {};
+      const inside = (element, target) =>
+        Boolean(element && target && typeof element.contains === 'function' && element.contains(target));
+      const closeIfOutside = (event) => {
+        const target = event && event.target;
+        if (inside(opts.menu, target) || inside(opts.toggle, target)) return;
+        dismiss('outside');
+      };
+      const closeOnEscape = (event) => {
+        if (!event || event.key !== 'Escape') return;
+        dismiss('escape');
+      };
+      doc.addEventListener('click', closeIfOutside, true);
+      doc.addEventListener('keydown', closeOnEscape, true);
+      return () => {
+        doc.removeEventListener('click', closeIfOutside, true);
+        doc.removeEventListener('keydown', closeOnEscape, true);
+      };
+    }
+
     /* ------------------------------ 组件 ------------------------------ */
 
     function SlideIcon({ size = 18 }) {
@@ -649,6 +687,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [draft, setDraft] = useState(book.title);
       const [armed, setArmed] = useState(false);
       const inputRef = useRef(null);
+      const moreRef = useRef(null);
+      const menuRef = useRef(null);
       const resume = progress && progress.lastBookId === book.id && progress.lastModuleId ? progress : null;
 
       useEffect(() => {
@@ -657,6 +697,26 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           inputRef.current.select();
         }
       }, [renaming]);
+
+      const closeMenu = useCallback((reason) => {
+        setMenu(false);
+        setArmed(false);
+        // Esc 时把焦点还给「⋯」，键盘用户不会掉在空处；点外面时不动焦点。
+        if (reason === 'escape' && moreRef.current && typeof moreRef.current.focus === 'function') {
+          moreRef.current.focus();
+        }
+      }, []);
+
+      // 菜单开着时挂全局监听：点屏幕其它区域或按 Esc 都能关。只关菜单、不吞这次点击，
+      // 所以点卡片本体仍会进入详情（用户已确认这个行为），点别的卡片/按钮也照常响应。
+      useEffect(() => {
+        if (!menu) return undefined;
+        return bindPopupDismiss(typeof document === 'undefined' ? null : document, {
+          menu: menuRef.current,
+          toggle: moreRef.current,
+          onDismiss: closeMenu,
+        });
+      }, [menu, closeMenu]);
 
       const submitRename = useCallback(() => {
         const title = String(draft || '').trim();
@@ -691,8 +751,10 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         h(
           'button',
           {
+            ref: moreRef,
             className: 'bl-more',
             'aria-label': '更多操作',
+            'aria-expanded': menu ? 'true' : 'false',
             onClick: (event) => {
               event.stopPropagation();
               setMenu((v) => !v);
@@ -704,7 +766,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         menu
           ? h(
               'div',
-              { className: 'bl-menu bl-line', onClick: (event) => event.stopPropagation() },
+              { ref: menuRef, className: 'bl-menu bl-line', onClick: (event) => event.stopPropagation() },
               h(
                 'button',
                 {
@@ -3409,6 +3471,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         normalizePdfText: normalizePdfText,
         pdfHighlightRects: pdfHighlightRects,
         isRenderCancelled: isRenderCancelled,
+        bindPopupDismiss: bindPopupDismiss,
       },
     };
   },

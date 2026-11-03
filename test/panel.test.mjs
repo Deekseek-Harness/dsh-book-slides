@@ -109,6 +109,69 @@ test('书架有书时渲染卡片：书名、章数、字数', () => {
   assert.match(html, /\/dsh-book-slides\/cover\?bookId=aaaaaaaaaaaa/);
 });
 
+test('书架卡片：菜单默认收起，「⋯」按钮带 aria-expanded', () => {
+  const { mod } = bootPlugin();
+  const html = renderToString(
+    React.createElement(mod.__components.BookCard, {
+      book: { id: 'aaaaaaaaaaaa', title: '一本书', chapters: 3, modules: 0, chars: 12000 },
+      onOpen: () => {},
+      onRename: () => {},
+      onDelete: () => {},
+    }),
+  );
+  assert.match(html, /aria-label="更多操作"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /bl-menu/, '没点开时不该渲染菜单');
+});
+
+test('书架菜单：点屏幕其它区域或按 Esc 关闭，点菜单与「⋯」不误关', () => {
+  const { mod } = bootPlugin();
+  const listeners = new Map();
+  const doc = {
+    addEventListener(type, fn, capture) {
+      listeners.set(type + (capture ? ':capture' : ''), fn);
+    },
+    removeEventListener(type, fn, capture) {
+      listeners.delete(type + (capture ? ':capture' : ''));
+    },
+    fire(type, event) {
+      const fn = listeners.get(type + ':capture');
+      if (fn) fn(event);
+    },
+  };
+  const menuEl = { contains: (target) => target === menuEl };
+  const toggleEl = { contains: (target) => target === toggleEl };
+  const elsewhere = { tag: 'card' };
+  const reasons = [];
+
+  const cleanup = mod.__utils.bindPopupDismiss(doc, {
+    menu: menuEl,
+    toggle: toggleEl,
+    onDismiss: (reason) => reasons.push(reason),
+  });
+  assert.deepEqual([...listeners.keys()].sort(), ['click:capture', 'keydown:capture'], '两个监听都要走捕获阶段');
+
+  doc.fire('click', { target: menuEl });
+  doc.fire('click', { target: toggleEl });
+  doc.fire('keydown', { key: 'Enter' });
+  assert.deepEqual(reasons, [], '点菜单内部、点「⋯」、按其它键都不该关');
+
+  doc.fire('click', { target: elsewhere });
+  assert.deepEqual(reasons, ['outside'], '点屏幕其它区域 → 关');
+
+  doc.fire('keydown', { key: 'Escape' });
+  assert.deepEqual(reasons, ['outside', 'escape'], '按 Esc → 关');
+
+  cleanup();
+  assert.equal(listeners.size, 0, '关闭后要摘掉监听');
+  doc.fire('click', { target: elsewhere });
+  assert.deepEqual(reasons, ['outside', 'escape'], '摘掉后不再响应');
+
+  // 没有 document / 没有回调时必须是安全空操作（SSR、卸载过程中会走到）
+  assert.equal(typeof mod.__utils.bindPopupDismiss(null, { onDismiss: () => {} }), 'function');
+  assert.equal(typeof mod.__utils.bindPopupDismiss(doc, {}), 'function');
+});
+
 test('详情页在加载态与出错态都能渲染', () => {
   const { mod } = bootPlugin();
   const loading = renderToString(
