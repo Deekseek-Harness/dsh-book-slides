@@ -69,7 +69,15 @@ import {
   startGeneration,
   validateSelection,
 } from './generate.js';
-import { VOICE_PROVIDERS, probeVoice, publicVoiceConfig, readVoiceConfig, writeVoiceConfig } from './tts.js';
+import {
+  QWEN_MODELS,
+  QWEN_VOICES,
+  VOICE_PROVIDERS,
+  probeVoice,
+  publicVoiceConfig,
+  readVoiceConfig,
+  writeVoiceConfig,
+} from './tts.js';
 import { SLIDES_PROMPT_VERSION } from './slides.js';
 
 const require = createRequire(import.meta.url);
@@ -1096,11 +1104,28 @@ function handleAudio(req, res) {
     res.end();
     return;
   }
-  const file = path.join(found.moduleDir, 'audio', String(index).padStart(3, '0') + '.mp3');
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
+  const base = path.join(found.moduleDir, 'audio', String(index).padStart(3, '0'));
+  const candidates = [
+    { file: base + '.wav', type: 'audio/wav' },
+    { file: base + '.mp3', type: 'audio/mpeg' },
+  ];
+  let file = '';
+  let type = 'audio/wav';
+  let stat = null;
+  for (const candidate of candidates) {
+    try {
+      const info = fs.statSync(candidate.file);
+      if (info.isFile()) {
+        file = candidate.file;
+        type = candidate.type;
+        stat = info;
+        break;
+      }
+    } catch {
+      /* 试下一个扩展名 */
+    }
+  }
+  if (!stat) {
     res.statusCode = 404;
     res.end();
     return;
@@ -1108,7 +1133,7 @@ function handleAudio(req, res) {
   const total = stat.size;
   const range = String((req.headers && req.headers.range) || '');
   const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-  res.setHeader('content-type', 'audio/mpeg');
+  res.setHeader('content-type', type);
   res.setHeader('accept-ranges', 'bytes');
   res.setHeader('cache-control', 'no-store');
   if (match) {
@@ -1145,15 +1170,23 @@ function handleVoiceGet(req, res) {
     ok: true,
     voice: publicVoiceConfig(config),
     providers: VOICE_PROVIDERS,
-    note: '本版只接浏览器本机朗读：不联网、不产生音频文件。',
+    models: QWEN_MODELS,
+    qwenVoices: QWEN_VOICES,
+    note: 'Qwen3-TTS 的 Key 只存本机 voice.json（0600）；浏览器朗读不需要 Key。',
   });
 }
 
 async function handleVoicePost(req, res) {
   const body = await readJsonBody(req, 64 * 1024);
   try {
-    const next = writeVoiceConfig(body && body.voice ? body.voice : body);
-    sendJson(res, 200, { ok: true, voice: publicVoiceConfig(next), providers: VOICE_PROVIDERS });
+    const next = writeVoiceConfig(body && body.voice && typeof body.voice === 'object' ? body.voice : body);
+    sendJson(res, 200, {
+      ok: true,
+      voice: publicVoiceConfig(next),
+      providers: VOICE_PROVIDERS,
+      models: QWEN_MODELS,
+      qwenVoices: QWEN_VOICES,
+    });
   } catch (err) {
     sendError(res, 'E_VOICE_SAVE', '语音配置没存下来', String((err && err.message) || err).slice(0, 200));
   }
@@ -1161,9 +1194,17 @@ async function handleVoicePost(req, res) {
 
 async function handleVoiceProbe(req, res) {
   const body = await readJsonBody(req, 64 * 1024);
-  const result = probeVoice(readVoiceConfig(), body && body.text);
+  const result = await probeVoice(readVoiceConfig(), body && body.text);
   if (!result.ok) {
     sendError(res, result.code || 'E_TTS_UNCONFIGURED', result.error || '语音不可用', result.hint || '');
+    return;
+  }
+  if (result.audio && Buffer.isBuffer(result.audio)) {
+    res.statusCode = 200;
+    res.setHeader('content-type', result.contentType || 'audio/wav');
+    res.setHeader('content-length', String(result.audio.length));
+    res.setHeader('cache-control', 'no-store');
+    res.end(result.audio);
     return;
   }
   sendJson(res, 200, Object.assign({ ok: true }, result));

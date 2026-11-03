@@ -42,7 +42,7 @@ import {
   validateSlides,
 } from './slides.js';
 import { describeEmptyReply } from './tocparse.js';
-import { planVoicing } from './tts.js';
+import { synthesizeVoicing } from './tts.js';
 
 /** 和面板、SRS 5.1 保持同一组上限。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -180,7 +180,13 @@ function moduleSummary(record, id) {
     code: record.code || null,
     error: record.error || null,
     model: record.model || '',
-    voice: { provider: voice.provider || 'browser', rate: Number(voice.rate) || 1, voice: voice.voice || '', mode: voice.mode || '' },
+    voice: {
+      provider: voice.provider || 'browser',
+      model: voice.model || '',
+      rate: Number(voice.rate) || 1,
+      voice: voice.voice || '',
+      mode: voice.mode || '',
+    },
     createdAt: record.createdAt || '',
     updatedAt: record.updatedAt || record.createdAt || '',
     finishedAt: record.finishedAt || '',
@@ -409,6 +415,7 @@ export function startGeneration(options) {
     promptVersion: SLIDES_PROMPT_VERSION,
     voice: {
       provider: voice.provider,
+      model: voice.model || '',
       voice: voice.voice || '',
       rate: Number(voice.rate) || 1,
       mode: voice.provider === 'browser' ? 'browser' : 'none',
@@ -629,7 +636,7 @@ function progressMessage(stage, current, total) {
   if (stage === 'structuring') return '正在改写第 ' + current + '/' + total + ' 批原文';
   if (stage === 'validate') return '正在校验第 ' + current + '/' + total + ' 批结构';
   if (stage === 'anchor') return '正在定位原文锚点 ' + current + '/' + total + ' 页';
-  if (stage === 'voicing') return '正在准备朗读稿 ' + current + '/' + total + ' 页';
+  if (stage === 'voicing') return '正在合成语音 ' + current + '/' + total + ' 页';
   return '处理中';
 }
 
@@ -744,10 +751,14 @@ async function runJob(job, context) {
       progress(job, anchored.anchored, slides.length, progressMessage('anchor', anchored.anchored, slides.length));
     }
 
-    /* 阶段 4：配音（浏览器朗读：只算时长，不产生音频文件） */
+    /* 阶段 4：配音（Qwen3-TTS 逐页合成 WAV；浏览器只算时长） */
     setStage(job, persist, 'voicing', slides.length, progressMessage('voicing', 0, slides.length));
-    const voiced = planVoicing(anchored.slides, context.voice);
-    progress(job, slides.length, slides.length, voiced.degraded ? '文字已就绪，语音降级' : '朗读稿就绪');
+    const voiced = await synthesizeVoicing(anchored.slides, context.voice, {
+      moduleDir: context.moduleDir,
+      signal: job.controller.signal,
+      onProgress: (done, total) => progress(job, done, total, '正在合成语音 ' + done + '/' + total + ' 页'),
+    });
+    progress(job, slides.length, slides.length, voiced.degraded ? '文字已就绪，语音降级' : '语音已就绪');
 
     assertActive(job);
     const generatedAt = nowIso();
@@ -764,6 +775,7 @@ async function runJob(job, context) {
       voice: {
         provider: voiced.provider,
         mode: voiced.mode,
+        model: voiced.model || context.voice.model || '',
         rate: Number(context.voice.rate) || 1,
         voice: context.voice.voice || '',
       },
@@ -793,6 +805,7 @@ async function runJob(job, context) {
       error: voiced.degraded ? voiced.message : null,
       voice: {
         provider: voiced.provider,
+        model: voiced.model || context.voice.model || '',
         voice: context.voice.voice || '',
         rate: Number(context.voice.rate) || 1,
         mode: voiced.mode,
@@ -807,6 +820,7 @@ async function runJob(job, context) {
     job.total = slides.length;
     job.slides = slides.length;
     job.message = message;
+    job.error = voiced.degraded ? { code: voiced.code, message: voiced.message, hint: '' } : null;
     job.finishedAt = generatedAt;
   } catch (err) {
     const cancelled = job.cancelled || (err && err.code === 'E_CANCELLED');

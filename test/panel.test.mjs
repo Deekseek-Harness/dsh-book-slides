@@ -392,6 +392,42 @@ test('模块预览页：加载态能渲染', () => {
   assert.match(html, /正在打开模块/);
 });
 
+test('设置页语音：Qwen 模型/Key 掩码/音色下拉能渲染', () => {
+  const { mod } = bootPlugin();
+  const html = renderToString(
+    React.createElement(mod.__components.Settings, {
+      onBack: () => {},
+      initial: {
+        voice: {
+          provider: 'qwen3-tts',
+          model: 'qwen3-tts-flash',
+          voice: 'Cherry',
+          rate: 1,
+          hasKey: true,
+          apiKeyMask: '••••1234',
+          configured: true,
+        },
+        providers: [
+          { id: 'qwen3-tts', label: 'Qwen3-TTS（千问 AI）', ready: true },
+          { id: 'browser', label: '浏览器朗读（本机合成）', ready: true },
+          { id: 'off', label: '关闭', ready: true },
+        ],
+        models: [{ id: 'qwen3-tts-flash', label: 'Qwen3-TTS Flash（非实时）', ready: true }],
+        qwenVoices: [
+          { id: 'Cherry', desc: '阳光积极、亲切自然小姐姐', gender: '女', dialect: '' },
+          { id: 'Serena', desc: '温柔小姐姐', gender: '女', dialect: '' },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /Qwen3-TTS（千问 AI）/);
+  assert.match(html, /AI 模型/);
+  assert.match(html, /Qwen3-TTS Flash（非实时）/);
+  assert.match(html, /已保存 · 尾号 1234/);
+  assert.match(html, /Cherry · 阳光积极/);
+  assert.match(html, /试听/);
+});
+
 test('目录切章面板：建议范围、预览、状态文案都能渲染', () => {
   const { mod } = bootPlugin();
   const base = { from: '9', to: '15', total: 608, suggested: { from: 9, to: 15 }, busy: false, message: '', preview: '' };

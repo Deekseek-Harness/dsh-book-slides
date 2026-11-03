@@ -168,6 +168,7 @@ window.__ModuleLoader__.load({
 .bl-img-hint{margin-top:6px;font-size:11px;opacity:.6;display:flex;gap:6px;align-items:flex-start}
 .bl-img-hint code{font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
 .bl-voice-note{font-size:11.5px;opacity:.65;margin:6px 0 0;line-height:1.6}
+.bl-key-mask{font:11.5px/1.6 ui-monospace,Consolas,monospace;border:1px solid var(--bl-line);border-radius:7px;padding:4px 8px;opacity:.8}
 .bl-voice-row{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:8px 0}
 .bl-select{font:inherit;color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-bg-layer-2,Canvas);border:1px solid var(--bl-line);border-radius:7px;padding:4px 7px;max-width:100%;color-scheme:light}
 body[data-ds-dark-theme] .bl-select{color-scheme:dark}
@@ -991,7 +992,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                     h('span', { className: 'bl-chip ' + chip }, statusLabel(item.status)),
                     ' · ' + (Number(item.slides) || 0) + ' 页 · 锚定 ' + Math.round((Number(item.anchorHitRate) || 0) * 100) + '% · ' +
                       (item.chapters || []).length + ' 章' +
-                      (item.status === 'ready_degraded' ? ' · 仅文字' : ''),
+                      (item.status === 'ready_degraded' ? ' · 语音降级' : ''),
                   ),
                   item.code && item.error && !ready ? h('div', { className: 'bl-mod-err' }, item.code + '：' + item.error) : null,
                 ),
@@ -1850,7 +1851,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           'div',
           { className: 'bl-player-foot' },
           module.status === 'ready_degraded'
-            ? h('div', { className: 'bl-voice-note bl-source-warn' }, '部分页没有音频：播放时会自动跳过，或停在本页显示「本页无配音」。')
+            ? h(
+                'div',
+                { className: 'bl-voice-note bl-source-warn' },
+                slides.some((item) => item.audio_file)
+                  ? '部分页没有音频：播放时会自动跳过，或停在本页显示「本页无配音」。'
+                  : '本次没有可用语音（未配置 Qwen 或合成失败），只显示文字。',
+              )
             : null,
           h(
             'div',
@@ -2682,11 +2689,22 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       );
     }
 
-    function Settings({ onBack }) {
+    function Settings({ onBack, initial }) {
+      const seed = initial && typeof initial === 'object' ? initial : {};
+      const seedVoice = seed.voice || null;
       const [data, setData] = useState(null);
-      const [voice, setVoice] = useState(null);
-      const [providers, setProviders] = useState([]);
-      const [form, setForm] = useState({ provider: 'browser', voice: '', rate: 1 });
+      const [voice, setVoice] = useState(seedVoice);
+      const [providers, setProviders] = useState(seed.providers || []);
+      const [models, setModels] = useState(seed.models || []);
+      const [qwenVoices, setQwenVoices] = useState(seed.qwenVoices || []);
+      const [form, setForm] = useState({
+        provider: (seedVoice && seedVoice.provider) || 'browser',
+        model: (seedVoice && seedVoice.model) || 'qwen3-tts-flash',
+        voice: (seedVoice && seedVoice.voice) || '',
+        rate: Number(seedVoice && seedVoice.rate) || 1,
+      });
+      const [apiKeyInput, setApiKeyInput] = useState('');
+      const [editingKey, setEditingKey] = useState(false);
       const [voices, setVoices] = useState([]);
       const [message, setMessage] = useState('');
       const [saving, setSaving] = useState(false);
@@ -2702,8 +2720,15 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             setData(storage);
             setVoice(config.voice || null);
             setProviders(config.providers || []);
+            setModels(config.models || []);
+            setQwenVoices(config.qwenVoices || []);
             if (config.voice) {
-              setForm({ provider: config.voice.provider || 'browser', voice: config.voice.voice || '', rate: Number(config.voice.rate) || 1 });
+              setForm({
+                provider: config.voice.provider || 'browser',
+                model: config.voice.model || 'qwen3-tts-flash',
+                voice: config.voice.voice || '',
+                rate: Number(config.voice.rate) || 1,
+              });
             }
           })
           .catch((err) => {
@@ -2739,17 +2764,29 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const save = useCallback(
         async (patch) => {
           const next = Object.assign({}, form, patch || {});
-          setForm(next);
           setSaving(true);
           setMessage('');
           try {
             const result = await postJson(VOICE_API, next);
-            setVoice(result.voice || null);
+            const nextVoice = result.voice || null;
+            setVoice(nextVoice);
+            if (nextVoice) {
+              setForm({
+                provider: nextVoice.provider || 'browser',
+                model: nextVoice.model || 'qwen3-tts-flash',
+                voice: nextVoice.voice || '',
+                rate: Number(nextVoice.rate) || 1,
+              });
+            }
             if (result.providers) setProviders(result.providers);
+            if (result.models) setModels(result.models);
+            if (result.qwenVoices) setQwenVoices(result.qwenVoices);
             setMessage('已保存');
             setError(null);
+            return nextVoice;
           } catch (err) {
             setError(err);
+            return null;
           } finally {
             setSaving(false);
           }
@@ -2757,21 +2794,65 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         [form],
       );
 
-      /** 试听：浏览器朗读返回合成参数，面板自己出声；关闭/未接入时明确提示去改设置。 */
+      const saveApiKey = useCallback(async () => {
+        const key = String(apiKeyInput || '').trim();
+        if (!key) return;
+        const saved = await save({ apiKey: key });
+        if (saved) {
+          setApiKeyInput('');
+          setEditingKey(false);
+          setMessage('API Key 已保存（面板只显示尾号）');
+        }
+      }, [apiKeyInput, save]);
+
+      const clearApiKey = useCallback(async () => {
+        const ok = typeof window === 'undefined' || window.confirm('清除已保存的 Qwen API Key？清除后生成会降级为只出文字。');
+        if (!ok) return;
+        const saved = await save({ clearApiKey: true });
+        if (saved) {
+          setApiKeyInput('');
+          setEditingKey(false);
+          setMessage('API Key 已清除');
+        }
+      }, [save]);
+
+      /** 试听：浏览器返回合成参数；Qwen 返回 WAV 字节，直接播放 Blob。 */
       const probe = useCallback(async () => {
         setMessage('');
         setError(null);
         try {
-          const result = await postJson(VOICE_PROBE_API, { text: '这是一段试听，用来确认本机朗读能出声。' });
+          const res = await fetch(VOICE_PROBE_API, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ text: '你好，这是一段试听，用来确认语音能出声。' }),
+          });
+          const type = String(res.headers.get('content-type') || '');
+          if (type.includes('audio/')) {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audio.onended = () => URL.revokeObjectURL(url);
+            audio.onerror = () => URL.revokeObjectURL(url);
+            await audio.play();
+            setMessage('正在试听 Qwen3-TTS…');
+            return;
+          }
+          const result = await res.json().catch(() => ({}));
+          if (!result || result.ok === false) {
+            const err = new Error((result && (result.error || result.code)) || '试听失败');
+            err.code = result && result.code;
+            err.hint = (result && result.hint) || '';
+            throw err;
+          }
           if (result.mode === 'browser') {
             speakText(result.text, { rate: result.rate, voice: result.voice });
             setMessage('正在用本机声音试听…');
           } else {
-            setMessage('试听已交给语音服务。');
+            setMessage('试听已提交。');
           }
         } catch (err) {
           if (err && err.code === 'E_TTS_UNCONFIGURED') {
-            setMessage('语音没开：把供应商改成「浏览器朗读」，保存后再试听。');
+            setMessage('语音没配置好：' + String(err.message || '') + (err.hint ? ' ' + err.hint : ''));
           } else {
             setMessage(String((err && err.message) || err));
           }
@@ -2859,7 +2940,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   value: form.provider,
                   disabled: saving,
                   'aria-label': '语音供应商',
-                  onChange: (event) => save({ provider: event.target.value }),
+                  onChange: (event) => {
+                    const provider = event.target.value;
+                    const patch = { provider: provider };
+                    if (provider === 'qwen3-tts' && !form.voice && qwenVoices.length) patch.voice = qwenVoices[0].id;
+                    if (provider === 'browser' && form.provider === 'qwen3-tts') patch.voice = '';
+                    save(patch);
+                  },
                 },
                 (providers.length ? providers : [{ id: 'browser', label: '浏览器朗读（本机合成）', ready: true }]).map((item) =>
                   h(
@@ -2873,42 +2960,141 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             h(
               'div',
               { className: 'bl-voice-row' },
-              h('span', { className: 'bl-hint' }, '音色'),
+              h('span', { className: 'bl-hint' }, 'AI 模型'),
               h(
                 'select',
                 {
                   className: 'bl-select',
-                  value: form.voice,
-                  disabled: saving || form.provider !== 'browser',
-                  'aria-label': '朗读音色',
-                  onChange: (event) => save({ voice: event.target.value }),
+                  value: form.model,
+                  disabled: saving || form.provider !== 'qwen3-tts',
+                  'aria-label': '语音合成模型',
+                  onChange: (event) => save({ model: event.target.value }),
                 },
-                h('option', { value: '' }, '系统默认'),
-                voices.map((item) => h('option', { key: item.voiceURI || item.name, value: item.name }, item.name + ' · ' + item.lang)),
+                (models.length ? models : [{ id: 'qwen3-tts-flash', label: 'Qwen3-TTS Flash（非实时）', ready: true }]).map((item) =>
+                  h('option', { key: item.id, value: item.id, disabled: !item.ready }, item.label + (item.ready ? '' : '（未接入）')),
+                ),
               ),
+              h('span', { className: 'bl-hint' }, '只切语音模型；生成文案仍走 DSH 默认模型'),
             ),
+            form.provider === 'qwen3-tts'
+              ? h(
+                  React.Fragment,
+                  null,
+                  h(
+                    'div',
+                    { className: 'bl-voice-row' },
+                    h('span', { className: 'bl-hint' }, 'API Key'),
+                    voice && voice.hasKey && !editingKey
+                      ? h(
+                          React.Fragment,
+                          null,
+                          h('span', { className: 'bl-key-mask' }, '已保存 · 尾号 ' + String(voice.apiKeyMask || '').slice(-4)),
+                          h('button', { className: 'bl-btn', disabled: saving, onClick: () => setEditingKey(true) }, '更换'),
+                          h('button', { className: 'bl-btn', disabled: saving, onClick: clearApiKey }, '清除'),
+                        )
+                      : h(
+                          React.Fragment,
+                          null,
+                          h('input', {
+                            className: 'bl-input',
+                            type: 'password',
+                            value: apiKeyInput,
+                            placeholder: '粘贴 Qwen API Key（只存本机）',
+                            autoComplete: 'new-password',
+                            'aria-label': 'Qwen API Key',
+                            onChange: (event) => setApiKeyInput(event.target.value),
+                            onKeyDown: (event) => {
+                              if (event.key === 'Enter') saveApiKey();
+                            },
+                          }),
+                          h('button', { className: 'bl-btn bl-btn-primary', disabled: saving || !apiKeyInput.trim(), onClick: saveApiKey }, '保存 Key'),
+                          voice && voice.hasKey
+                            ? h(
+                                'button',
+                                {
+                                  className: 'bl-btn',
+                                  onClick: () => {
+                                    setEditingKey(false);
+                                    setApiKeyInput('');
+                                  },
+                                },
+                                '取消',
+                              )
+                            : null,
+                        ),
+                  ),
+                  h('div', { className: 'bl-voice-note' }, 'Key 存 voice.json（0600），面板只显示末 4 位；不写入模块、URL 或日志。'),
+                )
+              : null,
             h(
               'div',
               { className: 'bl-voice-row' },
-              h('span', { className: 'bl-hint' }, '语速'),
-              h(
-                'select',
-                {
-                  className: 'bl-select',
-                  value: String(form.rate),
-                  disabled: saving,
-                  'aria-label': '朗读语速',
-                  onChange: (event) => save({ rate: Number(event.target.value) }),
-                },
-                rateOptions(form.rate).map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
-              ),
+              h('span', { className: 'bl-hint' }, '音色'),
+              form.provider === 'qwen3-tts'
+                ? h(
+                    'select',
+                    {
+                      className: 'bl-select',
+                      value: form.voice,
+                      disabled: saving,
+                      'aria-label': 'Qwen 音色',
+                      onChange: (event) => save({ voice: event.target.value }),
+                    },
+                    qwenVoices.map((item) =>
+                      h(
+                        'option',
+                        { key: item.id, value: item.id },
+                        item.id + ' · ' + item.desc + '（' + item.gender + (item.dialect ? '，' + item.dialect : '') + '）',
+                      ),
+                    ),
+                  )
+                : h(
+                    'select',
+                    {
+                      className: 'bl-select',
+                      value: form.voice,
+                      disabled: saving || form.provider !== 'browser',
+                      'aria-label': '朗读音色',
+                      onChange: (event) => save({ voice: event.target.value }),
+                    },
+                    h('option', { value: '' }, '系统默认'),
+                    voices.map((item) => h('option', { key: item.voiceURI || item.name, value: item.name }, item.name + ' · ' + item.lang)),
+                  ),
+            ),
+            form.provider === 'browser'
+              ? h(
+                  'div',
+                  { className: 'bl-voice-row' },
+                  h('span', { className: 'bl-hint' }, '语速'),
+                  h(
+                    'select',
+                    {
+                      className: 'bl-select',
+                      value: String(form.rate),
+                      disabled: saving,
+                      'aria-label': '朗读语速',
+                      onChange: (event) => save({ rate: Number(event.target.value) }),
+                    },
+                    rateOptions(form.rate).map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
+                  ),
+                )
+              : null,
+            h(
+              'div',
+              { className: 'bl-voice-row' },
               h('button', { className: 'bl-btn', disabled: saving, onClick: probe }, '试听'),
               h('button', { className: 'bl-btn', disabled: saving, onClick: () => save({}) }, saving ? '保存中…' : '保存'),
             ),
             message ? h('div', { className: 'bl-voice-note bl-toc-msg' }, message) : null,
             providerNote ? h('div', { className: 'bl-voice-note' }, providerNote) : null,
-            !speechOk ? h('div', { className: 'bl-voice-note bl-source-warn' }, '当前浏览器不支持本机朗读；换 Chrome / Edge 最新版。') : null,
-            h('div', { className: 'bl-voice-note' }, '本版只接浏览器本机朗读：不联网、不产生音频文件；豆包字段先预留，未接入合成。'),
+            form.provider === 'browser' && !speechOk
+              ? h('div', { className: 'bl-voice-note bl-source-warn' }, '当前浏览器不支持本机朗读；换 Chrome / Edge 最新版。')
+              : null,
+            h(
+              'div',
+              { className: 'bl-voice-note' },
+              'Qwen3-TTS 会把每页朗读稿发给千问并下载 WAV；浏览器朗读完全在本机。Qwen Key 只保存在本机。',
+            ),
           ),
         ),
       );

@@ -53,7 +53,7 @@
     "pdfjs-dist": "^6.5.438"
   },
   "scripts": {
-    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs",
+    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs",
     "test:mech": "node test/books.mech.e2e.mjs",
     "test:chapters": "node test/books.toc.e2e.mjs"
   },

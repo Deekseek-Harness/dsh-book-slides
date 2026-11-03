@@ -221,7 +221,11 @@ test('语音默认浏览器朗读：配置、试听参数、配置文件 0600', 
   assert.equal(data.voice.provider, 'browser');
   assert.equal(data.voice.rate, 1);
   assert.ok(Array.isArray(data.providers) && data.providers.some((item) => item.id === 'browser' && item.ready));
-  assert.ok(data.providers.some((item) => item.id === 'doubao' && !item.ready), '豆包要明确标「未接入」');
+  assert.ok(data.providers.some((item) => item.id === 'qwen3-tts' && item.ready), 'Qwen3-TTS 应作为可选项');
+  assert.ok(Array.isArray(data.models) && data.models.some((item) => item.id === 'qwen3-tts-flash'));
+  assert.ok(Array.isArray(data.qwenVoices) && data.qwenVoices.length >= 40, '应返回 Qwen3-TTS 音色列表');
+  assert.equal(data.voice.hasKey, false);
+  assert.equal(data.voice.apiKeyMask, '');
 
   const probe = await postJson('/dsh-book-slides/voice/probe', { text: '试听一下。' });
   onlyOk(probe);
