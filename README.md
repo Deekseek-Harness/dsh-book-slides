@@ -3,7 +3,7 @@
 DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，勾几章交给模型写成幻灯片式精讲，
 左侧 PDF 原文、右侧讲稿同步播放。
 
-当前版本 **1.0.0**（2026-11-03）。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **1.2.0**（2026-11-04，含 v1.2 语音、v1.3 书档与 v1.4 本地 ComfyUI 配图）。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 为什么做这个
 
@@ -23,6 +23,7 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，勾几章�
 | 生成 | 勾 1–5 章 → 分块改写 → 结构校验 → 锚点回填 → 配音；异步作业、进度、取消、断点续跑、失败重试、同章幂等复用 |
 | 播放 | 左 PDF 视觉版式 + 摘抄高亮，右 16:9 幻灯片；自动翻页、快捷键、进度持久化、「继续听」、无配音页降级 |
 | 语音 | Qwen3-TTS 逐页 WAV / 浏览器本机朗读 / 关闭；Key 只存本机、面板只显示后 4 位；音频缓存不重复计费 |
+| 配图 | 默认只出提示词占位；可选本地 ComfyUI（IP+端口、导入 API 工作流）后台逐页出图，失败页回退提示词，不阻断文字与语音 |
 | 运维 | 回收站清理、`/chapter-check` 真书对照命令、面板显示插件版本 |
 
 **v1.0 不包含**：暗色主题、无障碍完整审计、诊断日志、跨机器真机验收。这四项是 M5 的剩余打磨；
@@ -102,6 +103,30 @@ dsh plugin --profile web remove dsh-book-slides
 > `text` / `voice` / `language_type`；不要加 `format`、`sample_rate`（会 400）。
 > 旧的 `audio/*.mp3` 仍兼容，播放器优先找 `.wav`。
 
+## 配图（可选本地 ComfyUI）
+
+设置页「配图」有两档策略，默认第一档，不装 ComfyUI 的人零感知：
+
+| 策略 | 要配什么 | 产物 | 说明 |
+|---|---|---|---|
+| 提示词占位（默认） | — | 只出 `image_prompt` | 播放器右侧配图卡可查看、复制提示词 |
+| 本地 ComfyUI | IP + 端口（默认 `127.0.0.1:8188`）、工作流（可选，默认内置 Z-Image Turbo） | 每个正文页 `images/NNN.png` | 模块先就绪，配图在后台逐页补，不耽误听 |
+
+- **只给正文页出图**：封面与引文页保持纯排版；尺寸沿用工作流（默认 1024×1024，按卡片裁切）。
+- **出图不阻塞**：模块状态仍是 `ready` / `ready_degraded`；单页失败只让该页回退提示词占位，
+  模块上会出现「补配图」按钮，播放器里也能单页「换一张」。
+- **工作流只收 API 格式**：ComfyUI 里用「保存（API 格式）」导出 JSON。插件会自动找
+  `KSampler.positive` 链上的 `CLIPTextEncode` 作为提示词节点；有多个候选时面板让你选一次。
+- **模型要自备**：默认工作流需要 `z_image_turbo_bf16.safetensors`、`qwen_3_4b.safetensors`、
+  `ae.safetensors`；设置页「测试连接」会读 `/object_info` 检查缺哪些。
+- **两个测试入口**：「测试连接」只查版本与模型；「测试生图」用当前工作流真跑一张并在面板预览，
+  显示耗时/种子，可下载。测试图**不落盘、不进缓存、不写模块**；提示词策略下会提示先切 ComfyUI，
+  补图作业在跑时会提示稍后再试。
+- **可复现 + 缓存**：seed 由提示词与工作流哈希派生，同提示词命中 `image-cache/`，重生成模块不重复跑 GPU；
+  单页「换一张」会递增 `image_nonce` 换新种子。单页超时 180s、单模块总预算 15 分钟。
+- **网络边界**：浏览器不直连 ComfyUI，宿主取图落盘后由同源 `/image` 提供。IP 填的不是
+  `127.0.0.1` 时，提示词会发到那台机器上（设置页有提示）。
+
 ## 数据在哪
 
 全在本机，默认 `~/.dsh/book-slides/`（可用 `DSH_BOOK_SLIDES_ROOT` 改）：
@@ -109,9 +134,12 @@ dsh plugin --profile web remove dsh-book-slides
 ```
 book-slides/
 ├── voice.json                     ← 语音配置（0600；Qwen Key 只存这里）
+├── image.json                     ← 配图策略 / ComfyUI 地址 / 提示词节点
+├── comfy-workflow.json            ← 用户导入的工作流（没有就用内置默认）
 ├── preference.json                ← 分隔条比例、语速、静音
 ├── progress.json                  ← {lastBookId, lastModuleId, lastSlide}
 ├── audio-cache/<sha256>.wav       ← Qwen 合成缓存（文本+音色+模型）
+├── image-cache/<sha256>.png       ← ComfyUI 出图缓存（提示词+工作流+种子）
 ├── trash/<bookId>-<时间戳>/      ← 删除是挪进这里，不是真删
 └── books/<bookId>/
     ├── book.json                 ← 书名、页数、sha256（存在即导入完成）
@@ -120,15 +148,18 @@ book-slides/
     ├── chapters.json             ← 切章结果
     ├── toc.json                  ← 目录范围与解析结果（可选）
     └── modules/<moduleId>/
-        ├── module.json           ← 状态、阶段、错误码、缓存键、语音
-        ├── slides.json           ← 规范化幻灯片（含 source_anchor / audio_ms）
+        ├── module.json           ← 状态、阶段、错误码、缓存键、语音、配图汇总
+        ├── slides.json           ← 规范化幻灯片（含 source_anchor / audio_ms / image_*）
+        ├── image-job.json        ← 后台配图作业的进度快照（可选）
         ├── batches/              ← 生成中的批次检查点，成功后自动删除
-        └── audio/001.wav …       ← Qwen 合成（浏览器朗读时为空）
+        ├── audio/001.wav …       ← Qwen 合成（浏览器朗读时为空）
+        └── images/               ← ComfyUI 出图（只给正文页）
+            └── 002.png           ← 当前配图
 ```
 
-隐私边界：PDF、逐页文本、讲稿、音频都只落在上面这个目录；插件不主动外发任何内容。
-联网只发生在两处——调 LLM 生成讲稿、调千问合成语音（两者都只在用户点按钮时发生）。
-没有遥测、没有云端同步。
+隐私边界：PDF、逐页文本、讲稿、音频、配图都只落在上面这个目录；插件不主动外发任何内容。
+联网只发生在三处——调 LLM 生成讲稿、调千问合成语音、调你指定的 ComfyUI 出图（三者都只在用户点按钮时发生）；
+ComfyUI 地址不是 `127.0.0.1` 时，提示词会发到局域网那台机器。没有遥测、没有云端同步。
 
 ## 已知限制
 
@@ -146,6 +177,13 @@ book-slides/
   （`/dsh-book-slides/vendor/pdfjs/`），不往仓库里复制第三方文件；首次打开模块会加载 worker。
 - **移动端**：播放器 < 1024px 时上下堆叠，不保证手机竖屏比例。
 - **换音色/模型只影响新生成**：缓存键不含音色，已有模块要按新音色重做需点「重生成」（会重跑 LLM）。
+- **配图缓存不自动清理**：`image-cache/` 按提示词+工作流+种子积累；换提示词后会留下旧图，需要时手动删目录。
+- **ComfyUI 要自己装**：插件不含 ComfyUI、模型与自定义节点。默认工作流需要 Z-Image Turbo 的三件套；
+  缺模型时「测试连接」会列出来，生成时逐页降级为提示词占位。
+- **工作流只支持 API 格式**：界面格式（含 `nodes` / `links`）会被拒绝；识别不到 `CLIPTextEncode`
+  时导入会失败，不会悄悄用错节点。
+- **中文提示词配非 Z-Image 工作流可能偏弱**：`image_prompt` 按原样发送，不额外翻译；
+  接 SDXL/Flux 这类英文编码器时出图质量取决于模型本身。
 
 ## 开发
 
@@ -169,8 +207,11 @@ npm test
 | `node test/generate.test.mjs` | 假模型走真路由：四阶段、修复、锚点修复、取消、超时、幂等、重试复用、播放进度 |
 | `node test/tts.test.mjs` | Qwen 配置、Key 掩码、WAV 时长、逐页合成、缓存、部分失败 |
 | `node test/qwen.test.mjs` | 假千问服务走真路由：试听、6 页 WAV 落盘、缺 Key、部分失败、缓存、错误 Key |
+| `node test/comfy.test.mjs` | 配图配置默认值、默认工作流识别、API/界面格式校验、提示词与种子、假 ComfyUI 出图与缺模型 |
+| `node test/imaging.test.mjs` | 后台配图作业：只给正文页出图、落盘与状态回写、`/image` 取图、force 换图、失败降级、重启归一、测试生图 |
+| `node test/image-auto.test.mjs` | 生成 → 自动起配图作业：模块先 ready，5 张正文页图随后落盘 |
 
-`npm test` 当前 168 项：166 通过、2 项按环境跳过（真书样本没设），0 失败。
+`npm test` 当前 213 项：211 通过、2 项按环境跳过（真书样本没设），0 失败。
 
 **真值核对**（需要本地 PDF，PDF 不进仓库）：
 

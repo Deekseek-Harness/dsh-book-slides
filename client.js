@@ -42,6 +42,13 @@ window.__ModuleLoader__.load({
     const EXPORT_SIZE_API = '/dsh-book-slides/export/size';
     const IMPORT_PACKAGE_API = '/dsh-book-slides/import/package';
     const REVOICE_API = '/dsh-book-slides/revoice';
+    const IMAGE_API = '/dsh-book-slides/image';
+    const IMAGE_CONFIG_API = '/dsh-book-slides/image/config';
+    const IMAGE_WORKFLOW_API = '/dsh-book-slides/image/workflow';
+    const IMAGE_PROBE_API = '/dsh-book-slides/image/probe';
+    const IMAGE_TEST_API = '/dsh-book-slides/image/test';
+    const IMAGE_STATUS_API = '/dsh-book-slides/image/status';
+    const IMAGE_REGEN_API = '/dsh-book-slides/image/regen';
     const PDFJS_BASE = '/dsh-book-slides/vendor/pdfjs/';
     const PDFJS_MODULE = PDFJS_BASE + 'build/pdf.min.mjs';
     const PDFJS_WORKER = PDFJS_BASE + 'build/pdf.worker.min.mjs';
@@ -172,6 +179,8 @@ window.__ModuleLoader__.load({
 .bl-img-hint{margin-top:6px;font-size:11px;opacity:.6;display:flex;gap:6px;align-items:flex-start}
 .bl-img-hint code{font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
 .bl-voice-note{font-size:11.5px;opacity:.65;margin:6px 0 0;line-height:1.6}
+.bl-image-test{margin:8px 0 2px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.bl-image-test img{max-width:100%;max-height:320px;border-radius:9px;border:1px solid var(--bl-line,#d8c8ad);display:block;object-fit:contain;background:#f6efe2}
 .bl-key-mask{font:11.5px/1.6 ui-monospace,Consolas,monospace;border:1px solid var(--bl-line);border-radius:7px;padding:4px 8px;opacity:.8}
 .bl-voice-row{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:8px 0}
 .bl-select{font:inherit;color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-bg-layer-2,Canvas);border:1px solid var(--bl-line);border-radius:7px;padding:4px 7px;max-width:100%;color-scheme:light}
@@ -215,6 +224,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
 .bl-stage-figure span{font-size:clamp(9px,1.3cqw,13px);opacity:.75}
 .bl-stage-figure-prompt{font-size:clamp(10px,1.5cqw,15px);line-height:1.6;color:#5c4a33;white-space:pre-wrap;overflow-wrap:anywhere;max-height:100%;overflow:auto;text-align:left}
 .bl-stage-figure .bl-btn{color:#5c4a33;border-color:#c9b79b;padding:1px 7px;font-size:11px}
+.bl-stage-figure.has-img{padding:0;border-style:solid;border-color:#d8c8ad;background:#f6efe2}
+.bl-stage-figure-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:9px;display:block}
+.bl-stage-figure-tools{position:absolute;right:6px;bottom:6px;z-index:2;display:flex;gap:4px}
+.bl-stage-figure-tools .bl-btn{background:color-mix(in oklab,#fff 84%,transparent);backdrop-filter:blur(3px)}
+.bl-stage-figure-prompt{position:relative;z-index:2;background:color-mix(in oklab,#fbf7ee 94%,transparent);border-radius:8px;padding:6px 8px;box-shadow:0 2px 12px rgba(60,40,20,.16)}
+.bl-stage-figure-pending{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:#8a7355;font-size:clamp(10px,1.4cqw,13px);background:repeating-linear-gradient(135deg,#f7efe1,#f7efe1 8px,#f3e8d6 8px,#f3e8d6 16px)}
+.bl-stage-figure-err{color:#b4453f;font-size:clamp(9px,1.3cqw,12px);line-height:1.4;padding:0 6px;word-break:break-word}
 .bl-stage-quote{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:0 4%}
 .bl-stage-quote blockquote{margin:0;font-family:"Noto Serif SC","Songti SC",serif;font-size:clamp(17px,3.4cqw,42px);line-height:1.55;color:#2a241c}
 .bl-stage-quote cite{margin-top:clamp(10px,2.4cqw,26px);font-style:normal;font-size:clamp(10px,1.6cqw,17px);color:#8a7355;letter-spacing:.06em}
@@ -1290,7 +1306,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     }
 
     /** 详情页的模块列表：打开 / 重试 / 重新生成 / 删除；生成中的模块就地显示进度与取消。 */
-    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate, onRevoice }) {
+    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate, onRevoice, onImages, imageEnabled }) {
       const list = Array.isArray(modules) ? modules : [];
       const active = job && job.moduleId ? job : null;
       const runningId = active ? active.moduleId : '';
@@ -1314,6 +1330,20 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
               const ready = isReady(item.status);
               const bad = item.status === 'failed' || item.status === 'interrupted' || item.status === 'cancelled';
               const chip = ready ? 'bl-chip-ok' : bad ? 'bl-chip-bad' : 'bl-chip-run';
+              const images = item.images && typeof item.images === 'object' ? item.images : null;
+              const imageBusy = !!images && ['queued', 'running', 'pending'].includes(String(images.status));
+              const imageMissing =
+                !!images && images.provider === 'comfyui' && (Number(images.failed) > 0 || String(images.status) === 'interrupted');
+              const imageText =
+                images && images.provider === 'comfyui'
+                  ? ' · 配图 ' + (Number(images.done) || 0) + '/' + (Number(images.total) || 0) + (imageBusy ? ' 生成中' : '')
+                  : '';
+              const canImage =
+                ready &&
+                !!onImages &&
+                imageEnabled &&
+                !imageBusy &&
+                (imageMissing || !images || images.provider !== 'comfyui' || String(images.status) === 'interrupted');
               return h(
                 'div',
                 { className: 'bl-mod', key: item.id, 'data-module-id': item.id },
@@ -1327,7 +1357,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                     h('span', { className: 'bl-chip ' + chip }, statusLabel(item.status)),
                     ' · ' + (Number(item.slides) || 0) + ' 页 · 锚定 ' + Math.round((Number(item.anchorHitRate) || 0) * 100) + '% · ' +
                       (item.chapters || []).length + ' 章' +
-                      (item.status === 'ready_degraded' ? ' · 语音降级' : ''),
+                      (item.status === 'ready_degraded' ? ' · 语音降级' : '') +
+                      imageText,
                   ),
                   item.code && item.error && !ready ? h('div', { className: 'bl-mod-err' }, item.code + '：' + item.error) : null,
                 ),
@@ -1342,6 +1373,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                         '仅补配音',
                       )
                     : null,
+                  ready && canImage
+                    ? h(
+                        'button',
+                        { className: 'bl-btn', disabled: busy, title: '只补配图，不重跑文案与语音', onClick: () => onImages(item) },
+                        images && Number(images.done) > 0 ? '补配图' : '生成配图',
+                      )
+                    : null,
                   bad ? h('button', { className: 'bl-btn', disabled: busy, onClick: () => onRetry(item) }, '重试') : null,
                   ready ? h('button', { className: 'bl-btn', disabled: busy, title: '重新生成会覆盖这一份', onClick: () => onRegenerate(item) }, '重生成') : null,
                   h('button', { className: 'bl-btn', disabled: busy, onClick: () => onDelete(item) }, '删除'),
@@ -1352,11 +1390,15 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     }
 
     /** 幻灯片舞台：独立「书页白」主题，不跟着编辑器明暗变灰（§6.4）。 */
-    function SlideStage({ slide }) {
+    function SlideStage({ slide, moduleId, onRegenImage }) {
       const [showPrompt, setShowPrompt] = useState(false);
       const [copied, setCopied] = useState(false);
       if (!slide) return null;
       const layout = String(slide.layout || 'content_text');
+      const status = String(slide.image_status || 'none');
+      const hasImage = status === 'ready' && !!slide.image_file;
+      const pending = status === 'pending' || status === 'queued' || status === 'running';
+      const failed = status === 'failed';
       const copyPrompt = (event) => {
         if (event) event.stopPropagation();
         try {
@@ -1369,13 +1411,38 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           setCopied(false);
         }
       };
+      const regen = (event) => {
+        if (event) event.stopPropagation();
+        if (onRegenImage) onRegenImage(slide.slide_index);
+      };
+      const imageSrc =
+        IMAGE_API +
+        '?moduleId=' +
+        encodeURIComponent(String(moduleId || '')) +
+        '&i=' +
+        encodeURIComponent(String(slide.slide_index)) +
+        '&v=' +
+        encodeURIComponent(String(slide.image_seed || 0));
+      const promptPanel = h(
+        'div',
+        { className: 'bl-stage-figure-prompt', onClick: (event) => event.stopPropagation() },
+        h('div', null, slide.image_prompt || '（没有配图提示词）'),
+        h(
+          'div',
+          { style: { display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' } },
+          h('button', { className: 'bl-btn', onClick: copyPrompt }, copied ? '已复制' : '复制提示词'),
+          onRegenImage && moduleId
+            ? h('button', { className: 'bl-btn', onClick: regen, title: '重新生成这一页的配图' }, failed ? '重试配图' : '换一张')
+            : null,
+        ),
+      );
       const figure = h(
         'div',
         {
-          className: 'bl-stage-figure',
+          className: 'bl-stage-figure' + (hasImage ? ' has-img' : ''),
           role: 'button',
           tabIndex: 0,
-          'aria-label': '配图提示词',
+          'aria-label': hasImage ? '配图，点击查看提示词' : '配图提示词',
           onClick: () => setShowPrompt((value) => !value),
           onKeyDown: (event) => {
             if (event.target !== event.currentTarget) return;
@@ -1385,14 +1452,33 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             }
           },
         },
+        hasImage ? h('img', { className: 'bl-stage-figure-img', src: imageSrc, alt: slide.title || '配图' }) : null,
         showPrompt
-          ? h(
+          ? promptPanel
+          : h(
               React.Fragment,
               null,
-              h('div', { className: 'bl-stage-figure-prompt' }, slide.image_prompt || '（没有配图提示词）'),
-              h('button', { className: 'bl-btn', onClick: copyPrompt }, copied ? '已复制' : '复制提示词'),
-            )
-          : h(React.Fragment, null, h('b', null, '配图位'), h('span', null, '点击查看提示词')),
+              hasImage
+                ? h(
+                    'div',
+                    { className: 'bl-stage-figure-tools' },
+                    h('button', { className: 'bl-btn', onClick: (event) => { event.stopPropagation(); setShowPrompt(true); } }, '提示词'),
+                  )
+                : pending
+                  ? h(
+                      'div',
+                      { className: 'bl-stage-figure-pending' },
+                      h('b', null, '配图生成中'),
+                      h('span', null, '文字与语音不受影响'),
+                    )
+                  : h(
+                      React.Fragment,
+                      null,
+                      h('b', null, failed ? '配图失败' : '配图位'),
+                      h('span', null, failed ? '点击查看提示词或重试' : '点击查看提示词'),
+                      failed && slide.image_error ? h('span', { className: 'bl-stage-figure-err' }, String(slide.image_error).slice(0, 120)) : null,
+                    ),
+            ),
       );
       const foot = h('div', { className: 'bl-stage-foot' }, '第 ' + slide.slide_index + ' 页');
 
@@ -1690,13 +1776,16 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
      * 翻页统一走「停当前 → 改 index → effect 起新页」，旧回调用 token 作废，
      * 避免 AC-18 里上一页的 onend 把播放器又推回下一页。
      */
-    function Player({ book, module, slides, initialSlide, onBack }) {
+    function Player({ book, module, slides: incomingSlides, initialSlide, onBack }) {
+      const [slides, setSlides] = useState(incomingSlides);
       const total = slides.length;
       const startIndex = Math.min(Math.max(1, Math.round(Number(initialSlide) || 1)), total || 1) - 1;
       const moduleVoice = (module && module.voice) || {};
       const voiceName = String(moduleVoice.voice || '');
       const [index, setIndex] = useState(startIndex);
       const [playing, setPlaying] = useState(false);
+      const [imageNote, setImageNote] = useState('');
+      const imagePollRef = useRef(0);
       const [pref, setPref] = useState({
         splitRatio: 0.55,
         rate: Number(moduleVoice.rate) || 1,
@@ -1732,6 +1821,89 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       slidesRef.current = slides;
 
       const slide = slides[index] || null;
+
+      /* 父级重新拉过模块时同步一次；配图作业的轮询结果也写进本地 slides */
+      useEffect(() => {
+        setSlides(incomingSlides);
+      }, [incomingSlides]);
+
+      /**
+       * 配图是后台作业：只要还有 pending/queued/running 的页，就轮询
+       * /image/status；作业收口后重新拉一次模块，把真图或失败态换进来。
+       */
+      useEffect(() => {
+        const pending = slides.some((item) => item && ['pending', 'queued', 'running'].includes(String(item.image_status || '')));
+        if (!pending) return undefined;
+        let alive = true;
+        let timer = null;
+        const tick = async () => {
+          try {
+            const state = await getJson(IMAGE_STATUS_API + '?moduleId=' + encodeURIComponent(module.id));
+            if (!alive) return;
+            if (state && state.ok !== false && ['queued', 'running', 'pending'].includes(String(state.status))) {
+              imagePollRef.current = 0;
+              setImageNote(
+                '配图生成中 ' + (Number(state.done) || 0) + '/' + (Number(state.total) || 0) +
+                  (Number(state.failed) ? ' · 失败 ' + state.failed : ''),
+              );
+              timer = setTimeout(tick, 2000);
+              return;
+            }
+            const data = await getJson(MODULE_API + '?moduleId=' + encodeURIComponent(module.id));
+            if (!alive) return;
+            const next = data && data.slides && Array.isArray(data.slides.slides) ? data.slides.slides : null;
+            if (!next) return;
+            const stillPending = next.some((item) => item && ['pending', 'queued', 'running'].includes(String(item.image_status || '')));
+            imagePollRef.current += 1;
+            if (stillPending && imagePollRef.current >= 3) {
+              // 服务端已经归一但 slides 还挂着 pending 的极端情况：本地收口，别无限轮询
+              setSlides(
+                next.map((item) =>
+                  item && ['pending', 'queued', 'running'].includes(String(item.image_status || ''))
+                    ? Object.assign({}, item, { image_status: 'failed', image_error: 'E_INTERRUPTED：配图没跑起来，可点「补配图」重试' })
+                    : item,
+                ),
+              );
+              setImageNote('配图没跑起来，可到模块列表点「补配图」');
+              return;
+            }
+            if (!stillPending) imagePollRef.current = 0;
+            setSlides(next);
+            setImageNote('');
+          } catch {
+            if (alive) timer = setTimeout(tick, 4000);
+          }
+        };
+        timer = setTimeout(tick, 1200);
+        return () => {
+          alive = false;
+          if (timer) clearTimeout(timer);
+        };
+      }, [slides, module.id]);
+
+      /** 单页重出：只跑这一页，成功后轮询自动换图 */
+      const regenImage = useCallback(
+        async (slideIndex) => {
+          try {
+            const result = await postJson(IMAGE_REGEN_API, { moduleId: module.id, slide: slideIndex });
+            if (!result || result.ok === false) {
+              setImageNote(String((result && (result.message || result.code)) || '配图没启动'));
+              return;
+            }
+            setImageNote('已提交，配图生成中…');
+            setSlides((prev) =>
+              prev.map((item) =>
+                Number(item.slide_index) === Number(slideIndex)
+                  ? Object.assign({}, item, { image_status: 'pending', image_error: null })
+                  : item,
+              ),
+            );
+          } catch (err) {
+            setImageNote(String((err && err.message) || err));
+          }
+        },
+        [module.id],
+      );
 
       /* 从「继续听」进来时初始页来自 props；同一播放器里若外部再指定页码，也跟着走 */
       useEffect(() => {
@@ -2141,6 +2313,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           { className: 'bl-bar' },
           h('button', { className: 'bl-back', onClick: handleBack }, '\u2039 返回'),
           h('span', { className: 'bl-hint' }, module.title || '精讲'),
+          imageNote ? h('span', { className: 'bl-hint bl-toc-msg' }, imageNote) : null,
           h('div', { className: 'bl-grow' }),
           h('span', { className: 'bl-chip' }, '第 ' + (index + 1) + ' / ' + total + ' 页'),
           h('button', { className: 'bl-btn', onClick: toggleFullscreen, title: '全屏（F）' }, fullscreen ? '退出全屏' : '全屏'),
@@ -2187,7 +2360,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
               }
             },
           }),
-          h('div', { className: 'bl-pane-stage' }, h(SlideStage, { slide: slide })),
+          h('div', { className: 'bl-pane-stage' }, h(SlideStage, { slide: slide, moduleId: module.id, onRegenImage: regenImage })),
         ),
         h(
           'div',
@@ -2410,7 +2583,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           .then((data) => {
             if (!alive) return;
             loadedBookRef.current = bookId;
-            setState({ loading: false, book: data.book, chapters: data.chapters || [], modules: data.modules || [] });
+            setState({ loading: false, book: data.book, chapters: data.chapters || [], modules: data.modules || [], imageProvider: data.imageProvider || 'prompt' });
           })
           .catch((err) => {
             if (!alive) return;
@@ -2516,6 +2689,16 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           if (timer) clearTimeout(timer);
         };
       }, [jobId, onOpenModule, setError]);
+
+      /** 有模块在后台补配图时，每 4 秒刷新一次模块列表，让「配图 3/18」有变化 */
+      useEffect(() => {
+        const running = (state.modules || []).some(
+          (item) => item.images && ['queued', 'running'].includes(String(item.images.status)),
+        );
+        if (!running) return undefined;
+        const timer = setInterval(() => setRefresh((value) => value + 1), 4000);
+        return () => clearInterval(timer);
+      }, [state.modules]);
 
       /** 生成一开始就把模块列表里的对应条目滚进视野，焦点落到「取消」上。 */
       useEffect(() => {
@@ -2758,8 +2941,30 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         [setError],
       );
 
-      const removeModule = useCallback(
+      /** 补配图：只补失败/缺图的页，不重跑文案与语音（v1.4） */
+      const imagesModule = useCallback(
         async (item) => {
+          setBusy(true);
+          try {
+            const data = await postJson(IMAGE_REGEN_API, { moduleId: item.id });
+            setRefresh((value) => value + 1);
+            if (!data || data.ok === false) {
+              const err = new Error(String((data && (data.message || data.code)) || '配图没启动'));
+              err.code = data && data.code;
+              setError(err);
+            } else {
+              setError(null);
+            }
+          } catch (err) {
+            setError(err);
+          } finally {
+            setBusy(false);
+          }
+        },
+        [setError],
+      );
+
+      const removeModule = useCallback(        async (item) => {
           const ok = typeof window === 'undefined' || window.confirm('删除「' + (item.title || '这个模块') + '」？只删模块，不动书。');
           if (!ok) return;
           setBusy(true);
@@ -3020,6 +3225,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                     onDelete: removeModule,
                     onRegenerate: regenerateModule,
                     onRevoice: revoiceModule,
+                    onImages: imagesModule,
+                    imageEnabled: state.imageProvider === 'comfyui',
                   }),
                   h(TocBox, {
                     toc: toc,
@@ -3074,6 +3281,419 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             genBusy || jobId ? '生成中…' : '生成精讲',
           ),
         ),
+      );
+    }
+
+    /**
+     * 设置 → 配图（v1.4）：策略、ComfyUI 地址、工作流导入。
+     * 工作流只接受「保存（API 格式）」的 JSON；识别到多个文本节点时让用户选一次。
+     */
+    function ImageSettings() {
+      const [image, setImage] = useState(null);
+      const [providers, setProviders] = useState([]);
+      const [form, setForm] = useState({ provider: 'prompt', host: '', port: '', styleSuffix: '' });
+      const [workflow, setWorkflow] = useState(null);
+      const [candidates, setCandidates] = useState([]);
+      const [pendingWorkflow, setPendingWorkflow] = useState(null);
+      const [selectedNode, setSelectedNode] = useState('');
+      const [message, setMessage] = useState('');
+      const [error, setError] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [testPrompt, setTestPrompt] = useState('');
+      const [testImage, setTestImage] = useState(null);
+      const [testing, setTesting] = useState(false);
+      const testUrlRef = useRef('');
+
+      const apply = useCallback((config) => {
+        const value = config || {};
+        setImage(value);
+        setForm({
+          provider: value.provider || 'prompt',
+          host: value.host || '',
+          port: value.port ? String(value.port) : '',
+          styleSuffix: value.styleSuffix || '',
+        });
+        setWorkflow(value.workflow || null);
+        setCandidates((value.workflow && value.workflow.candidates) || []);
+        setSelectedNode((value.workflow && value.workflow.promptNode) || '');
+      }, []);
+
+      useEffect(() => {
+        let alive = true;
+        getJson(IMAGE_CONFIG_API)
+          .then((data) => {
+            if (!alive) return;
+            setProviders(data.providers || []);
+            apply(data.image);
+            setTestPrompt((prev) => prev || (data.image && data.image.testPrompt) || '');
+          })
+          .catch((err) => {
+            if (alive) setError(err);
+          });
+        return () => {
+          alive = false;
+        };
+      }, [apply]);
+
+      /* 预览图是 blob URL，卸载时必须还回去 */
+      useEffect(
+        () => () => {
+          if (testUrlRef.current) {
+            try {
+              URL.revokeObjectURL(testUrlRef.current);
+            } catch {
+              /* 已经释放 */
+            }
+            testUrlRef.current = '';
+          }
+        },
+        [],
+      );
+
+      const save = useCallback(
+        async (patch) => {
+          setBusy(true);
+          setMessage('');
+          try {
+            const data = await postJson(IMAGE_CONFIG_API, Object.assign({}, form, patch || {}));
+            apply(data.image);
+            setMessage('已保存');
+            setError(null);
+          } catch (err) {
+            setError(err);
+          } finally {
+            setBusy(false);
+          }
+        },
+        [form, apply],
+      );
+
+      const probe = useCallback(async () => {
+        setBusy(true);
+        setMessage('正在连接 ComfyUI…');
+        setError(null);
+        try {
+          const data = await postJson(IMAGE_PROBE_API, {});
+          if (!data || data.ok === false) {
+            const err = new Error(String((data && (data.error || data.code)) || '连接失败'));
+            err.code = data && data.code;
+            throw err;
+          }
+          const missing = Array.isArray(data.missing) ? data.missing : [];
+          setMessage(
+            '连接成功：ComfyUI ' + (data.version || '未知版本') +
+              (missing.length ? '；工作流缺模型 ' + missing.slice(0, 3).join('、') : '；工作流所需模型齐全'),
+          );
+        } catch (err) {
+          setMessage(String((err && err.message) || err));
+        } finally {
+          setBusy(false);
+        }
+      }, []);
+
+      /** 测试生图：走完整出图链路，但只在内存里预览，不写模块、不进缓存 */
+      const testGenerate = useCallback(async () => {
+        setTesting(true);
+        setMessage('正在让 ComfyUI 出图…');
+        setError(null);
+        try {
+          const res = await fetch(IMAGE_TEST_API, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ prompt: testPrompt }),
+          });
+          const type = String(res.headers.get('content-type') || '');
+          if (type.includes('image/')) {
+            const blob = await res.blob();
+            if (testUrlRef.current) {
+              try {
+                URL.revokeObjectURL(testUrlRef.current);
+              } catch {
+                /* 已经释放 */
+              }
+            }
+            const url = URL.createObjectURL(blob);
+            testUrlRef.current = url;
+            const ms = Number(res.headers.get('x-image-ms')) || 0;
+            const seed = res.headers.get('x-image-seed') || '';
+            setTestImage({ url: url, ms: ms, seed: seed, bytes: blob.size });
+            setMessage('测试生图成功：' + (ms ? (ms / 1000).toFixed(1) + ' 秒 · ' : '') + Math.max(1, Math.round(blob.size / 1024)) + ' KB');
+            return;
+          }
+          const data = await res.json().catch(() => ({}));
+          setMessage(String((data && (data.error || data.code)) || '测试生图失败') + (data && data.hint ? '：' + data.hint : ''));
+        } catch (err) {
+          setMessage(String((err && err.message) || err));
+        } finally {
+          setTesting(false);
+        }
+      }, [testPrompt]);
+
+      const submitWorkflow = useCallback(
+        async (json, name, promptNode) => {
+          setBusy(true);
+          setMessage('');
+          setError(null);
+          try {
+            const data = await postJson(IMAGE_WORKFLOW_API, {
+              workflow: json,
+              name: name || 'imported-workflow.json',
+              promptNode: promptNode || undefined,
+            });
+            if (!data || data.ok === false) {
+              const list = (data && data.candidates) || [];
+              if (list.length) {
+                setPendingWorkflow({ json: json, name: name });
+                setCandidates(list);
+                setSelectedNode('');
+                setMessage('这份工作流有多个文本节点：选一个作为提示词入口，再点「用这个节点」。');
+              } else {
+                setMessage(String((data && (data.error || data.code)) || '导入失败'));
+              }
+              return;
+            }
+            setPendingWorkflow(null);
+            apply(data.image);
+            setMessage('工作流已导入，之后的配图都用它');
+          } catch (err) {
+            setError(err);
+          } finally {
+            setBusy(false);
+          }
+        },
+        [apply],
+      );
+
+      const importFile = useCallback(
+        async (event) => {
+          const files = takeFilesFromInput(event);
+          const file = files[0];
+          if (!file) return;
+          let json = null;
+          try {
+            json = JSON.parse(await file.text());
+          } catch {
+            setMessage('这个文件不是合法 JSON，确认导出的是 API 格式工作流');
+            return;
+          }
+          await submitWorkflow(json, file.name, '');
+        },
+        [submitWorkflow],
+      );
+
+      const resetDefault = useCallback(async () => {
+        const ok = typeof window === 'undefined' || window.confirm('恢复内置默认工作流（Z-Image Turbo）？导入的那份会被删掉。');
+        if (!ok) return;
+        setBusy(true);
+        setMessage('');
+        try {
+          const data = await postJson(IMAGE_WORKFLOW_API, { reset: true });
+          apply(data.image);
+          setPendingWorkflow(null);
+          setMessage('已恢复默认工作流');
+        } catch (err) {
+          setError(err);
+        } finally {
+          setBusy(false);
+        }
+      }, [apply]);
+
+
+      const isComfy = form.provider === 'comfyui';
+      const info = workflow || {};
+      const providerNote = (providers.find((item) => item.id === form.provider) || {}).note || (image && image.note) || '';
+
+      return h(
+        'div',
+        { style: { padding: '0 2px' } },
+        h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+        h(
+          'div',
+          { className: 'bl-voice-row' },
+          h('span', { className: 'bl-hint' }, '策略'),
+          h(
+            'select',
+            {
+              className: 'bl-select',
+              value: form.provider,
+              disabled: busy,
+              'aria-label': '配图策略',
+              onChange: (event) => save({ provider: event.target.value }),
+            },
+            (providers.length ? providers : [{ id: 'prompt', label: '提示词占位（默认）', ready: true }]).map((item) =>
+              h('option', { key: item.id, value: item.id }, item.label),
+            ),
+          ),
+          h('span', { className: 'bl-hint' }, '默认只出提示词；切到 ComfyUI 才会真的出图'),
+        ),
+        isComfy
+          ? h(
+              React.Fragment,
+              null,
+              h(
+                'div',
+                { className: 'bl-voice-row' },
+                h('span', { className: 'bl-hint' }, 'IP'),
+                h('input', {
+                  className: 'bl-input',
+                  style: { width: 130 },
+                  value: form.host,
+                  disabled: busy,
+                  placeholder: '127.0.0.1',
+                  'aria-label': 'ComfyUI IP 或主机名',
+                  onChange: (event) => setForm((prev) => Object.assign({}, prev, { host: event.target.value })),
+                }),
+                h('span', { className: 'bl-hint' }, '端口'),
+                h('input', {
+                  className: 'bl-input',
+                  style: { width: 72 },
+                  value: form.port,
+                  disabled: busy,
+                  placeholder: '8188',
+                  inputMode: 'numeric',
+                  'aria-label': 'ComfyUI 端口',
+                  onChange: (event) => setForm((prev) => Object.assign({}, prev, { port: event.target.value })),
+                }),
+                h('button', { className: 'bl-btn', disabled: busy, onClick: () => save({}) }, busy ? '保存中…' : '保存地址'),
+              ),
+              h(
+                'div',
+                { className: 'bl-voice-note' },
+                '留空即用默认 ' + ((image && image.defaults && image.defaults.host) || '127.0.0.1') + ':' + ((image && image.defaults && image.defaults.port) || 8188) +
+                  '。如果这里填的不是 127.0.0.1，提示词会离开本机发到那台机器上。',
+              ),
+              h(
+                'div',
+                { className: 'bl-voice-row' },
+                h('span', { className: 'bl-hint' }, '风格后缀'),
+                h('input', {
+                  className: 'bl-input',
+                  style: { flex: '1 1 180px' },
+                  value: form.styleSuffix,
+                  disabled: busy,
+                  placeholder: '可选，例如：书籍插画，暖色调，无文字',
+                  'aria-label': '配图风格后缀',
+                  onChange: (event) => setForm((prev) => Object.assign({}, prev, { styleSuffix: event.target.value })),
+                }),
+                h('button', { className: 'bl-btn', disabled: busy, onClick: () => save({}) }, '保存'),
+              ),
+            )
+          : null,
+        h(
+          'div',
+          { className: 'bl-voice-row' },
+          h('span', { className: 'bl-hint' }, '工作流'),
+          h(
+            'span',
+            { className: 'bl-key-mask' },
+            info.source === 'imported' ? '已导入 · ' + (info.name || '') : '默认 · Z-Image Turbo',
+          ),
+          h('span', { className: 'bl-hint' }, (info.nodes || 0) + ' 节点'),
+          info.promptNode
+            ? h('span', { className: 'bl-hint' }, '提示词节点 ' + info.promptNode + (info.promptNodeTitle ? ' · ' + info.promptNodeTitle : ''))
+            : h('span', { className: 'bl-hint' }, '未识别提示词节点'),
+        ),
+        h(
+          'div',
+          { className: 'bl-voice-row' },
+          h('label', { className: 'bl-btn', style: { cursor: busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center' } },
+            '导入工作流 API',
+            h('input', {
+              type: 'file',
+              accept: '.json,application/json',
+              disabled: busy,
+              style: { display: 'none' },
+              onChange: importFile,
+            }),
+          ),
+          h('button', { className: 'bl-btn', disabled: busy, onClick: resetDefault }, '恢复默认'),
+          h('button', { className: 'bl-btn', disabled: busy, onClick: probe }, busy ? '请稍候…' : '测试连接'),
+          info.valid === false ? h('span', { className: 'bl-hint bl-source-warn' }, '工作流还没法用，先在下面选提示词节点') : null,
+        ),
+        candidates.length > 1
+          ? h(
+              'div',
+              { className: 'bl-voice-row' },
+              h('span', { className: 'bl-hint' }, '提示词节点'),
+              h(
+                'select',
+                {
+                  className: 'bl-select',
+                  value: selectedNode || info.promptNode || '',
+                  disabled: busy,
+                  'aria-label': '提示词节点',
+                  onChange: (event) => setSelectedNode(event.target.value),
+                },
+                candidates.map((item) =>
+                  h('option', { key: item.id, value: item.id }, item.id + ' · ' + item.title + ' · ' + String(item.text || '').slice(0, 24)),
+                ),
+              ),
+              pendingWorkflow
+                ? h(
+                    'button',
+                    {
+                      className: 'bl-btn bl-btn-primary',
+                      disabled: busy || !selectedNode,
+                      onClick: () => submitWorkflow(pendingWorkflow.json, pendingWorkflow.name, selectedNode),
+                    },
+                    '用这个节点',
+                  )
+                : h('button', { className: 'bl-btn', disabled: busy || !selectedNode, onClick: () => save({ promptNode: selectedNode }) }, '保存节点'),
+            )
+          : null,
+        h(
+          'div',
+          { className: 'bl-voice-row' },
+          h('span', { className: 'bl-hint' }, '测试生图'),
+          h('input', {
+            className: 'bl-input',
+            style: { flex: '1 1 200px' },
+            value: testPrompt,
+            maxLength: 200,
+            disabled: busy || testing,
+            placeholder: (image && image.testPrompt) || '一句提示词',
+            'aria-label': '测试生图提示词',
+            onChange: (event) => setTestPrompt(event.target.value),
+          }),
+          h(
+            'button',
+            {
+              className: 'bl-btn bl-btn-primary',
+              disabled: !isComfy || busy || testing,
+              title: isComfy ? '用当前工作流真正生成一张，只预览不落盘' : '先切到「本地 ComfyUI」',
+              onClick: testGenerate,
+            },
+            testing ? '生成中…' : '测试生图',
+          ),
+        ),
+        testImage
+          ? h(
+              'div',
+              { className: 'bl-image-test' },
+              h('img', { src: testImage.url, alt: '测试生图结果' }),
+              h(
+                'div',
+                { className: 'bl-voice-note' },
+                '耗时 ' + (Number(testImage.ms) / 1000).toFixed(1) + ' 秒 · ' +
+                  Math.max(1, Math.round(Number(testImage.bytes) / 1024)) + ' KB' +
+                  (testImage.seed ? ' · seed ' + testImage.seed : '') +
+                  ' · 测试图不写入模块、不进缓存',
+              ),
+              h('a', { className: 'bl-btn', href: testImage.url, download: 'comfy-test.png' }, '下载测试图'),
+            )
+          : null,
+        h(
+          'div',
+          { className: 'bl-voice-note' },
+          '「测试连接」只查版本与模型；「测试生图」会真正跑一次当前工作流，成功后在下方预览。首次加载模型可能较慢，等一两分钟属正常。',
+        ),
+        h(
+          'div',
+          { className: 'bl-voice-note' },
+          '工作流只收 ComfyUI「保存（API 格式）」导出的 JSON；默认工作流 1024×1024、8 步，每页一张 PNG。',
+        ),
+        message ? h('div', { className: 'bl-voice-note bl-toc-msg' }, message) : null,
+        providerNote ? h('div', { className: 'bl-voice-note' }, providerNote) : null,
       );
     }
 
@@ -3484,6 +4104,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
               'Qwen3-TTS 会把每页朗读稿发给千问并下载 WAV；浏览器朗读完全在本机。Qwen Key 只保存在本机。',
             ),
           ),
+          h('div', { className: 'bl-mods', style: { marginTop: 4 } }, h('div', { className: 'bl-mods-head' }, '配图')),
+          h(ImageSettings, null),
         ),
       );
     }
@@ -4008,6 +4630,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         Shelf: Shelf,
         Detail: Detail,
         Settings: Settings,
+        ImageSettings: ImageSettings,
         BookCard: BookCard,
         TocBox: TocBox,
         SourceNote: SourceNote,

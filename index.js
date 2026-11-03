@@ -92,6 +92,35 @@ import {
   writeExportStream,
 } from './package.js';
 import { SLIDES_PROMPT_VERSION } from './slides.js';
+import {
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  DEFAULT_TEST_PROMPT,
+  IMAGE_PROVIDERS,
+  IMAGE_TIMEOUT_MS,
+  TEST_PROMPT_MAX,
+  generateImage,
+  probeComfy,
+  publicImageConfig,
+  readImageConfig,
+  readWorkflowStore,
+  resetWorkflow,
+  saveWorkflow,
+  seedFor,
+  validateWorkflow,
+  workflowHashOf,
+  writeImageConfig,
+} from './comfy.js';
+import {
+  bookHasImagingJob,
+  cancelImaging,
+  forgetModule,
+  getImagingStatus,
+  hasActiveImagingJob,
+  imageAbsPath,
+  reconcileImagingJobs,
+  startImaging,
+} from './imaging.js';
 
 const require = createRequire(import.meta.url);
 const PKG = require('./package.json');
@@ -143,6 +172,14 @@ export const ROUTE_EXPORT = ROUTE_PREFIX + '/export';
 export const ROUTE_EXPORT_SIZE = ROUTE_PREFIX + '/export/size';
 export const ROUTE_IMPORT_PACKAGE = ROUTE_PREFIX + '/import/package';
 export const ROUTE_REVOICE = ROUTE_PREFIX + '/revoice';
+export const ROUTE_IMAGE = ROUTE_PREFIX + '/image';
+export const ROUTE_IMAGE_CONFIG = ROUTE_PREFIX + '/image/config';
+export const ROUTE_IMAGE_WORKFLOW = ROUTE_PREFIX + '/image/workflow';
+export const ROUTE_IMAGE_PROBE = ROUTE_PREFIX + '/image/probe';
+export const ROUTE_IMAGE_TEST = ROUTE_PREFIX + '/image/test';
+export const ROUTE_IMAGE_STATUS = ROUTE_PREFIX + '/image/status';
+export const ROUTE_IMAGE_REGEN = ROUTE_PREFIX + '/image/regen';
+export const ROUTE_IMAGE_CANCEL = ROUTE_PREFIX + '/image/cancel';
 
 /** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -373,6 +410,7 @@ function handleBook(req, res) {
     book: loaded.book,
     chapters: loaded.chapters,
     modules: modules,
+    imageProvider: readImageConfig().provider,
   });
 }
 
@@ -448,6 +486,9 @@ async function handleRename(req, res) {
 async function handleDelete(req, res) {
   const body = await readJsonBody(req, 64 * 1024);
   const bookId = String(body.bookId || '');
+  for (const module of listModules(bookId)) {
+    forgetModule(module.id);
+  }
   if (!trashBook(bookId)) {
     sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
     return;
@@ -936,6 +977,7 @@ async function handleGenerate(req, res, ctx) {
     return;
   }
   const voice = readVoiceConfig();
+  const imageConfig = readImageConfig();
   const cacheKey = moduleCacheKey(bookId, selection.chapters, model.model);
   const running = findRunningByKey(cacheKey);
   if (running) {
@@ -963,6 +1005,7 @@ async function handleGenerate(req, res, ctx) {
   }
   if (force && existing) {
     try {
+      forgetModule(existing.id);
       deleteModuleById(bookId, existing.id);
     } catch {
       /* 删不掉就让新模块另起一个目录 */
@@ -979,6 +1022,7 @@ async function handleGenerate(req, res, ctx) {
 
   let job;
   try {
+    if (reuse) forgetModule(reuse.id);
     job = startGeneration({
       book: loaded.book,
       selected: selection.chapters,
@@ -989,6 +1033,14 @@ async function handleGenerate(req, res, ctx) {
       model: model,
       prompt: prompt,
       existing: reuse,
+      imageProvider: imageConfig.provider,
+      onReady: (info) => {
+        if (readImageConfig().provider !== 'comfyui') return;
+        const started = startImaging({ moduleId: info.moduleId, reason: 'generate' });
+        if (!started.ok) {
+          console.warn('[book-slides] 配图没启动：' + (started.code || '') + ' ' + String(started.message || ''));
+        }
+      },
       callModel: (system, user, options) =>
         callModel(ctx, system, user, Object.assign({ maxTokens: 16000, timeoutMs: GENERATE_CALL_TIMEOUT_MS }, options || {})),
     });
@@ -1097,6 +1149,7 @@ async function handleModuleDelete(req, res) {
     sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
     return;
   }
+  forgetModule(moduleId);
   if (!deleteModuleById(found.bookId, moduleId)) {
     sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
     return;
@@ -1225,6 +1278,194 @@ async function handleVoiceProbe(req, res) {
     return;
   }
   sendJson(res, 200, Object.assign({ ok: true }, result));
+}
+
+/* ------------------------------ 本地 ComfyUI 配图 ------------------------------ */
+
+function imagePayload(extra) {
+  const image = publicImageConfig();
+  return Object.assign(
+    { ok: true, image: image, providers: IMAGE_PROVIDERS, defaults: { host: DEFAULT_HOST, port: DEFAULT_PORT } },
+    extra || {},
+  );
+}
+
+/** GET/POST /image/config：策略、host、port、风格后缀、提示词节点。 */
+async function handleImageConfig(req, res) {
+  if (methodIs(req, 'GET')) {
+    sendJson(res, 200, imagePayload());
+    return;
+  }
+  const body = await readJsonBody(req, 64 * 1024);
+  const patch = body.image && typeof body.image === 'object' ? body.image : body;
+  writeImageConfig(patch);
+  sendJson(res, 200, imagePayload());
+}
+
+/**
+ * POST /image/workflow：导入 API 格式工作流。先校验、再落盘；坏文件不覆盖旧的。
+ * 识别不出提示词节点时返回 E_IMG_WORKFLOW_NODE + candidates，面板让用户选一个再提交。
+ */
+async function handleImageWorkflow(req, res) {
+  const body = await readJsonBody(req, 2 * 1024 * 1024);
+  if (body && body.reset === true) {
+    resetWorkflow();
+    sendJson(res, 200, imagePayload());
+    return;
+  }
+  const workflow = body && body.workflow && typeof body.workflow === 'object' ? body.workflow : body;
+  try {
+    const saved = saveWorkflow(workflow, { name: body && body.name, promptNode: body && body.promptNode });
+    sendJson(res, 200, imagePayload({ candidates: saved.candidates }));
+  } catch (err) {
+    sendJson(res, 200, {
+      ok: false,
+      code: (err && err.code) || 'E_IMG_WORKFLOW',
+      error: String((err && err.message) || err),
+      hint: (err && err.hint) || '',
+      candidates: (err && err.candidates) || [],
+    });
+  }
+}
+
+/** POST /image/probe：读 ComfyUI 版本 + 检查工作流要用的模型是否都在。 */
+async function handleImageProbe(req, res) {
+  try {
+    const config = readImageConfig();
+    const store = readWorkflowStore();
+    const result = await probeComfy({ config: config, workflow: store.workflow });
+    sendJson(res, 200, Object.assign({ ok: true, workflow: { source: store.source, name: store.name } }, result));
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_IMG_CONNECT', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
+/**
+ * POST /image/test：用当前配置跑一次「测试生图」，只验证链路。
+ * 返回 image/png（不落盘、不进缓存、不写任何模块）；失败返回 JSON 错误。
+ */
+async function handleImageTest(req, res) {
+  const body = await readJsonBody(req, 16 * 1024);
+  const config = readImageConfig();
+  if (config.provider !== 'comfyui') {
+    sendError(res, 'E_IMG_DISABLED', '当前配图策略是「提示词占位」', '先到设置里切到「本地 ComfyUI」，再测试生图。');
+    return;
+  }
+  if (hasActiveImagingJob()) {
+    sendError(res, 'E_IMG_BUSY', '配图作业正在跑，先别抢 GPU', '等这次补图完成，或到模块列表取消后再试。');
+    return;
+  }
+
+  let store;
+  let check;
+  try {
+    store = readWorkflowStore();
+    check = validateWorkflow(store.workflow);
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_IMG_WORKFLOW', String((err && err.message) || err), (err && err.hint) || '');
+    return;
+  }
+  const promptNode =
+    config.promptNode && check.candidates.some((item) => item.id === config.promptNode) ? config.promptNode : check.promptNode;
+  if (!promptNode) {
+    sendError(res, 'E_IMG_WORKFLOW_NODE', '工作流没认出提示词节点', '到「提示词节点」里选一个再试。');
+    return;
+  }
+
+  const prompt = String(body.prompt == null ? '' : body.prompt).trim() || DEFAULT_TEST_PROMPT;
+  if (prompt.length > TEST_PROMPT_MAX) {
+    sendError(res, 'E_IMG_PROMPT', '测试提示词最多 ' + TEST_PROMPT_MAX + ' 字', '当前 ' + prompt.length + ' 字。');
+    return;
+  }
+
+  const seed = seedFor(prompt, workflowHashOf(store.workflow), Date.now());
+  const startedAt = Date.now();
+  try {
+    const result = await generateImage({
+      config: config,
+      workflow: store.workflow,
+      prompt: prompt,
+      seed: seed,
+      promptNode: promptNode,
+      timeoutMs: IMAGE_TIMEOUT_MS,
+    });
+    res.statusCode = 200;
+    res.setHeader('content-type', 'image/png');
+    res.setHeader('content-length', String(result.buffer.length));
+    res.setHeader('cache-control', 'no-store');
+    res.setHeader('x-image-ms', String(Date.now() - startedAt));
+    res.setHeader('x-image-seed', String(seed));
+    res.setHeader('x-image-node', String(promptNode));
+    res.end(result.buffer);
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_IMG_FAIL', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
+/** GET /image/status：后台配图作业的进度；重启后没有内存作业就归一为 interrupted。 */
+
+function handleImageStatus(req, res) {
+  const moduleId = String(query(req).get('moduleId') || '').trim();
+  sendJson(res, 200, getImagingStatus(moduleId));
+}
+
+/** POST /image/regen：补配图 / 单页重出 / 全部重出（force）。 */
+async function handleImageRegen(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const moduleId = String(body.moduleId || '').trim();
+  const only = Array.isArray(body.slides) ? body.slides : Number(body.slide) ? [Number(body.slide)] : null;
+  const result = startImaging({ moduleId: moduleId, only: only, force: body.force === true });
+  sendJson(res, 200, Object.assign({ image: publicImageConfig() }, result));
+}
+
+async function handleImageCancel(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const moduleId = String(body.moduleId || query(req).get('moduleId') || '').trim();
+  if (!isValidId(moduleId)) {
+    sendError(res, 'E_BAD_ID', '参数不合法', '');
+    return;
+  }
+  sendJson(res, 200, { ok: true, status: cancelImaging(moduleId) ? 'cancelling' : 'none' });
+}
+
+/** GET /image?moduleId=&i=：宿主落盘的 PNG；浏览器不直连 ComfyUI。 */
+function handleImage(req, res) {
+  const params = query(req);
+  const moduleId = String(params.get('moduleId') || '').trim();
+  const index = Math.round(Number(params.get('i')) || 0);
+  if (!isValidId(moduleId) || index < 1 || index > 999) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const abs = imageAbsPath(found.moduleDir, 'images/' + String(index).padStart(3, '0') + '.png');
+  if (!abs) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  let stat = null;
+  try {
+    stat = fs.statSync(abs);
+  } catch {
+    stat = null;
+  }
+  if (!stat || !stat.isFile()) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('content-type', 'image/png');
+  res.setHeader('content-length', String(stat.size));
+  res.setHeader('cache-control', 'no-store');
+  fs.createReadStream(abs).pipe(res);
 }
 
 /* ------------------------------ 播放器数据 ------------------------------ */
@@ -1524,6 +1765,10 @@ async function handleExport(req, res) {
   const params = exportParams(req);
   let plan;
   try {
+    const busy = params.ids.find((id) => bookHasImagingJob(id));
+    if (busy) {
+      throw new PackageError('E_EXPORT_BUSY', '这本书正在生成配图，完成后再导出', busy);
+    }
     plan = await planExport(params.ids, { includeAudio: params.includeAudio });
   } catch (err) {
     sendPackageError(res, err);
@@ -1803,6 +2048,11 @@ export function apply(ctx) {
   } catch {
     /* 坏模块不能挡插件启动 */
   }
+  try {
+    reconcileImagingJobs();
+  } catch {
+    /* 配图作业归一失败也不能挡启动 */
+  }
   // 真书对照命令：跑「目录 → 校准」这条路，按严重程度分类报告
   ctx.inject(['commands'], (scoped) => {
     scoped.commands.register({
@@ -2009,6 +2259,74 @@ export function apply(ctx) {
         return;
       }
       return handleVoiceProbe(req, res);
+    });
+
+    route(ROUTE_IMAGE, (req, res) => {
+      handleImage(req, res);
+    });
+
+    route(ROUTE_IMAGE_CONFIG, (req, res) => {
+      const method = String((req && req.method) || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'POST') {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleImageConfig(req, res);
+    });
+
+    route(ROUTE_IMAGE_WORKFLOW, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleImageWorkflow(req, res);
+    });
+
+    route(ROUTE_IMAGE_PROBE, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleImageProbe(req, res);
+    });
+
+    route(ROUTE_IMAGE_TEST, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleImageTest(req, res);
+    });
+
+    route(ROUTE_IMAGE_STATUS, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handleImageStatus(req, res);
+    });
+
+    route(ROUTE_IMAGE_REGEN, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleImageRegen(req, res);
+    });
+
+    route(ROUTE_IMAGE_CANCEL, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleImageCancel(req, res);
     });
 
     route(ROUTE_PAGES, (req, res) => {

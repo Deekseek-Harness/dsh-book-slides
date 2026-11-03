@@ -3,6 +3,49 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [1.2.0] - 2026-11-04
+
+v1.4「本地 ComfyUI 配图」：配图从「只出提示词」扩成两档策略，默认行为与以前完全一致。
+
+### 新增
+
+- **配图策略**：`image.json.provider` 两档 —— `prompt`（默认，只出 `image_prompt`，占位卡可查看/复制）
+  与 `comfyui`（后台逐页调本地 ComfyUI，落 `images/NNN.png`）。
+- **ComfyUI 配置**：IP + 端口（默认 `127.0.0.1:8188`）、风格后缀、可选工作流。工作流只收
+  「保存（API 格式）」JSON；自动找 `KSampler.positive` 链上的 `CLIPTextEncode`，多个候选时面板手选；
+  导入失败不覆盖上一份，可一键恢复内置 Z-Image Turbo。
+- **后台配图作业**：模块先 `ready`，配图在后台逐页补，不阻塞播放；页级 `image_status` /
+  `image_file` / `image_seed` / `image_nonce` 写回 `slides.json`，`module.json.images` 只记汇总。
+  单页失败回退提示词占位，模块列表「补配图」、播放器单页「换一张」都可单独重试。
+- **连接探测**：`/image/probe` 读 ComfyUI 版本，并按工作流里 `UNETLoader` / `CLIPLoader` /
+  `VAELoader` / `CheckpointLoaderSimple` 等检查模型是否齐全。
+- **测试生图**：设置页新增「测试生图」，用当前工作流与一句可编辑的测试词真跑一张，面板内预览、
+  显示耗时/种子并可下载；`/image/test` 返回 PNG，**不落盘、不进缓存、不写模块**。策略为提示词占位时
+  返回 `E_IMG_DISABLED`，补图作业在跑时返回 `E_IMG_BUSY`；「测试连接」保留原语义。
+- **缓存与可复现**：seed 由 `sha256(提示词|工作流哈希|nonce)` 派生，同输入命中 `image-cache/`；
+  force 重生成与单页换图递增 nonce，换新种子。
+- **书档带图**：`images/*` 与 `audio/*` 同级入包、导入时逐字节还原；缺图时该页标 `failed` 并可补，
+  模块状态不受影响（M.2 白名单已同步）。
+
+### 变更
+
+- `package.json` 版本 1.2.0；新增 `comfy.js`、`imaging.js`、`workflows/z-image-turbo.json` 并加入发布清单。
+- 生成流水线新增 `onReady` 回调与 `imageProvider` 上下文；重生成模块时一并清掉旧 `images/` 与 `image-job.json`。
+- 隐私边界从「外发两类」改为三类：新增「提示词 → 用户指定的 ComfyUI」（仅显式开启，IP 非 127.0.0.1 时面板有提示）。
+
+### 测试基线
+
+| 项 | 结果 |
+|---|---|
+| `npm test`（14 套） | 213 项：**211 通过 / 2 跳过（无真书样本） / 0 失败** |
+| 新增 | `test/comfy.test.mjs` 9 项、`test/imaging.test.mjs` 9 项、`test/image-auto.test.mjs` 1 项（生成后自动起配图），并在 `package.test.mjs` 补配图往返与缺图降级 |
+
+### 已知限制
+
+- 插件不含 ComfyUI 与模型；默认工作流需要 `z_image_turbo_bf16` / `qwen_3_4b` / `ae` 三件套。
+- 工作流必须是 API 格式；中文提示词直接发送，不额外翻译。
+- 真机 ComfyUI（真实显卡、首次加载模型）未在自动化里跑过；测试用假 ComfyUI 覆盖协议与降级。
+
 ## [1.0.0] - 2026-11-03
 
 首个正式版本。M1–M4 + v1.2 语音全部交付，M5 只完成两条体验修复（见「未完成」）。

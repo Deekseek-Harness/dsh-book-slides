@@ -397,6 +397,58 @@ test('幻灯片舞台：封面、要点、引文三种版式各自渲染', () =>
   assert.match(cover, /bl-stage-rule/);
 });
 
+test('配图舞台：有图渲染同源 img，生成中与失败各有明确状态', () => {
+  const { mod } = bootPlugin();
+  const base = {
+    slide_index: 2,
+    layout: 'content_text',
+    title: '一页',
+    bullet_points: ['要点'],
+    image_prompt: '一只在书页上行走的猫',
+  };
+  const ready = renderToString(
+    React.createElement(mod.__components.SlideStage, {
+      slide: Object.assign({}, base, { image_status: 'ready', image_file: 'images/002.png', image_seed: 12345 }),
+      moduleId: 'modaaa1111',
+      onRegenImage: () => {},
+    }),
+  );
+  assert.match(ready, /\/dsh-book-slides\/image\?moduleId=modaaa1111&(amp;)?i=2/);
+  assert.match(ready, /bl-stage-figure-img/);
+  assert.match(ready, /提示词/);
+
+  const pending = renderToString(
+    React.createElement(mod.__components.SlideStage, {
+      slide: Object.assign({}, base, { image_status: 'pending', image_file: null }),
+      moduleId: 'modaaa1111',
+    }),
+  );
+  assert.match(pending, /配图生成中/);
+  assert.match(pending, /文字与语音不受影响/);
+
+  const failed = renderToString(
+    React.createElement(mod.__components.SlideStage, {
+      slide: Object.assign({}, base, { image_status: 'failed', image_file: null, image_error: 'E_IMG_CONNECT：连不上 ComfyUI' }),
+      moduleId: 'modaaa1111',
+    }),
+  );
+  assert.match(failed, /配图失败/);
+  assert.match(failed, /E_IMG_CONNECT/);
+});
+
+test('设置页配图：策略下拉、工作流导入、测试连接/测试生图都能渲染', () => {
+  const { mod } = bootPlugin();
+  const html = renderToString(React.createElement(mod.__components.ImageSettings));
+  assert.match(html, /策略/);
+  assert.match(html, /工作流/);
+  assert.match(html, /导入工作流 API/);
+  assert.match(html, /恢复默认/);
+  assert.match(html, /测试连接/);
+  assert.match(html, /测试生图/);
+  assert.match(html, /测试生图提示词/);
+  assert.match(html, /1024×1024/);
+});
+
 test('PDF 原文窗格：视觉版式容器、页码与锚点提示条', () => {
   const { mod } = bootPlugin();
   const slide = {

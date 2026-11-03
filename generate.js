@@ -40,6 +40,7 @@ import {
   planBatches,
   validateSlideSet,
   validateSlides,
+  withImagePlaceholders,
 } from './slides.js';
 import { describeEmptyReply } from './tocparse.js';
 import { synthesizeVoicing } from './tts.js';
@@ -177,6 +178,7 @@ function moduleSummary(record, id) {
     chapterTitles: Array.isArray(record.chapterTitles) ? record.chapterTitles : [],
     anchorHitRate: Number(record.anchorHitRate) || 0,
     anchored: Number(record.anchored) || 0,
+    images: record.images && typeof record.images === 'object' ? record.images : null,
     code: record.code || null,
     error: record.error || null,
     model: record.model || '',
@@ -384,7 +386,8 @@ function isAbort(err) {
  * }} options
  */
 export function startGeneration(options) {
-  const { book, selected, pages, cleanedPages, voice, cacheKey, model, prompt, existing, callModel } = options || {};
+  const { book, selected, pages, cleanedPages, voice, cacheKey, model, prompt, existing, callModel, imageProvider, onReady } =
+    options || {};
   if (!book || !isValidId(book.id)) throw new GenerateError('E_NOT_FOUND', '找不到这本书');
   if (!Array.isArray(selected) || selected.length === 0) throw new GenerateError('E_SELECTION_EMPTY', '先勾选至少一章');
   if (typeof callModel !== 'function') throw new GenerateError('E_LLM_UNAVAILABLE', '模型服务不可用');
@@ -397,10 +400,12 @@ export function startGeneration(options) {
   fs.mkdirSync(path.join(moduleDir, 'audio'), { recursive: true });
   fs.mkdirSync(batchesDir(moduleDir), { recursive: true });
   if (existing) {
-    // 重跑：旧 slides 与音频都不能留，否则面板会读到上一轮的半成品
+    // 重跑：旧 slides、音频、配图都不能留，否则面板会读到上一轮的半成品
     try {
       fs.rmSync(slidesJsonFile(moduleDir), { force: true });
       fs.rmSync(path.join(moduleDir, 'audio'), { recursive: true, force: true });
+      fs.rmSync(path.join(moduleDir, 'images'), { recursive: true, force: true });
+      fs.rmSync(path.join(moduleDir, 'image-job.json'), { force: true });
       fs.mkdirSync(path.join(moduleDir, 'audio'), { recursive: true });
     } catch {
       /* 删不掉就让写入覆盖 */
@@ -437,6 +442,15 @@ export function startGeneration(options) {
     slides: 0,
     anchored: 0,
     anchorHitRate: 0,
+    images: {
+      provider: String(imageProvider || 'prompt') === 'comfyui' ? 'comfyui' : null,
+      status: String(imageProvider || 'prompt') === 'comfyui' ? 'pending' : 'none',
+      total: 0,
+      done: 0,
+      failed: 0,
+      code: null,
+      error: null,
+    },
     attempts: existing && existing.record ? (Number(existing.record.attempts) || 1) + 1 : 1,
     createdAt: createdAt,
     updatedAt: nowIso(),
@@ -478,6 +492,8 @@ export function startGeneration(options) {
     moduleDir: moduleDir,
     record: record,
     callModel: callModel,
+    imageProvider: imageProvider,
+    onReady: onReady,
   }).catch((err) => {
     // runJob 自己会收口；走到这里说明收口代码也抛了（比如磁盘满），兜底别让进程挂
     try {
@@ -776,6 +792,8 @@ async function runJob(job, context) {
     assertActive(job);
     const generatedAt = nowIso();
     const status = voiced.degraded ? 'ready_degraded' : 'ready';
+    // 配图是独立的后台作业（v1.4）：模块先 ready，图由 imaging.js 逐页补
+    const slidesWithImages = withImagePlaceholders(voiced.slides, context.imageProvider);
     const slidesDoc = {
       schema_version: 1,
       module_id: context.moduleId,
@@ -793,7 +811,7 @@ async function runJob(job, context) {
         voice: context.voice.voice || '',
       },
       anchor_hit_rate: anchored.hitRate,
-      slides: voiced.slides,
+      slides: slidesWithImages,
     };
     writeJson(slidesJsonFile(context.moduleDir), slidesDoc);
     // 成品已经落盘，批次检查点没用了；留着只会占地方
@@ -835,6 +853,19 @@ async function runJob(job, context) {
     job.message = message;
     job.error = voiced.degraded ? { code: voiced.code, message: voiced.message, hint: '' } : null;
     job.finishedAt = generatedAt;
+    // 模块已就绪：通知宿主启动后台配图作业（comfyui 策略下才真正做事）
+    if (typeof context.onReady === 'function') {
+      try {
+        context.onReady({
+          moduleId: context.moduleId,
+          bookId: context.book.id,
+          moduleDir: context.moduleDir,
+          slidesDoc: slidesDoc,
+        });
+      } catch {
+        /* 配图起不来不能影响模块 state */
+      }
+    }
   } catch (err) {
     const cancelled = job.cancelled || (err && err.code === 'E_CANCELLED');
     const status = cancelled ? 'cancelled' : 'failed';
@@ -852,6 +883,15 @@ async function runJob(job, context) {
       error: message,
       message: message,
       finishedAt: job.finishedAt,
+      // 生成没走到 ready：配图不会启动，别让汇总停在 pending
+      images: Object.assign({}, context.record.images || {}, {
+        status: 'none',
+        total: 0,
+        done: 0,
+        failed: 0,
+        code: null,
+        error: null,
+      }),
     });
   } finally {
     job.active = false;

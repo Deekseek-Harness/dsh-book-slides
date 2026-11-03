@@ -670,3 +670,23 @@ export function applyVoicing(slides, voice) {
     }),
   );
 }
+
+/**
+ * 配图字段占位（v1.4）：
+ *   prompt 策略 → image_status = 'none'，播放器显示提示词占位卡；
+ *   comfyui 策略 → 'pending'，模块就绪后由后台配图作业逐页改成 ready/failed。
+ * 字段全部可选，schema_version 仍是 1，老 slides.json 读进来不受影响。
+ */
+export function withImagePlaceholders(slides, provider) {
+  const active = String(provider || 'prompt') === 'comfyui';
+  return (Array.isArray(slides) ? slides : []).map((slide) =>
+    Object.assign({}, slide, {
+      image_file: null,
+      image_status: active ? 'pending' : 'none',
+      image_provider: active ? 'comfyui' : null,
+      image_seed: null,
+      image_nonce: 0,
+      image_error: null,
+    }),
+  );
+}

@@ -132,6 +132,12 @@ function wavBytes(seed) {
   return buffer;
 }
 
+/** 能过 PNG 魔数校验的最小占位图；书档只比字节与 CRC，不解析像素。 */
+function pngBytes(seed) {
+  const body = Buffer.alloc(128, seed % 251);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), body]);
+}
+
 function makeModule(bookId, moduleId, options) {
   const opts = options || {};
   const chapters = opts.chapters || [1];
@@ -140,10 +146,12 @@ function makeModule(bookId, moduleId, options) {
   const now = new Date().toISOString();
   const dir = path.join(ROOT, 'books', bookId, 'modules', moduleId);
   fs.mkdirSync(path.join(dir, 'audio'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'images'), { recursive: true });
 
   const slides = [];
   for (let i = 1; i <= count; i += 1) {
     const audio = opts.audio === false ? null : 'audio/' + String(i).padStart(3, '0') + '.wav';
+    const image = opts.images === false || i === 1 ? null : 'images/' + String(i).padStart(3, '0') + '.png';
     slides.push({
       slide_index: i,
       layout: i === 1 ? 'cover' : 'content_text',
@@ -153,6 +161,12 @@ function makeModule(bookId, moduleId, options) {
       quote_text: null,
       quote_source: null,
       image_prompt: '手绘示意图',
+      image_file: image,
+      image_status: image ? 'ready' : 'none',
+      image_provider: image ? 'comfyui' : null,
+      image_seed: image ? 1000 + i : null,
+      image_nonce: 0,
+      image_error: null,
       audio_script: '这是一段配音稿，用来测试书档搬运音频文件是否完整。',
       source_quote: 'alpha '.repeat(3),
       source_pages: { from: 1, to: 1 },
@@ -163,6 +177,7 @@ function makeModule(bookId, moduleId, options) {
       audio_ms: 1000,
     });
     if (audio) fs.writeFileSync(path.join(dir, 'audio', String(i).padStart(3, '0') + '.wav'), wavBytes(i));
+    if (image) fs.writeFileSync(path.join(dir, 'images', String(i).padStart(3, '0') + '.png'), pngBytes(i));
   }
 
   const slidesDoc = {
@@ -199,6 +214,10 @@ function makeModule(bookId, moduleId, options) {
     provider: 'fake',
     promptVersion: 'b2p-v1',
     voice: { provider: 'qwen3-tts', model: 'qwen3-tts-flash', voice: 'Cherry', rate: 1, mode: 'file', degraded: false },
+    images:
+      opts.images === false
+        ? { provider: null, status: 'none', total: 0, done: 0, failed: 0 }
+        : { provider: 'comfyui', status: count > 1 ? 'done' : 'none', total: Math.max(0, count - 1), done: Math.max(0, count - 1), failed: 0 },
     slides: count,
     anchored: count,
     anchorHitRate: 1,
@@ -392,6 +411,7 @@ test('导出：一个 ZIP，manifest + 书目录 + 音频都在（AC-32 上半�
   assert.ok(names.includes('books/' + bookA + '/modules/modaaa1111/module.json'));
   assert.ok(names.includes('books/' + bookA + '/modules/modaaa1111/slides.json'));
   assert.ok(names.includes('books/' + bookA + '/modules/modaaa1111/audio/001.wav'));
+  assert.ok(names.includes('books/' + bookA + '/modules/modaaa1111/images/002.png'), '配图也要入包（AC-51）');
 
   const manifest = JSON.parse(entries.find((entry) => entry.name === 'manifest.json').buffer.toString('utf8'));
   assert.equal(manifest.format, 'dsh-book-slides/package');
@@ -400,6 +420,7 @@ test('导出：一个 ZIP，manifest + 书目录 + 音频都在（AC-32 上半�
   assert.equal(manifest.books.length, 1);
   assert.equal(manifest.books[0].bookId, bookA);
   assert.equal(manifest.books[0].modules[0].contentKey.length, 64);
+  assert.equal(manifest.books[0].modules[0].images.count, 1);
   assert.ok(manifest.books[0].files.source.sha256);
 });
 
@@ -427,6 +448,7 @@ test('删除后导入：书、章节、模块、音频都回来（AC-32 下半�
     chapters: fs.readFileSync(path.join(bookDir(bookA), 'chapters.json')),
     slides: fs.readFileSync(path.join(bookDir(bookA), 'modules/modaaa1111/slides.json')),
     audio: fs.readFileSync(path.join(bookDir(bookA), 'modules/modaaa1111/audio/001.wav')),
+    image: fs.readFileSync(path.join(bookDir(bookA), 'modules/modaaa1111/images/002.png')),
     pages: fs.readFileSync(path.join(bookDir(bookA), 'pages.json')),
   };
   const removed = await postJson('/delete', { bookId: bookA });
@@ -436,7 +458,7 @@ test('删除后导入：书、章节、模块、音频都回来（AC-32 下半�
   const result = await importPackageFile(zipA);
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.summary.imported, 1);
-  assert.equal(result.items[0].modulesAdded, 1);
+  assert.equal(result.items[0].modulesAdded, 1, JSON.stringify(result.items[0]) + ' exists=' + fs.existsSync(path.join(bookDir(bookA), 'modules')));
 
   const dir = bookDir(bookA);
   assert.ok(fs.existsSync(dir), '书目录应该回来了');
@@ -444,6 +466,7 @@ test('删除后导入：书、章节、模块、音频都回来（AC-32 下半�
   assert.deepEqual(fs.readFileSync(path.join(dir, 'pages.json')), before.pages);
   assert.deepEqual(fs.readFileSync(path.join(dir, 'modules/modaaa1111/slides.json')), before.slides);
   assert.deepEqual(fs.readFileSync(path.join(dir, 'modules/modaaa1111/audio/001.wav')), before.audio);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'modules/modaaa1111/images/002.png')), before.image);
 
   const book = JSON.parse(fs.readFileSync(path.join(dir, 'book.json'), 'utf8'));
   assert.equal(book.id, bookA);
@@ -475,7 +498,7 @@ test('合并：本地已有书时只补缺失模块（AC-35）', async () => {
   const result = await importPackageFile(zipWithBoth);
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.items[0].status, 'merged');
-  assert.equal(result.items[0].modulesAdded, 1);
+  assert.equal(result.items[0].modulesAdded, 1, JSON.stringify(result.items[0]) + ' exists=' + fs.existsSync(path.join(bookDir(bookA), 'modules')));
   assert.ok(fs.existsSync(path.join(bookDir(bookA), 'modules/modbbb2222/module.json')));
   assert.ok(fs.existsSync(path.join(bookDir(bookA), 'modules/modaaa1111/module.json')), '原有模块不能被动');
 });
@@ -636,4 +659,41 @@ test('音频被改一个字节：CRC 校验拦住，不落半本（AC-43 扩展�
   const result = await importPackageFile(bad);
   assert.equal(result.ok, false);
   assert.equal(result.code, 'E_PKG_CORRUPT');
+});
+
+test('书档缺一页配图：该页降级为 failed，书与模块照常导入（AC-57）', async () => {
+  const entries = await readZip(zipA);
+  const imageName = 'books/' + bookA + '/modules/modaaa1111/images/002.png';
+  assert.ok(entries.some((entry) => entry.name === imageName), '准备：原包里应该有这张图');
+  const noImageZip = await writeZip(entries.filter((entry) => entry.name !== imageName));
+
+  // 前面的 copy 策略造过同 sha 的另一本书；findBySha256 可能命中它，先清掉保证确定性
+  const shaA = JSON.parse(fs.readFileSync(path.join(bookDir(bookA), 'book.json'), 'utf8')).sha256;
+  for (const name of fs.readdirSync(path.join(ROOT, 'books'))) {
+    if (name === bookA) continue;
+    const otherBook = JSON.parse(fs.readFileSync(path.join(ROOT, 'books', name, 'book.json'), 'utf8'));
+    if (otherBook && otherBook.sha256 === shaA) {
+      fs.rmSync(path.join(ROOT, 'books', name), { recursive: true, force: true });
+    }
+  }
+  fs.rmSync(path.join(bookDir(bookA), 'modules'), { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  assert.equal(fs.existsSync(path.join(bookDir(bookA), 'modules')), false, '准备：模块目录应已删除');
+  const result = await importPackageFile(noImageZip);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.items[0].modulesAdded, 1, JSON.stringify(result.items[0]) + ' exists=' + fs.existsSync(path.join(bookDir(bookA), 'modules')));
+
+  const slidesDoc = JSON.parse(
+    fs.readFileSync(path.join(bookDir(bookA), 'modules/modaaa1111/slides.json'), 'utf8'),
+  );
+  assert.equal(slidesDoc.slides[1].image_status, 'failed');
+  assert.equal(slidesDoc.slides[1].image_file, null);
+  assert.match(String(slidesDoc.slides[1].image_error), /E_PKG_IMAGE_MISSING/);
+
+  const record = JSON.parse(fs.readFileSync(path.join(bookDir(bookA), 'modules/modaaa1111/module.json'), 'utf8'));
+  assert.equal(record.status, 'ready', '缺图不把模块打成 degraded');
+  assert.equal(record.images.status, 'failed');
+  assert.equal(record.images.failed, 1);
+
+  const res = await fetch(api('/image?moduleId=modaaa1111&i=2'));
+  assert.equal(res.status, 404);
 });

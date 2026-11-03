@@ -40,12 +40,13 @@ export const DEFAULT_POLICY = 'merge';
 const ACTIVE_STATUS = ['queued', 'structuring', 'validate', 'anchor', 'voicing'];
 const READY_STATUS = ['ready', 'ready_degraded'];
 const AUDIO_RE = /^audio\/[A-Za-z0-9._-]+$/;
+const IMAGE_RE = /^images\/[A-Za-z0-9._-]+$/;
 
 export const README_TEXT = [
   'DSH 精讲 · 书档包',
   '',
   '这是「精讲」面板导出的书档，用来在另一台机器或另一个数据目录里还原这本书：',
-  '原文 PDF、章节、精讲模块与配音都在包里，导入后不需要重新生成。',
+  '原文 PDF、章节、精讲模块、配音与配图都在包里，导入后不需要重新生成。',
   '',
   '导入方式：打开精讲面板 → 点「导入书档」→ 选择本文件（.zip）。',
   '请不要手动改动包内文件；改了 manifest.json 里的哈希会导致导入被拒绝。',
@@ -274,6 +275,7 @@ export async function planExport(bookIds, options) {
         contentKey: slidesDoc ? contentKeyOf(record, slidesDoc) : null,
         slides: Array.isArray(slidesDoc && slidesDoc.slides) ? slidesDoc.slides.length : 0,
         audio: { count: 0, expected: 0, bytes: 0, pattern: 'audio/NNN.wav' },
+        images: { count: 0, expected: 0, bytes: 0, pattern: 'images/NNN.png' },
         files: {},
       };
 
@@ -319,6 +321,26 @@ export async function planExport(bookIds, options) {
         bytes += audioSize;
       }
 
+      // 配图（v1.4）：与音频同级入包；缺图不拦导出，导入端会归一为「待补」
+      const seenImages = new Set();
+      for (const slide of Array.isArray(slidesDoc && slidesDoc.slides) ? slidesDoc.slides : []) {
+        const rel = String((slide && slide.image_file) || '');
+        if (!rel) continue;
+        moduleEntry.images.expected += 1;
+        if (!IMAGE_RE.test(rel) || seenImages.has(rel)) continue;
+        seenImages.add(rel);
+        const abs = path.join(moduleDir, ...rel.split('/'));
+        if (!isFile(abs)) {
+          warnings.push('模块 ' + moduleId + ' 缺配图 ' + rel + '，导入后该页会回退提示词占位');
+          continue;
+        }
+        const imageSize = sizeOf(abs);
+        moduleEntry.images.count += 1;
+        moduleEntry.images.bytes += imageSize;
+        files.push({ abs, name: moduleName + '/' + rel, size: imageSize });
+        bytes += imageSize;
+      }
+
       moduleCount += 1;
       entry.modules.push(moduleEntry);
     }
@@ -333,7 +355,7 @@ export async function planExport(bookIds, options) {
     createdAt,
     generator: { plugin: 'dsh-book-slides', version: PLUGIN_VERSION, dsh: '' },
     scope: books.length > 1 ? 'library' : 'book',
-    options: { includeSource: true, includeAudio },
+    options: { includeSource: true, includeAudio, includeImages: true },
     books,
     files,
     stats: { books: books.length, modules: moduleCount, files: files.length + 2, bytes },
@@ -371,6 +393,7 @@ export function buildManifest(plan) {
         contentKey: module.contentKey,
         slides: module.slides,
         audio: module.audio,
+        images: module.images,
         files: module.files,
       })),
     })),
@@ -441,6 +464,7 @@ function safeManifestPath(value, expectedPrefix) {
 function buildAllowlist(manifest) {
   const exact = new Set();
   const audioPrefixes = [];
+  const imagePrefixes = [];
   for (const book of manifest.books) {
     for (const key of ['book', 'pages', 'chapters', 'toc', 'source']) {
       const file = book.files && book.files[key];
@@ -451,12 +475,18 @@ function buildAllowlist(manifest) {
         const file = module.files && module.files[key];
         if (file && file.path) exact.add(String(file.path));
       }
-      if (module.dir) audioPrefixes.push(String(module.dir) + '/audio/');
+      if (module.dir) {
+        audioPrefixes.push(String(module.dir) + '/audio/');
+        imagePrefixes.push(String(module.dir) + '/images/');
+      }
     }
   }
   return (name) => {
     if (exact.has(name)) return true;
     for (const prefix of audioPrefixes) {
+      if (name.startsWith(prefix) && !name.slice(prefix.length).includes('/')) return true;
+    }
+    for (const prefix of imagePrefixes) {
       if (name.startsWith(prefix) && !name.slice(prefix.length).includes('/')) return true;
     }
     return false;
@@ -520,6 +550,47 @@ function normalizeModuleDir(moduleDir, moduleId, bookId) {
       record.error = record.error || '有 ' + missing + ' 页缺音频，已按「本页无配音」导入';
       record.message = record.message || record.error;
       if (record.voice && typeof record.voice === 'object') record.voice.degraded = true;
+    }
+  }
+
+  /* 配图（v1.4）：缺图只影响该页，模块仍是 ready；导入不重跑 GPU */
+  if (slidesDoc && Array.isArray(slidesDoc.slides)) {
+    const hadImages =
+      !!record.images ||
+      slidesDoc.slides.some((slide) => slide && (slide.image_file || (slide.image_status && slide.image_status !== 'none')));
+    if (hadImages) {
+      let imageTotal = 0;
+      let imageDone = 0;
+      let imageFailed = 0;
+      let changed = false;
+      for (const slide of slidesDoc.slides) {
+        if (String((slide && slide.layout) || '') !== 'content_text') continue;
+        imageTotal += 1;
+        const rel = String((slide && slide.image_file) || '');
+        if (rel) {
+          const abs = path.join(moduleDir, ...rel.split('/'));
+          if (!IMAGE_RE.test(rel) || !isFile(abs)) {
+            slide.image_file = null;
+            slide.image_status = 'failed';
+            slide.image_error = 'E_PKG_IMAGE_MISSING：书档里缺这张配图';
+            changed = true;
+          }
+        }
+        if (slide.image_status === 'ready' && slide.image_file) imageDone += 1;
+        else if (slide.image_status === 'failed') imageFailed += 1;
+      }
+      if (changed) writeJson(slidesFile, slidesDoc);
+      const imageStatus = imageTotal && imageDone === imageTotal ? 'done' : imageDone > 0 ? 'partial' : imageFailed > 0 ? 'failed' : 'none';
+      record.images = Object.assign({}, record.images && typeof record.images === 'object' ? record.images : {}, {
+        provider: 'comfyui',
+        status: imageStatus,
+        total: imageTotal,
+        done: imageDone,
+        failed: imageFailed,
+        code: imageFailed ? 'E_IMG_PARTIAL' : null,
+        error: imageFailed ? '有 ' + imageFailed + ' 页缺配图，可到模块上点「补配图」' : null,
+        updatedAt: new Date().toISOString(),
+      });
     }
   }
 
