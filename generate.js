@@ -265,6 +265,19 @@ export function loadModuleById(moduleId) {
   return null;
 }
 
+/**
+ * 这本书有没有正在跑的生成作业。
+ * 书档导出用它拦「导到一半的书」：那样的包会缺最后几页音频，用户看不出原因。
+ */
+export function bookHasActiveJob(bookId) {
+  for (const job of jobs.values()) {
+    if (String(job.bookId) !== String(bookId)) continue;
+    if (ACTIVE_STATUS.includes(String(job.status))) return true;
+    if (job.active && !job.finishedAt) return true;
+  }
+  return false;
+}
+
 /** 同一缓存键的已有模块；有多个时取最近更新的。 */
 export function findModuleByKey(bookDir, cacheKey) {
   const modulesDir = path.join(bookDir, 'modules');

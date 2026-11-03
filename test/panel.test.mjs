@@ -653,3 +653,88 @@ test('来源提示：目录结果、机械回退、以及「有更好的没被�
   assert.match(plain, /结果来源：页眉（机械）/);
   assert.doesNotMatch(plain, /没被采用/, '没有目录结果时不该提醒');
 });
+test('书架工具栏：导入书档、策略下拉、选择模式与导出条', () => {
+  const { mod } = bootPlugin();
+  const books = [
+    { id: 'aaaaaaaaaaaa', title: '一本书', author: '', pages: 10, chapters: 3, modules: 0, chars: 12000 },
+    { id: 'bbbbbbbbbbbb', title: '另一本书', author: '', pages: 5, chapters: 1, modules: 0, chars: 800 },
+  ];
+  const html = renderToString(
+    React.createElement(mod.__components.Shelf, {
+      books: books,
+      loading: false,
+      onOpen: () => {},
+      onRename: () => {},
+      onDelete: () => {},
+      onImport: () => {},
+      onImportPackage: () => {},
+      onSelecting: () => {},
+      selecting: true,
+      selected: ['aaaaaaaaaaaa'],
+      onToggleSelect: () => {},
+      onExport: () => {},
+      onPolicyChange: () => {},
+      policy: 'merge',
+      error: null,
+      onDismissError: () => {},
+    }),
+  );
+  assert.match(html, /导入书档/);
+  assert.match(html, /已有则合并/);
+  assert.match(html, /已有则跳过/);
+  assert.match(html, /已有则另存/);
+  assert.match(html, /已选 1 本/);
+  assert.match(html, /导出书档/);
+  assert.match(html, /aria-label="选择《一本书》"/);
+  assert.match(html, /bl-card bl-line picked/);
+});
+
+test('导出确认层：先估体积，再决定含不含音频', () => {
+  const { mod } = bootPlugin();
+  const html = renderToString(React.createElement(mod.__components.ExportDialog, { ids: ['aaaaaaaaaaaa'], onClose: () => {} }));
+  assert.match(html, /role="dialog"/);
+  assert.match(html, /正在估算体积/);
+  assert.match(html, /开始导出/);
+  assert.match(html, /aria-label="导出书档"/);
+});
+
+test('导入结果层：四类计数、逐项错误码与「打开」入口', () => {
+  const { mod } = bootPlugin();
+  const result = {
+    items: [
+      { file: 'a.zip', bookId: 'aaaaaaaaaaaa', title: '一本书', status: 'imported', modulesAdded: 2 },
+      { file: 'b.zip', bookId: 'bbbbbbbbbbbb', title: '另一本书', status: 'merged', modulesAdded: 0, moduleExists: 1 },
+      { file: 'c.zip', title: '', status: 'failed', code: 'E_PKG_CHECKSUM' },
+    ],
+    summary: { imported: 1, merged: 1, skipped: 0, failed: 1 },
+  };
+  const html = renderToString(
+    React.createElement(mod.__components.ImportResult, {
+      result: result,
+      onClose: () => {},
+      onOpenBook: () => {},
+    }),
+  );
+  assert.match(html, /导入 1 · 合并 1 · 已存在 0 · 失败 1/);
+  assert.match(html, /E_PKG_CHECKSUM/);
+  assert.match(html, /打开《一本书》/);
+});
+
+test('文件选择框：清空 value 之前先把 FileList 复制出来（导入 zip 静默失败的回归）', () => {
+  const { mod } = bootPlugin();
+  const files = [{ name: '书档.zip' }];
+  const target = { value: 'C:\\fakepath\\书档.zip' };
+  Object.defineProperty(target, 'files', {
+    get() {
+      return target.value === '' ? [] : files;
+    },
+    configurable: true,
+  });
+  const picked = mod.__utils.takeFilesFromInput({ target });
+  assert.equal(picked.length, 1, '清空后仍应拿到选中的文件');
+  assert.equal(picked[0].name, '书档.zip');
+  assert.equal(target.value, '', '拿完必须清空，才能再次选同一个文件');
+
+  const empty = mod.__utils.takeFilesFromInput({ target: { files: null, value: '' } });
+  assert.deepEqual(empty, []);
+});

@@ -76,8 +76,21 @@ import {
   probeVoice,
   publicVoiceConfig,
   readVoiceConfig,
+  synthesizeVoicing,
   writeVoiceConfig,
 } from './tts.js';
+import {
+  DEFAULT_POLICY,
+  MAX_PACKAGE_BYTES,
+  PackageError,
+  README_TEXT,
+  buildManifest,
+  importPackage,
+  normalizePolicy,
+  packageFileName,
+  planExport,
+  writeExportStream,
+} from './package.js';
 import { SLIDES_PROMPT_VERSION } from './slides.js';
 
 const require = createRequire(import.meta.url);
@@ -126,6 +139,10 @@ export const ROUTE_PROGRESS = ROUTE_PREFIX + '/progress';
 export const ROUTE_PREFERENCE = ROUTE_PREFIX + '/preference';
 export const ROUTE_TRASH_CLEAR = ROUTE_PREFIX + '/trash/clear';
 export const ROUTE_PDFJS_VENDOR = ROUTE_PREFIX + '/vendor/pdfjs';
+export const ROUTE_EXPORT = ROUTE_PREFIX + '/export';
+export const ROUTE_EXPORT_SIZE = ROUTE_PREFIX + '/export/size';
+export const ROUTE_IMPORT_PACKAGE = ROUTE_PREFIX + '/import/package';
+export const ROUTE_REVOICE = ROUTE_PREFIX + '/revoice';
 
 /** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -1478,6 +1495,233 @@ function handleStorage(req, res) {
   });
 }
 
+/* ------------------------------ 书档（v1.3） ------------------------------ */
+
+function sendPackageError(res, err) {
+  const code = (err && err.code) || 'E_PKG_MANIFEST';
+  sendError(res, code, String((err && err.message) || err), (err && err.hint) || '');
+}
+
+function exportParams(req) {
+  const params = query(req);
+  const ids = String(params.get('books') || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return { ids: ids, includeAudio: String(params.get('audio') || '1') !== '0' };
+}
+
+function contentDisposition(name) {
+  const fallback = String(name || 'package.zip')
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_');
+  return (
+    'attachment; filename="' + fallback + '"; filename*=UTF-8\'\'' + encodeURIComponent(String(name || 'package.zip'))
+  );
+}
+
+async function handleExport(req, res) {
+  const params = exportParams(req);
+  let plan;
+  try {
+    plan = await planExport(params.ids, { includeAudio: params.includeAudio });
+  } catch (err) {
+    sendPackageError(res, err);
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('content-type', 'application/zip');
+  res.setHeader('content-disposition', contentDisposition(packageFileName(plan)));
+  res.setHeader('cache-control', 'no-store');
+  try {
+    writeExportStream(res, plan);
+  } catch {
+    try {
+      res.destroy();
+    } catch {
+      /* 客户端已经断开 */
+    }
+  }
+}
+
+async function handleExportSize(req, res) {
+  const params = exportParams(req);
+  try {
+    const plan = await planExport(params.ids, { includeAudio: params.includeAudio });
+    const manifestBytes = Buffer.byteLength(JSON.stringify(buildManifest(plan), null, 2), 'utf8');
+    const totalBytes = plan.stats.bytes + manifestBytes + Buffer.byteLength(README_TEXT, 'utf8');
+    const warnings = plan.warnings.slice();
+    if (totalBytes > MAX_PACKAGE_BYTES) warnings.push('预计超过 4 GiB，请去掉「含音频」或分批导出');
+    sendJson(res, 200, {
+      ok: true,
+      books: plan.stats.books,
+      modules: plan.stats.modules,
+      files: plan.stats.files,
+      bytes: totalBytes,
+      includeAudio: params.includeAudio,
+      warnings: warnings,
+    });
+  } catch (err) {
+    sendPackageError(res, err);
+  }
+}
+
+/** 上传直接落盘：书档是 GB 级，不能像 JSON 接口那样整包进内存。 */
+function receiveToFile(req, file, limit) {
+  return new Promise((resolve, reject) => {
+    const out = fs.createWriteStream(file);
+    let size = 0;
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      try {
+        out.destroy();
+      } catch {
+        /* 已经失败 */
+      }
+      try {
+        req.destroy();
+      } catch {
+        /* 已经断开 */
+      }
+      reject(err);
+    };
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        fail(new PackageError('E_PKG_TOO_LARGE', '书档超过 4 GiB', '去掉音频或分批导出'));
+      }
+    });
+    req.on('error', () => fail(new PackageError('E_IMPORT_ABORTED', '文件没传完', '检查网络或重试')));
+    req.on('aborted', () => fail(new PackageError('E_IMPORT_ABORTED', '上传被中断', '检查网络或重试')));
+    out.on('error', () => fail(new PackageError('E_PKG_CORRUPT', '写入书档失败', '磁盘可能已满')));
+    out.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      if (!size) {
+        reject(new PackageError('E_PKG_NOT_ZIP', '没收到文件内容', ''));
+        return;
+      }
+      resolve(size);
+    });
+    req.pipe(out);
+  });
+}
+
+async function handleImportPackage(req, res, headers) {
+  const rawName = String((headers && headers['x-file-name']) || '');
+  let fileName = rawName;
+  try {
+    fileName = decodeURIComponent(rawName);
+  } catch {
+    fileName = rawName;
+  }
+  fileName = fileName.trim() || 'package.zip';
+  if (!/\.zip$/i.test(fileName)) {
+    sendError(res, 'E_PKG_NOT_ZIP', '只支持 .zip 书档', '在书架点「导出书档」得到的就是这种文件。');
+    return;
+  }
+  const declared = Number((headers && headers['content-length']) || 0) || 0;
+  if (declared > MAX_PACKAGE_BYTES) {
+    sendError(res, 'E_PKG_TOO_LARGE', '书档超过 4 GiB', '去掉音频或分批导出。');
+    return;
+  }
+  ensureDirs();
+  const jobId = newId(12);
+  const staging = path.join(ROOT, '.import', jobId);
+  fs.mkdirSync(staging, { recursive: true });
+  const zipPath = path.join(staging, 'package.zip');
+  try {
+    await receiveToFile(req, zipPath, MAX_PACKAGE_BYTES);
+    const policy = normalizePolicy(query(req).get('policy') || DEFAULT_POLICY);
+    const result = await importPackage({ zipPath, policy, stagingRoot: staging, fileName });
+    sendJson(res, 200, result);
+  } catch (err) {
+    sendPackageError(res, err);
+  } finally {
+    try {
+      fs.rmSync(staging, { recursive: true, force: true });
+    } catch {
+      /* 清不掉就留给启动清理 */
+    }
+  }
+}
+
+/** 只补配音：不动文案与锚点，只重跑 voicing。 */
+async function handleRevoice(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const moduleId = String(body.moduleId || '').trim();
+  if (!isValidId(moduleId)) {
+    sendError(res, 'E_BAD_ID', '模块号不合法', '');
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
+    return;
+  }
+  if (!found.slides || !Array.isArray(found.slides.slides) || !found.slides.slides.length) {
+    sendError(res, 'E_NOT_FOUND', '这个模块还没有文案，不能单独补配音', '');
+    return;
+  }
+  const config = readVoiceConfig();
+  if (config.provider !== 'qwen3-tts' || !config.apiKey) {
+    sendError(res, 'E_TTS_UNCONFIGURED', '未配置 Qwen 语音', '去设置里选择 Qwen3-TTS 并填 API Key。');
+    return;
+  }
+  let result;
+  try {
+    result = await synthesizeVoicing(found.slides.slides, config, { moduleDir: found.moduleDir });
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_TTS_FAIL', String((err && err.message) || err), (err && err.hint) || '');
+    return;
+  }
+  const at = new Date().toISOString();
+  writeJson(
+    path.join(found.moduleDir, 'slides.json'),
+    Object.assign({}, found.slides, {
+      slides: result.slides,
+      voice: {
+        provider: result.provider,
+        mode: result.mode,
+        model: result.model || config.model || '',
+        rate: Number(config.rate) || 1,
+        voice: config.voice || '',
+      },
+    }),
+  );
+  writeJson(
+    path.join(found.moduleDir, 'module.json'),
+    Object.assign({}, found.module, {
+      status: result.degraded ? 'ready_degraded' : 'ready',
+      code: result.degraded ? result.code : null,
+      error: result.degraded ? result.message : null,
+      message: result.degraded ? result.message : '配音已完成',
+      voice: {
+        provider: result.provider,
+        model: result.model || config.model || '',
+        voice: config.voice || '',
+        rate: Number(config.rate) || 1,
+        mode: result.mode,
+        degraded: !!result.degraded,
+      },
+      updatedAt: at,
+      finishedAt: at,
+    }),
+  );
+  const voiced = result.slides.filter((slide) => slide && slide.audio_file).length;
+  sendJson(res, 200, {
+    ok: true,
+    moduleId: moduleId,
+    voiced: voiced,
+    total: result.slides.length,
+    degraded: !!result.degraded,
+    code: result.degraded ? result.code : null,
+    message: result.degraded ? result.message : '',
+  });
+}
+
 /* ------------------------------ 注册 ------------------------------ */
 
 function guard(handler) {
@@ -1525,8 +1769,34 @@ function resolveCheckDir(ctx, agent, rawInput) {
   return path.resolve(base || process.cwd(), arg);
 }
 
+/** 启动清理：超过 24 小时的导入暂存（进程被杀会留下半截解压）。 */
+function cleanupImportStaging() {
+  const dir = path.join(ROOT, '.import');
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const name of names) {
+    const target = path.join(dir, name);
+    try {
+      const stat = fs.statSync(target);
+      if (stat.mtimeMs < cutoff) fs.rmSync(target, { recursive: true, force: true });
+    } catch {
+      /* 正在清理或被占用，下次再说 */
+    }
+  }
+}
+
 export function apply(ctx) {
   ensureDirs();
+  try {
+    cleanupImportStaging();
+  } catch {
+    /* 清理失败不挡插件启动 */
+  }
   // 上次 DSH 退出时还在跑的作业，重新打开面板要能看到「已中断」而不是永远转圈
   try {
     reconcileAllModules();
@@ -1781,6 +2051,42 @@ export function apply(ctx) {
         return;
       }
       return handleTrashClear(req, res);
+    });
+
+    route(ROUTE_EXPORT, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleExport(req, res);
+    });
+
+    route(ROUTE_EXPORT_SIZE, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleExportSize(req, res);
+    });
+
+    route(ROUTE_IMPORT_PACKAGE, (req, res, headers) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleImportPackage(req, res, headers);
+    });
+
+    route(ROUTE_REVOICE, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleRevoice(req, res);
     });
 
     // pdf.js 浏览器产物：前缀路由（worker / cmaps / fonts / wasm 都在这个目录下）

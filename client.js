@@ -38,6 +38,10 @@ window.__ModuleLoader__.load({
     const PROGRESS_API = '/dsh-book-slides/progress';
     const PREFERENCE_API = '/dsh-book-slides/preference';
     const TRASH_CLEAR_API = '/dsh-book-slides/trash/clear';
+    const EXPORT_API = '/dsh-book-slides/export';
+    const EXPORT_SIZE_API = '/dsh-book-slides/export/size';
+    const IMPORT_PACKAGE_API = '/dsh-book-slides/import/package';
+    const REVOICE_API = '/dsh-book-slides/revoice';
     const PDFJS_BASE = '/dsh-book-slides/vendor/pdfjs/';
     const PDFJS_MODULE = PDFJS_BASE + 'build/pdf.min.mjs';
     const PDFJS_WORKER = PDFJS_BASE + 'build/pdf.worker.min.mjs';
@@ -55,6 +59,7 @@ window.__ModuleLoader__.load({
     const FONT_CSS = `
 .bl-root{height:100%;display:flex;flex-direction:column;position:relative;overflow:hidden;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;font-size:13px;line-height:1.6;color:inherit}
 .bl-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--bl-line);flex:0 0 auto}
+.bl-bar-sub{padding:7px 14px;flex-wrap:wrap}
 .bl-bar h1{margin:0;font-size:14px;font-weight:600;letter-spacing:.02em}
 .bl-grow{flex:1 1 auto;min-width:0}
 .bl-body{flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:14px}
@@ -241,6 +246,21 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
  .bl-divider{display:none}
  .bl-stage-wrap{max-width:100%;height:100%;display:flex;align-items:center}
 }
+.bl-pick{position:absolute;top:10px;left:10px;z-index:6;width:18px;height:18px;accent-color:currentColor}
+.bl-card.picked{background:color-mix(in oklab,currentColor 10%,transparent);outline:2px solid color-mix(in oklab,currentColor 35%,transparent);outline-offset:2px}
+.bl-overlay{position:absolute;inset:0;z-index:45;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.3);padding:16px}
+.bl-dialog{width:100%;max-width:390px;max-height:82%;overflow:auto;background:Canvas;color:CanvasText;border:1px solid var(--bl-line);border-radius:12px;padding:14px;box-shadow:0 18px 44px rgba(0,0,0,.32)}
+.bl-dialog h2{margin:0 0 8px;font-size:14px}
+.bl-dialog p{margin:6px 0;font-size:12px;opacity:.75}
+.bl-dialog-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.bl-check{display:flex;align-items:center;gap:7px;font-size:12.5px;margin:10px 0}
+.bl-select{font:inherit;font-size:12px;color:inherit;background:transparent;border:1px solid var(--bl-line);border-radius:7px;padding:3px 6px;max-width:132px}
+.bl-pkg-item{display:flex;gap:8px;align-items:baseline;font-size:12px;padding:5px 0;border-bottom:1px dashed var(--bl-line)}
+.bl-pkg-item:last-child{border-bottom:none}
+.bl-pkg-item .bl-pkg-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bl-pkg-item .bl-pkg-status{flex:0 0 auto;opacity:.75}
+.bl-pkg-item.bad .bl-pkg-status{color:#d9484b}
+.bl-pkg-sum{font-size:12px;opacity:.8;margin-bottom:6px}
 `;
 
     /* ------------------------------ 数据 ------------------------------ */
@@ -318,6 +338,75 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
       if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
       return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+
+    /** 书档导入走 XHR：GB 级包只有它能给字节级进度。 */
+    function uploadPackage(file, policy, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const query = policy ? '?policy=' + encodeURIComponent(policy) : '';
+        xhr.open('POST', IMPORT_PACKAGE_API + query, true);
+        xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name || 'package.zip'));
+        xhr.setRequestHeader('content-type', 'application/zip');
+        xhr.upload.onprogress = (event) => {
+          if (onProgress && event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+        };
+        xhr.onload = () => {
+          try {
+            resolve(JSON.parse(xhr.responseText || '{}'));
+          } catch {
+            reject(new Error('服务端返回的不是 JSON'));
+          }
+        };
+        xhr.onerror = () => reject(new Error('上传失败：连接断了'));
+        xhr.onabort = () => reject(new Error('已取消上传'));
+        xhr.send(file);
+      });
+    }
+
+    /**
+     * 取文件选择框里的文件。必须在清空 input.value **之前**复制：
+     * 清空 value 会让浏览器同步清掉 FileList，之后再读 length 就是 0——
+     * 那正好是「选了 zip 却什么都不发生」的成因。
+     */
+    function takeFilesFromInput(event) {
+      const target = (event && event.target) || {};
+      const picked = target.files ? Array.from(target.files) : [];
+      try {
+        target.value = '';
+      } catch {
+        /* 只读 input，忽略 */
+      }
+      return picked;
+    }
+
+    /** 多个包/多次请求的结果合成一张清单：包级错误也要落到 items 里看得见。 */
+    function mergeImportResults(results) {
+      const items = [];
+      const summary = { imported: 0, merged: 0, skipped: 0, failed: 0, modulesAdded: 0, modulesExisting: 0 };
+      for (const data of results) {
+        if (data && Array.isArray(data.items)) {
+          for (const item of data.items) {
+            items.push(item);
+            if (item.status === 'imported') summary.imported += 1;
+            else if (item.status === 'merged') summary.merged += 1;
+            else if (item.status === 'skipped') summary.skipped += 1;
+            else summary.failed += 1;
+            summary.modulesAdded += Number(item.modulesAdded) || 0;
+            summary.modulesExisting += Number(item.moduleExists) || 0;
+          }
+        } else {
+          items.push({
+            file: '',
+            title: '',
+            status: 'failed',
+            code: (data && data.code) || 'E_PKG_MANIFEST',
+            message: (data && (data.error || data.message)) || '导入失败',
+          });
+          summary.failed += 1;
+        }
+      }
+      return { items, summary, ok: summary.failed === 0 };
     }
 
     function formatChars(chars) {
@@ -721,7 +810,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       );
     }
 
-    function BookCard({ book, onOpen, onRename, onDelete, progress, onContinue }) {
+    function BookCard({ book, onOpen, onRename, onDelete, progress, onContinue, selecting, selected, onToggleSelect, onExport }) {
       const [menu, setMenu] = useState(false);
       const [renaming, setRenaming] = useState(false);
       const [draft, setDraft] = useState(book.title);
@@ -771,22 +860,40 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       return h(
         'div',
         {
-          className: 'bl-card bl-line',
+          className: 'bl-card bl-line' + (selected ? ' picked' : ''),
           tabIndex: 0,
           role: 'button',
           'aria-label': book.title,
           onClick: () => {
             if (menu || renaming) return;
+            if (selecting) {
+              onToggleSelect && onToggleSelect(book.id);
+              return;
+            }
             onOpen(book.id);
           },
           onKeyDown: (event) => {
             if (event.target !== event.currentTarget) return;
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
+              if (selecting) {
+                onToggleSelect && onToggleSelect(book.id);
+                return;
+              }
               onOpen(book.id);
             }
           },
         },
+        selecting
+          ? h('input', {
+              type: 'checkbox',
+              className: 'bl-pick',
+              checked: !!selected,
+              'aria-label': '选择《' + book.title + '》',
+              onClick: (event) => event.stopPropagation(),
+              onChange: () => onToggleSelect && onToggleSelect(book.id),
+            })
+          : null,
         h('img', { className: 'bl-cover', src: COVER_API + '?bookId=' + encodeURIComponent(book.id), alt: '', loading: 'lazy' }),
         h(
           'button',
@@ -816,6 +923,16 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   },
                 },
                 '改名',
+              ),
+              h(
+                'button',
+                {
+                  onClick: () => {
+                    setMenu(false);
+                    if (onExport) onExport(book.id);
+                  },
+                },
+                '导出书档',
               ),
               h(
                 'button',
@@ -873,9 +990,41 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       );
     }
 
-    function Shelf({ books, loading, onOpen, onRename, onDelete, onImport, error, onDismissError, progress, onContinue }) {
+    function Shelf({
+      books,
+      loading,
+      onOpen,
+      onRename,
+      onDelete,
+      onImport,
+      onImportPackage,
+      onSelecting,
+      selecting,
+      selected = [],
+      onToggleSelect,
+      onExport,
+      onPolicyChange,
+      policy,
+      pkgBusy,
+      error,
+      onDismissError,
+      progress,
+      onContinue,
+    }) {
       const [dragging, setDragging] = useState(false);
       const dragDepth = useRef(0);
+
+      /* 多选模式下 Esc 退出；卡片「⋯」菜单开着时让菜单先关（AC-31）。 */
+      useEffect(() => {
+        if (!selecting || typeof document === 'undefined') return undefined;
+        const onKey = (event) => {
+          if (event.key !== 'Escape') return;
+          if (document.querySelector('.bl-menu')) return;
+          if (onSelecting) onSelecting(false);
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+      }, [selecting, onSelecting]);
 
       const handleFiles = useCallback(
         (fileList) => {
@@ -925,6 +1074,51 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         ),
         h(
           'div',
+          { className: 'bl-bar bl-bar-sub' },
+          h('button', { className: 'bl-btn', disabled: !!pkgBusy, onClick: () => onImportPackage && onImportPackage('pick') }, '导入书档'),
+          h(
+            'select',
+            {
+              className: 'bl-select',
+              value: policy || 'merge',
+              title: '已有同一本书时怎么处理',
+              onChange: (event) => onPolicyChange && onPolicyChange(event.target.value),
+            },
+            h('option', { value: 'merge' }, '已有则合并'),
+            h('option', { value: 'skip' }, '已有则跳过'),
+            h('option', { value: 'copy' }, '已有则另存'),
+          ),
+          h('button', { className: 'bl-btn', onClick: () => onSelecting && onSelecting(!selecting) }, selecting ? '取消选择' : '选择'),
+        ),
+        selecting
+          ? h(
+              'div',
+              { className: 'bl-foot' },
+              h('span', { className: 'bl-hint' }, selected.length ? '已选 ' + selected.length + ' 本' : '点卡片选择要导出的书'),
+              h('span', { className: 'bl-grow' }),
+              h(
+                'button',
+                { className: 'bl-btn bl-btn-primary', disabled: !selected.length, onClick: () => onExport && onExport(selected) },
+                '导出书档',
+              ),
+            )
+          : null,
+        pkgBusy
+          ? h(
+              'div',
+              { className: 'bl-foot', style: { flexDirection: 'column', alignItems: 'stretch', gap: 4 } },
+              h(
+                'div',
+                { style: { fontSize: 11.5, display: 'flex', gap: 6, minWidth: 0 } },
+                h('span', null, '正在导入书档 ' + (pkgBusy.index || 1) + '/' + (pkgBusy.total || 1) + ' · ' + Math.round((pkgBusy.ratio || 0) * 100) + '%'),
+                h('span', { className: 'bl-grow' }),
+                h('span', { style: { opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' } }, pkgBusy.name || ''),
+              ),
+              h('div', { className: 'bl-progress' }, h('i', { style: { width: Math.max(6, Math.round((pkgBusy.ratio || 0) * 100)) + '%' } })),
+            )
+          : null,
+        h(
+          'div',
           { className: 'bl-body' },
           h(ErrorBanner, { error: error, onClose: onDismissError }),
           loading
@@ -955,6 +1149,10 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                       onDelete: onDelete,
                       progress: progress,
                       onContinue: onContinue,
+                      selecting: selecting,
+                      selected: selected.indexOf(book.id) >= 0,
+                      onToggleSelect: onToggleSelect,
+                      onExport: (id) => onExport && onExport([id]),
                     }),
                   ),
                 ),
@@ -1092,7 +1290,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     }
 
     /** 详情页的模块列表：打开 / 重试 / 重新生成 / 删除；生成中的模块就地显示进度与取消。 */
-    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate }) {
+    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate, onRevoice }) {
       const list = Array.isArray(modules) ? modules : [];
       const active = job && job.moduleId ? job : null;
       const runningId = active ? active.moduleId : '';
@@ -1137,6 +1335,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   'div',
                   { className: 'bl-mod-actions' },
                   ready ? h('button', { className: 'bl-btn', disabled: busy, onClick: () => onOpen(item.id) }, '打开') : null,
+                  item.status === 'ready_degraded' && onRevoice
+                    ? h(
+                        'button',
+                        { className: 'bl-btn', disabled: busy, title: '只重跑配音，不重新生成文案', onClick: () => onRevoice(item) },
+                        '仅补配音',
+                      )
+                    : null,
                   bad ? h('button', { className: 'bl-btn', disabled: busy, onClick: () => onRetry(item) }, '重试') : null,
                   ready ? h('button', { className: 'bl-btn', disabled: busy, title: '重新生成会覆盖这一份', onClick: () => onRegenerate(item) }, '重生成') : null,
                   h('button', { className: 'bl-btn', disabled: busy, onClick: () => onDelete(item) }, '删除'),
@@ -2531,6 +2736,28 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         [startGenerate],
       );
 
+      const revoiceModule = useCallback(
+        async (item) => {
+          setBusy(true);
+          try {
+            const data = await postJson(REVOICE_API, { moduleId: item.id });
+            setRefresh((value) => value + 1);
+            if (data && data.degraded) {
+              const err = new Error('有 ' + (data.total - data.voiced) + ' 页配音失败，可稍后再补');
+              err.code = data.code;
+              setError(err);
+            } else {
+              setError(null);
+            }
+          } catch (err) {
+            setError(err);
+          } finally {
+            setBusy(false);
+          }
+        },
+        [setError],
+      );
+
       const removeModule = useCallback(
         async (item) => {
           const ok = typeof window === 'undefined' || window.confirm('删除「' + (item.title || '这个模块') + '」？只删模块，不动书。');
@@ -2792,6 +3019,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                     onRetry: retryModule,
                     onDelete: removeModule,
                     onRegenerate: regenerateModule,
+                    onRevoice: revoiceModule,
                   }),
                   h(TocBox, {
                     toc: toc,
@@ -3262,6 +3490,127 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
 
     /* ------------------------------ 面板根 ------------------------------ */
 
+    /** 导出确认层：先估体积，再决定含不含音频。 */
+    function ExportDialog({ ids, onClose }) {
+      const [audio, setAudio] = useState(true);
+      const [info, setInfo] = useState(null);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        let alive = true;
+        setInfo(null);
+        setError(null);
+        const params = '?books=' + encodeURIComponent(ids.join(',')) + '&audio=' + (audio ? 1 : 0);
+        getJson(EXPORT_SIZE_API + params)
+          .then((data) => {
+            if (alive) setInfo(data);
+          })
+          .catch((err) => {
+            if (alive) setError(err);
+          });
+        return () => {
+          alive = false;
+        };
+      }, [ids, audio]);
+
+      const download = useCallback(() => {
+        const params = '?books=' + encodeURIComponent(ids.join(',')) + '&audio=' + (audio ? 1 : 0);
+        const anchor = document.createElement('a');
+        anchor.href = EXPORT_API + params;
+        anchor.download = '';
+        anchor.rel = 'noopener';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        onClose();
+      }, [ids, audio, onClose]);
+
+      const tooLarge = info && info.bytes > 4 * 1024 ** 3;
+      return h(
+        'div',
+        {
+          className: 'bl-overlay',
+          onClick: (event) => {
+            if (event.target === event.currentTarget) onClose();
+          },
+        },
+        h(
+          'div',
+          { className: 'bl-dialog', role: 'dialog', 'aria-label': '导出书档' },
+          h('h2', null, ids.length > 1 ? '导出 ' + ids.length + ' 本书档' : '导出书档'),
+          error ? h('div', { className: 'bl-err' }, String(error.message || error)) : null,
+          !info && !error ? h('div', { className: 'bl-hint' }, h('span', { className: 'bl-spin' }), ' 正在估算体积…') : null,
+          info
+            ? h(
+                'div',
+                null,
+                h('div', { className: 'bl-pkg-sum' }, '共 ' + info.books + ' 本 · ' + info.modules + ' 个模块 · 约 ' + formatSize(info.bytes)),
+                h(
+                  'label',
+                  { className: 'bl-check' },
+                  h('input', { type: 'checkbox', checked: audio, onChange: (event) => setAudio(event.target.checked) }),
+                  '含音频',
+                ),
+                h('p', null, audio ? '音频一起带走，换台机器点开就能听（包会大一些）。' : '不含音频：导入后每页显示「本页无配音」，可在书里点「仅补配音」补回来。'),
+                info.warnings && info.warnings.length ? h('div', { className: 'bl-note' }, info.warnings.join('；')) : null,
+                tooLarge ? h('div', { className: 'bl-err' }, '超过 4 GB，请去掉「含音频」或分批导出。') : null,
+              )
+            : null,
+          h(
+            'div',
+            { className: 'bl-dialog-foot' },
+            h('button', { className: 'bl-btn', onClick: onClose }, '取消'),
+            h('button', { className: 'bl-btn bl-btn-primary', disabled: !info || tooLarge, onClick: download }, '开始导出'),
+          ),
+        ),
+      );
+    }
+
+    /** 导入结果层：四类计数 + 逐项明细，失败项直接给错误码。 */
+    function ImportResult({ result, onClose, onOpenBook }) {
+      const items = (result && result.items) || [];
+      const summary = (result && result.summary) || { imported: 0, merged: 0, skipped: 0, failed: 0 };
+      const labels = { imported: '已导入', merged: '已合并', skipped: '已存在', failed: '失败' };
+      const first = items.find((item) => item.status === 'imported' || item.status === 'merged');
+      return h(
+        'div',
+        {
+          className: 'bl-overlay',
+          onClick: (event) => {
+            if (event.target === event.currentTarget) onClose();
+          },
+        },
+        h(
+          'div',
+          { className: 'bl-dialog', role: 'dialog', 'aria-label': '导入结果' },
+          h('h2', null, '导入结果'),
+          h(
+            'div',
+            { className: 'bl-pkg-sum' },
+            '导入 ' + summary.imported + ' · 合并 ' + summary.merged + ' · 已存在 ' + summary.skipped + ' · 失败 ' + summary.failed,
+          ),
+          items.map((item, index) =>
+            h(
+              'div',
+              { className: 'bl-pkg-item bl-line' + (item.status === 'failed' ? ' bad' : ''), key: index },
+              h('span', { className: 'bl-pkg-name' }, item.title || item.file || '(未知书档)'),
+              h('span', { className: 'bl-pkg-status' }, labels[item.status] || item.status),
+              item.code ? h('span', { className: 'bl-hint' }, item.code) : null,
+            ),
+          ),
+          summary.failed > 0 ? h('div', { className: 'bl-tip' }, '失败项不影响已成功的书；错误码见附录 B。') : null,
+          h(
+            'div',
+            { className: 'bl-dialog-foot' },
+            first && first.bookId
+              ? h('button', { className: 'bl-btn', onClick: () => onOpenBook(first.bookId) }, '打开《' + (first.title || '这本书') + '》')
+              : null,
+            h('button', { className: 'bl-btn bl-btn-primary', onClick: onClose }, '知道了'),
+          ),
+        ),
+      );
+    }
+
     function BookSlidesPanel() {
       const [nav, setNav] = useState('shelf');
       const [books, setBooks] = useState([]);
@@ -3272,7 +3621,28 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [initialSlide, setInitialSlide] = useState(1);
       const [progress, setProgress] = useState(null);
       const [upload, setUpload] = useState(null);
+      const [selecting, setSelecting] = useState(false);
+      const [selected, setSelected] = useState([]);
+      const [exportIds, setExportIds] = useState(null);
+      const [importResult, setImportResult] = useState(null);
+      const [pkgBusy, setPkgBusy] = useState(null);
+      const [pkgPolicy, setPkgPolicy] = useState(() => {
+        try {
+          return (typeof localStorage !== 'undefined' && localStorage.getItem('book-slides.pkg-policy')) || 'merge';
+        } catch {
+          return 'merge';
+        }
+      });
+      const changePkgPolicy = useCallback((value) => {
+        setPkgPolicy(value);
+        try {
+          if (typeof localStorage !== 'undefined') localStorage.setItem('book-slides.pkg-policy', value);
+        } catch {
+          /* 隐私模式下 localStorage 会抛，忽略 */
+        }
+      }, []);
       const fileInputRef = useRef(null);
+      const pkgInputRef = useRef(null);
 
       const load = useCallback(() => {
         setLoading(true);
@@ -3400,6 +3770,53 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         [openModule],
       );
 
+      const toggleSelect = useCallback((id) => {
+        setSelected((prev) => (prev.indexOf(id) >= 0 ? prev.filter((value) => value !== id) : prev.concat(id)));
+      }, []);
+
+      const startExport = useCallback((ids) => {
+        const list = Array.from(ids || []);
+        if (!list.length) {
+          setError(new Error('先选至少一本书'));
+          return;
+        }
+        setExportIds(list);
+      }, []);
+
+      const closeExport = useCallback(() => {
+        setExportIds(null);
+        setSelecting(false);
+        setSelected([]);
+      }, []);
+
+      const doImportPackages = useCallback(
+        async (fileList) => {
+          const files = Array.from(fileList || []).filter((file) => /\.zip$/i.test(file.name || ''));
+          if (!files.length) {
+            setError(new Error('只支持 .zip 书档'));
+            return;
+          }
+          setError(null);
+          const results = [];
+          for (let index = 0; index < files.length; index += 1) {
+            const file = files[index];
+            const progress = (ratio) => setPkgBusy({ name: file.name, ratio: ratio, index: index + 1, total: files.length });
+            progress(0);
+            try {
+              results.push(await uploadPackage(file, pkgPolicy, progress));
+            } catch (err) {
+              results.push({ ok: false, code: 'E_PKG_CORRUPT', error: String((err && err.message) || err) });
+            }
+          }
+          setPkgBusy(null);
+          setImportResult(mergeImportResults(results));
+          setSelecting(false);
+          setSelected([]);
+          load();
+        },
+        [pkgPolicy, load],
+      );
+
       const body =
         nav === 'module' && moduleId
           ? h(ModuleView, {
@@ -3437,6 +3854,17 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   onRename: handleRename,
                   onDelete: handleDelete,
                   onImport: doImport,
+                  onImportPackage: (action) => {
+                    if (action === 'pick' && pkgInputRef.current) pkgInputRef.current.click();
+                  },
+                  onSelecting: setSelecting,
+                  selecting: selecting,
+                  selected: selected,
+                  onToggleSelect: toggleSelect,
+                  onExport: startExport,
+                  onPolicyChange: changePkgPolicy,
+                  policy: pkgPolicy,
+                  pkgBusy: pkgBusy,
                   error: error,
                   onDismissError: () => setError(null),
                   progress: progress,
@@ -3458,6 +3886,33 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             if (file) doImport(file, null);
           },
         }),
+        h('input', {
+          ref: pkgInputRef,
+          type: 'file',
+          accept: '.zip,application/zip',
+          multiple: true,
+          style: { display: 'none' },
+          onChange: (event) => {
+            const picked = takeFilesFromInput(event);
+            if (!picked.length) {
+              setError(new Error('没有读到文件，请重新选择 .zip 书档'));
+              return;
+            }
+            doImportPackages(picked);
+          },
+        }),
+        exportIds ? h(ExportDialog, { ids: exportIds, onClose: closeExport }) : null,
+        importResult
+          ? h(ImportResult, {
+              result: importResult,
+              onClose: () => setImportResult(null),
+              onOpenBook: (id) => {
+                setImportResult(null);
+                openBook(id);
+                load();
+              },
+            })
+          : null,
         nav === 'shelf'
           ? h(
               'button',
@@ -3562,6 +4017,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         SourcePane: SourcePane,
         Player: Player,
         ModuleView: ModuleView,
+        ExportDialog: ExportDialog,
+        ImportResult: ImportResult,
       },
 
       /** 测试用：PDF 高亮几何是纯函数，单独验证，不用起浏览器。 */
@@ -3571,6 +4028,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         isRenderCancelled: isRenderCancelled,
         bindPopupDismiss: bindPopupDismiss,
         focusJobEntry: focusJobEntry,
+        takeFilesFromInput: takeFilesFromInput,
       },
     };
   },

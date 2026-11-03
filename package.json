@@ -22,6 +22,8 @@
     "slides.js",
     "tts.js",
     "generate.js",
+    "pkgzip.js",
+    "package.js",
     "prompts/*.md",
     "cordis.patch.yml",
     "icon.svg",
@@ -50,10 +52,12 @@
     "dsh": ">=0.2.0-rc.2"
   },
   "dependencies": {
-    "pdfjs-dist": "^6.5.438"
+    "pdfjs-dist": "^6.5.438",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
   },
   "scripts": {
-    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs",
+    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs && node test/package.test.mjs",
     "test:mech": "node test/books.mech.e2e.mjs",
     "test:chapters": "node test/books.toc.e2e.mjs",
     "test:truth": "node test/books.toc.e2e.mjs --truth test/truth --baseline",
