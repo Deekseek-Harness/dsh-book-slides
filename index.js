@@ -76,6 +76,22 @@ const require = createRequire(import.meta.url);
 const PKG = require('./package.json');
 export const PLUGIN_VERSION = String((PKG && PKG.version) || '0.1.0');
 
+/**
+ * pdf.js 的浏览器产物目录：播放器左窗格要渲染 PDF 视觉版式，客户端动态 import
+ * `build/pdf.min.mjs`，worker / cmaps / standard_fonts / wasm 由本插件同源提供。
+ * 用 require.resolve 定位依赖，不把第三方文件复制进仓库。
+ */
+let pdfjsRootCache = null;
+function pdfjsRoot() {
+  if (pdfjsRootCache !== null) return pdfjsRootCache;
+  try {
+    pdfjsRootCache = path.dirname(require.resolve('pdfjs-dist/package.json'));
+  } catch {
+    pdfjsRootCache = '';
+  }
+  return pdfjsRootCache;
+}
+
 export const ROUTE_PREFIX = '/dsh-book-slides';
 export const ROUTE_BOOKS = ROUTE_PREFIX + '/books';
 export const ROUTE_BOOK = ROUTE_PREFIX + '/book';
@@ -101,6 +117,7 @@ export const ROUTE_PAGES = ROUTE_PREFIX + '/pages';
 export const ROUTE_PROGRESS = ROUTE_PREFIX + '/progress';
 export const ROUTE_PREFERENCE = ROUTE_PREFIX + '/preference';
 export const ROUTE_TRASH_CLEAR = ROUTE_PREFIX + '/trash/clear';
+export const ROUTE_PDFJS_VENDOR = ROUTE_PREFIX + '/vendor/pdfjs';
 
 /** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -1190,6 +1207,81 @@ function handlePages(req, res) {
   sendJson(res, 200, { ok: true, from: from, to: to, total: total, pages: slice });
 }
 
+/**
+ * 同源代理 pdf.js 的浏览器产物（build / cmaps / standard_fonts / wasm / iccs /
+ * image_decoders）。只读、只允许这些目录，路径先 resolve 再确认仍在依赖目录内。
+ */
+const PDFJS_ASSET_TYPES = {
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.bcmap': 'application/octet-stream',
+  '.pfb': 'application/octet-stream',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.icc': 'application/octet-stream',
+};
+const PDFJS_ALLOWED_DIRS = /^(build|cmaps|standard_fonts|wasm|iccs|image_decoders)\//;
+
+function handlePdfjsAsset(req, res) {
+  const root = pdfjsRoot();
+  if (!root) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const prefix = ROUTE_PDFJS_VENDOR + '/';
+  let rel = '';
+  try {
+    const pathname = new URL(String((req && req.url) || '/'), 'http://localhost').pathname;
+    if (!pathname.startsWith(prefix)) {
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+    rel = decodeURIComponent(pathname.slice(prefix.length));
+  } catch {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  if (!rel || rel.includes('\0') || rel.includes('..') || path.isAbsolute(rel) || !PDFJS_ALLOWED_DIRS.test(rel)) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const resolvedRoot = path.resolve(root);
+  const file = path.resolve(resolvedRoot, rel);
+  const inside = path.relative(resolvedRoot, file);
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  if (!stat.isFile()) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const type = PDFJS_ASSET_TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
+  res.statusCode = 200;
+  res.setHeader('content-type', type);
+  res.setHeader('content-length', String(stat.size));
+  res.setHeader('cache-control', 'public, max-age=3600');
+  fs.createReadStream(file).pipe(res);
+}
+
 /** GET /progress：书架「继续听」位置；模块没就绪或已删就当作没有。 */
 function handleProgressGet(req, res) {
   let progress = readProgress();
@@ -1641,6 +1733,15 @@ export function apply(ctx) {
       }
       return handleTrashClear(req, res);
     });
+
+    // pdf.js 浏览器产物：前缀路由（worker / cmaps / fonts / wasm 都在这个目录下）
+    offs.push(
+      scoped.webServer.register({
+        kind: 'prefix',
+        path: ROUTE_PDFJS_VENDOR,
+        handler: guard(handlePdfjsAsset),
+      }),
+    );
 
     route(ROUTE_PREFIX + '/storage', (req, res) => {
       handleStorage(req, res);

@@ -232,44 +232,84 @@ test('幻灯片舞台：封面、要点、引文三种版式各自渲染', () =>
   assert.match(cover, /bl-stage-rule/);
 });
 
-test('原文窗格：锚点段落高亮，未锚定时出提示条', () => {
+test('PDF 原文窗格：视觉版式容器、页码与锚点提示条', () => {
   const { mod } = bootPlugin();
-  const pages = [
-    { page: 2, text: '第一段文字\n第二段文字，应该高亮\n第三段文字' },
-    { page: 3, text: '第三页的原文' },
-  ];
   const slide = {
     slide_index: 2,
+    source_quote: '第二段文字',
     source_pages: { from: 2, to: 3 },
     source_anchor: { page: 2, para_index: 1 },
     anchor_status: 'anchored',
   };
   const html = renderToString(
     React.createElement(mod.__components.SourcePane, {
-      pages: pages,
+      pdfDoc: {},
+      pdfLoading: false,
+      pdfError: null,
       slide: slide,
-      loading: false,
-      error: null,
       bookId: 'aaaaaaaaaaaa',
     }),
   );
-  assert.match(html, /第二段文字/);
-  assert.match(html, /bl-source-para bl-hl/);
+  assert.match(html, /bl-pdf-pages/);
+  assert.match(html, /bl-pdf-page/);
+  assert.match(html, /data-page="2"/);
+  assert.match(html, /data-page="3"/);
+  assert.match(html, /第 2 页/);
   assert.match(html, /#page=2/);
   assert.match(html, /打开原始 PDF/);
   assert.doesNotMatch(html, /未定位到原句/);
 
   const unanchored = renderToString(
     React.createElement(mod.__components.SourcePane, {
-      pages: pages,
+      pdfDoc: {},
+      pdfLoading: false,
+      pdfError: null,
       slide: Object.assign({}, slide, { source_anchor: null, anchor_status: 'unanchored' }),
-      loading: false,
-      error: null,
       bookId: 'aaaaaaaaaaaa',
     }),
   );
   assert.match(unanchored, /未定位到原句/);
-  assert.doesNotMatch(unanchored, /bl-source-para bl-hl/);
+  assert.match(unanchored, /显示整页 PDF/);
+
+  const loading = renderToString(
+    React.createElement(mod.__components.SourcePane, {
+      pdfDoc: null,
+      pdfLoading: true,
+      pdfError: null,
+      slide: slide,
+      bookId: 'aaaaaaaaaaaa',
+    }),
+  );
+  assert.match(loading, /正在渲染 PDF 原文/);
+});
+
+test('PDF 高亮几何：把 source_quote 映射成页内百分比矩形', () => {
+  const { mod } = bootPlugin();
+  const pdfjs = {
+    Util: {
+      transform: (m1, m2) => [
+        m1[0] * m2[0] + m1[2] * m2[1],
+        m1[1] * m2[0] + m1[3] * m2[1],
+        m1[0] * m2[2] + m1[2] * m2[3],
+        m1[1] * m2[2] + m1[3] * m2[3],
+        m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+        m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+      ],
+    },
+  };
+  const items = [
+    { str: '第一段文字', transform: [1, 0, 0, 10, 100, 700], width: 40 },
+    { str: '第二段文字', transform: [1, 0, 0, 10, 150, 700], width: 40 },
+    { str: '下一行', transform: [1, 0, 0, 10, 100, 680], width: 30 },
+  ];
+  const viewport = { transform: [1, 0, 0, -1, 0, 800], width: 600, height: 800, scale: 1 };
+  const rects = mod.__utils.pdfHighlightRects(items, '第二段文字', viewport, pdfjs);
+  assert.equal(rects.length, 1);
+  assert.ok(rects[0].left > 20 && rects[0].left < 30, 'left 应约 25%');
+  assert.ok(rects[0].width > 5 && rects[0].width < 10, '宽约 6.7%');
+  assert.ok(rects[0].top > 0 && rects[0].top < 100);
+  assert.equal(mod.__utils.normalizePdfText('第二段，文字！'), '第二段文字');
+  assert.equal(mod.__utils.pdfHighlightRects(items, '完全不存在的句子', viewport, pdfjs).length, 0);
 });
 
 test('书架「继续听」：有播放进度时显示页码入口', () => {
@@ -317,7 +357,7 @@ test('分屏播放器：初始页、舞台、控制条、缩略图都能渲染',
   assert.match(html, /第二页标题/);
   assert.match(html, /第 2 \/ 3 页/);
   assert.match(html, /开始听/);
-  assert.match(html, /正在取原文/);
+  assert.match(html, /正在渲染 PDF 原文/);
   assert.match(html, /播放语速/);
   assert.match(html, /静音/);
   assert.match(html, /空格 播放\/暂停/);

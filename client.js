@@ -5,7 +5,7 @@
  *   - 拖入 PDF，看得到上传进度与解析等待
  *   - 卡片流看书封、章数、字数、模块数
  *   - 点开一本书：目录切章、勾选章节、生成精讲（M3：进度/取消/重试）
- *   - 生成完进分屏播放器（M4）：左原文高亮、右幻灯片、本机朗读、自动翻页、快捷键
+ *   - 生成完进分屏播放器（M4）：左 PDF 视觉版式 + 锚点高亮、右幻灯片、本机朗读、自动翻页、快捷键
  *   - 书架「继续听」回到上次页码；设置页：语音、试听、存储与回收站
  *
  * 本文件不碰磁盘：所有数据走 Host 半体的 /dsh-book-slides/* 路由。
@@ -35,10 +35,12 @@ window.__ModuleLoader__.load({
     const AUDIO_API = '/dsh-book-slides/audio';
     const VOICE_API = '/dsh-book-slides/voice';
     const VOICE_PROBE_API = '/dsh-book-slides/voice/probe';
-    const PAGES_API = '/dsh-book-slides/pages';
     const PROGRESS_API = '/dsh-book-slides/progress';
     const PREFERENCE_API = '/dsh-book-slides/preference';
     const TRASH_CLEAR_API = '/dsh-book-slides/trash/clear';
+    const PDFJS_BASE = '/dsh-book-slides/vendor/pdfjs/';
+    const PDFJS_MODULE = PDFJS_BASE + 'build/pdf.min.mjs';
+    const PDFJS_WORKER = PDFJS_BASE + 'build/pdf.worker.min.mjs';
     const FILE_API = '/dsh-book-slides/file';
     const COVER_API = '/dsh-book-slides/cover';
     const STORAGE_API = '/dsh-book-slides/storage';
@@ -185,10 +187,12 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
 .bl-source-sticky{position:sticky;top:-12px;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0;background:var(--dsw-alias-bg-base,Canvas);border-bottom:1px solid var(--bl-line);margin-bottom:10px}
 .bl-source-sticky a{color:inherit;text-decoration:none}
 .bl-source-banner{border:1px solid var(--bl-line);border-radius:7px;padding:5px 9px;font-size:11.5px;opacity:.7;margin:0 0 10px;background:color-mix(in oklab,currentColor 4%,transparent)}
-.bl-source-page{margin:0 0 18px}
-.bl-source-page-head{font-size:10.5px;opacity:.42;letter-spacing:.1em;margin-bottom:3px}
-.bl-source-para{margin:0;min-height:1.85em;font-size:13px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 5px;border-radius:5px}
-.bl-source-para.bl-hl{background:color-mix(in oklab,#f0b429 30%,transparent);box-shadow:inset 3px 0 0 #d99a00}
+.bl-pdf-pages{padding-bottom:22px}
+.bl-pdf-page{position:relative;margin:0 auto 12px;max-width:100%;min-height:120px;background:#fff;border-radius:5px;box-shadow:0 6px 18px rgba(0,0,0,.16);overflow:hidden}
+.bl-pdf-page canvas{display:block;width:100%;height:auto}
+.bl-pdf-hl-layer{position:absolute;inset:0;pointer-events:none}
+.bl-pdf-hl{position:absolute;background:rgba(240,180,41,.38);box-shadow:0 0 0 1px rgba(217,154,0,.35);border-radius:2px;mix-blend-mode:multiply}
+.bl-pdf-page-no{position:absolute;right:8px;top:6px;font-size:10px;color:#8a7355;background:rgba(251,248,241,.85);padding:1px 5px;border-radius:4px}
 .bl-stage-wrap{width:100%;max-width:min(100%,calc((100vh - 250px) * 16 / 9));margin:0 auto}
 .bl-stage{width:100%;aspect-ratio:16/9;container-type:inline-size;background:#fbf8f1;color:#241f1a;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.22);overflow:hidden;position:relative;display:flex;flex-direction:column;padding:clamp(14px,3.4cqw,44px)}
 .bl-stage-cover{justify-content:center}
@@ -416,6 +420,133 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       } catch {
         /* 忽略 */
       }
+    }
+
+    /* ------------------------------ PDF 视觉版式（M4 变更） ------------------------------ */
+
+    /**
+     * pdf.js 不走 npm bundler：客户端动态 import 宿主同源转发的
+     * /dsh-book-slides/vendor/pdfjs/build/pdf.min.mjs，worker 也用同源文件。
+     * 这样插件仍然零构建，PDF 字节直接从 /file（支持 Range）流进来。
+     */
+    let pdfjsPromise = null;
+
+    function loadPdfJs() {
+      if (typeof window === 'undefined') return Promise.reject(new Error('没有浏览器环境'));
+      if (!pdfjsPromise) {
+        pdfjsPromise = import(PDFJS_MODULE)
+          .then((mod) => {
+            if (mod && mod.GlobalWorkerOptions) mod.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+            return mod;
+          })
+          .catch((err) => {
+            pdfjsPromise = null;
+            throw err;
+          });
+      }
+      return pdfjsPromise;
+    }
+
+    async function openPdfDocument(bookId) {
+      const pdfjs = await loadPdfJs();
+      const task = pdfjs.getDocument({
+        url: FILE_API + '?bookId=' + encodeURIComponent(bookId),
+        cMapUrl: PDFJS_BASE + 'cmaps/',
+        cMapPacked: true,
+        standardFontDataUrl: PDFJS_BASE + 'standard_fonts/',
+        wasmUrl: PDFJS_BASE + 'wasm/',
+        disableWorkerRendering: true,
+        // 播放器一次只看当前 source_pages 的几页，别让 pdf.js 预取整本 200MB
+        disableAutoFetch: true,
+        isEvalSupported: false,
+      });
+      const doc = await task.promise;
+      // pdf.js 的 destroy 在 loadingTask 上，PDFDocumentProxy 本身不一定有
+      return {
+        doc: doc,
+        destroy: () => {
+          try {
+            return task.destroy();
+          } catch {
+            return Promise.resolve();
+          }
+        },
+      };
+    }
+
+    /** 与 slides.js 的归一化保持一致：去空白、去标点、全角转半角、小写。 */
+    function normalizePdfText(value) {
+      return String(value == null ? '' : value)
+        .replace(/[\u200b-\u200f\u202a-\u202e\ufeff]/g, '')
+        .replace(/[\uff01-\uff5e]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[\p{P}\p{S}]/gu, '')
+        .toLowerCase();
+    }
+
+    /**
+     * 把 source_quote 映射到 pdf.js 文本项的矩形，返回相对页面的百分比坐标。
+     * 整句优先，找不到时用前 14 字兜底；按基线聚成行，一行一个高亮块。
+     */
+    function pdfHighlightRects(items, quote, viewport, pdfjs) {
+      const needle = normalizePdfText(quote);
+      if (!needle || !Array.isArray(items) || !viewport || !viewport.width || !pdfjs || !pdfjs.Util) return [];
+      let text = '';
+      const owners = [];
+      items.forEach((item, index) => {
+        const str = String((item && item.str) || '');
+        if (!str) return;
+        for (const ch of normalizePdfText(str)) {
+          text += ch;
+          owners.push(index);
+        }
+      });
+      let start = text.indexOf(needle);
+      let length = needle.length;
+      if (start < 0) {
+        const prefix = needle.slice(0, Math.min(14, needle.length));
+        start = text.indexOf(prefix);
+        length = prefix.length;
+      }
+      if (start < 0) return [];
+
+      const used = new Set();
+      for (let i = start; i < start + length && i < owners.length; i += 1) used.add(owners[i]);
+
+      // 同一基线的碎片合成一行，避免一句话被拆成十几个小色块
+      const lines = new Map();
+      for (const index of used) {
+        const item = items[index];
+        if (!item || !item.transform) continue;
+        const tx = pdfjs.Util.transform(viewport.transform, item.transform);
+        const fontHeight = Math.max(5, Math.hypot(tx[2], tx[3]));
+        const width = Math.max(2, (Number(item.width) || 0) * viewport.scale);
+        const x = tx[4];
+        const baseline = tx[5];
+        const key = Math.round(baseline * 2) / 2;
+        const line = lines.get(key);
+        if (line) {
+          line.left = Math.min(line.left, x);
+          line.right = Math.max(line.right, x + width);
+        } else {
+          lines.set(key, { left: x, right: x + width, top: baseline - fontHeight, height: fontHeight });
+        }
+      }
+
+      return Array.from(lines.values())
+        .map((line) => {
+          const left = (line.left / viewport.width) * 100;
+          const top = (line.top / viewport.height) * 100;
+          const width = ((line.right - line.left) / viewport.width) * 100;
+          const height = ((line.height * 1.35) / viewport.height) * 100;
+          return {
+            left: Math.max(0, Math.min(100, left)),
+            top: Math.max(0, Math.min(100, top)),
+            width: Math.max(0.5, Math.min(100, width)),
+            height: Math.max(0.5, Math.min(100, height)),
+          };
+        })
+        .filter((rect) => rect.left >= 0 && rect.top >= 0 && rect.width > 0 && rect.height > 0);
     }
 
     /* ------------------------------ 组件 ------------------------------ */
@@ -971,20 +1102,90 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     }
 
     /** 原文窗格：按 source_pages 显示原始文本，命中锚点的段落高亮并滚进视野。 */
-    function SourcePane({ pages, slide, loading, error, bookId }) {
+    /** 原文窗格：用 pdf.js 把 source_pages 渲染成 PDF 视觉版式，锚点段落叠加高亮。 */
+    function SourcePane({ pdfDoc, pdfLoading, pdfError, slide, bookId }) {
       const rootRef = useRef(null);
+      const canvasRefs = useRef(new Map());
+      const [width, setWidth] = useState(0);
+      const [highlights, setHighlights] = useState({});
+      const [renderError, setRenderError] = useState(null);
+      const [highlightMiss, setHighlightMiss] = useState(false);
       const anchor = slide && slide.source_anchor ? slide.source_anchor : null;
       const range = (slide && slide.source_pages) || { from: 1, to: 1 };
       const from = Math.max(1, Math.round(Number(range.from) || 1));
       const to = Math.max(from, Math.round(Number(range.to) || from));
       const chipPage = anchor ? Math.max(1, Math.round(Number(anchor.page) || from)) : from;
-      const highlightKey = slide ? slide.slide_index : 0;
+      const anchorPage = anchor ? Math.max(1, Math.round(Number(anchor.page) || 0)) : 0;
+      const slideKey = slide ? slide.slide_index : 0;
+      const quote = slide ? slide.source_quote : '';
+
+      // 窗格宽度决定 canvas 分辨率；百分比高亮不依赖具体像素，所以拖动分隔条不用重算坐标
+      useEffect(() => {
+        const element = rootRef.current;
+        if (!element) return undefined;
+        const measure = () => {
+          const next = Math.floor(element.clientWidth - 32);
+          if (next > 0) setWidth(next);
+        };
+        measure();
+        if (typeof ResizeObserver === 'function') {
+          const observer = new ResizeObserver(measure);
+          observer.observe(element);
+          return () => observer.disconnect();
+        }
+        window.addEventListener('resize', measure);
+        return () => window.removeEventListener('resize', measure);
+      }, []);
 
       useEffect(() => {
-        if (loading) return;
+        if (!pdfDoc || !width) return undefined;
+        let alive = true;
+        setRenderError(null);
+        setHighlights({});
+        setHighlightMiss(false);
+        const canvasMap = canvasRefs.current;
+
+        const renderPages = async () => {
+          const pdfjs = await loadPdfJs();
+          const found = {};
+          for (let pageNo = from; pageNo <= to; pageNo += 1) {
+            if (!alive) return;
+            const page = await pdfDoc.getPage(pageNo);
+            const base = page.getViewport({ scale: 1 });
+            const cssScale = Math.max(0.05, width / base.width);
+            const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+            const renderViewport = page.getViewport({ scale: cssScale * dpr });
+            const canvas = canvasMap.get(pageNo);
+            if (!canvas) continue;
+            canvas.width = Math.max(1, Math.floor(renderViewport.width));
+            canvas.height = Math.max(1, Math.floor(renderViewport.height));
+            await page.render({ canvas: canvas, viewport: renderViewport }).promise;
+            if (!alive) return;
+            if (pageNo === anchorPage && quote) {
+              const text = await page.getTextContent();
+              const rects = pdfHighlightRects(text.items, quote, page.getViewport({ scale: cssScale }), pdfjs);
+              if (rects.length) found[pageNo] = rects;
+            }
+          }
+          if (!alive) return;
+          setHighlights(found);
+          setHighlightMiss(!!anchorPage && !!quote && !Object.keys(found).length);
+        };
+
+        renderPages().catch((err) => {
+          if (alive) setRenderError(err);
+        });
+        return () => {
+          alive = false;
+        };
+      }, [pdfDoc, width, from, to, slideKey, quote, anchorPage]);
+
+      // 高亮出来后滚到高亮位置；没有高亮就滚到锚点页顶部
+      useEffect(() => {
+        if (pdfLoading) return;
         const root = rootRef.current;
         if (!root) return;
-        const node = root.querySelector('[data-highlight="1"]');
+        const node = root.querySelector('[data-highlight="1"]') || root.querySelector('[data-anchor="1"]');
         if (node && typeof node.scrollIntoView === 'function') {
           try {
             node.scrollIntoView({ block: 'center' });
@@ -992,38 +1193,56 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             /* 某些嵌入环境不支持参数 */
           }
         }
-      }, [loading, highlightKey, from, to]);
+      }, [highlights, slideKey, pdfLoading]);
 
       let body = null;
-      if (loading) {
-        body = h('div', { style: { padding: '22px 4px', opacity: 0.65 } }, h('span', { className: 'bl-spin' }), ' 正在取原文…');
-      } else if (error) {
-        body = h('div', { className: 'bl-err' }, '原文没取到：' + String((error && error.message) || error));
-      } else if (!Array.isArray(pages) || pages.length === 0) {
-        body = h('div', { className: 'bl-note' }, '这一页附近没有原文。');
+      if (pdfLoading) {
+        body = h('div', { style: { padding: '22px 4px', opacity: 0.65 } }, h('span', { className: 'bl-spin' }), ' 正在渲染 PDF 原文…');
+      } else if (pdfError) {
+        body = h('div', { className: 'bl-err' }, 'PDF 原文没打开：' + String((pdfError && pdfError.message) || pdfError));
+      } else if (!pdfDoc) {
+        body = h('div', { className: 'bl-note' }, 'PDF 原文还没有加载好。');
       } else {
-        body = pages.map((page) =>
-          h(
-            'section',
-            { className: 'bl-source-page', key: page.page, 'data-page': page.page },
-            h('div', { className: 'bl-source-page-head' }, '第 ' + page.page + ' 页'),
-            String(page.text || '')
-              .split('\n')
-              .map((line, lineIndex) => {
-                const hit =
-                  anchor &&
-                  Number(page.page) === Number(anchor.page) &&
-                  lineIndex === Number(anchor.para_index);
-                return h(
-                  'p',
-                  {
-                    key: lineIndex,
-                    className: 'bl-source-para' + (hit ? ' bl-hl' : ''),
-                    'data-highlight': hit ? '1' : undefined,
-                  },
-                  line || '\u00a0',
-                );
+        const pageNos = [];
+        for (let pageNo = from; pageNo <= to; pageNo += 1) pageNos.push(pageNo);
+        body = h(
+          'div',
+          { className: 'bl-pdf-pages' },
+          renderError ? h('div', { className: 'bl-err' }, '这一页 PDF 渲染失败：' + String((renderError && renderError.message) || renderError)) : null,
+          pageNos.map((pageNo) =>
+            h(
+              'section',
+              {
+                className: 'bl-pdf-page',
+                key: pageNo,
+                'data-page': pageNo,
+                'data-anchor': pageNo === anchorPage ? '1' : undefined,
+              },
+              h('canvas', {
+                ref: (node) => {
+                  if (node) canvasRefs.current.set(pageNo, node);
+                  else canvasRefs.current.delete(pageNo);
+                },
               }),
+              h(
+                'div',
+                { className: 'bl-pdf-hl-layer' },
+                (highlights[pageNo] || []).map((rect, index) =>
+                  h('i', {
+                    key: index,
+                    className: 'bl-pdf-hl',
+                    'data-highlight': index === 0 ? '1' : undefined,
+                    style: {
+                      left: rect.left + '%',
+                      top: rect.top + '%',
+                      width: rect.width + '%',
+                      height: rect.height + '%',
+                    },
+                  }),
+                ),
+              ),
+              h('div', { className: 'bl-pdf-page-no' }, '第 ' + pageNo + ' 页'),
+            ),
           ),
         );
       }
@@ -1048,7 +1267,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             '打开原始 PDF',
           ),
         ),
-        !anchor ? h('div', { className: 'bl-source-banner' }, '本页未定位到原句，显示整页原文') : null,
+        !anchor ? h('div', { className: 'bl-source-banner' }, '本页未定位到原句，显示整页 PDF') : null,
+        highlightMiss ? h('div', { className: 'bl-source-banner' }, '本页原句没能在 PDF 页面上定位，显示整页') : null,
         body,
       );
     }
@@ -1078,12 +1298,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [status, setStatus] = useState('点「开始听」从这一页开始朗读');
       const [noAudio, setNoAudio] = useState(false);
       const [progress, setProgress] = useState(0);
-      const [pageState, setPageState] = useState({ key: '', loading: true, pages: [], error: null });
+      const [pdfDoc, setPdfDoc] = useState(null);
+      const [pdfLoading, setPdfLoading] = useState(true);
+      const [pdfError, setPdfError] = useState(null);
       const [fullscreen, setFullscreen] = useState(false);
 
       const rootRef = useRef(null);
       const mainRef = useRef(null);
-      const cacheRef = useRef(new Map());
       const audioRef = useRef(null);
       const skipTimerRef = useRef(null);
       const tickTimerRef = useRef(null);
@@ -1167,34 +1388,43 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         postJson(PROGRESS_API, { bookId: book.id, moduleId: module.id, slide: index + 1 }).catch(() => {});
       }, [index, book.id, module.id, slides.length]);
 
-      /* 取当前页 source_pages 的原文；同一页范围只取一次 */
+      /* 打开整本 PDF；页面渲染由 SourcePane 按 source_pages 做 */
       useEffect(() => {
-        if (!slide) return undefined;
-        const range = slide.source_pages || { from: 1, to: 1 };
-        const from = Math.max(1, Math.round(Number(range.from) || 1));
-        const to = Math.max(from, Math.round(Number(range.to) || from));
-        const key = from + '-' + to;
-        if (cacheRef.current.has(key)) {
-          setPageState({ key: key, loading: false, pages: cacheRef.current.get(key), error: null });
-          return undefined;
-        }
-        setPageState({ key: key, loading: true, pages: [], error: null });
         let alive = true;
-        getJson(PAGES_API + '?bookId=' + encodeURIComponent(book.id) + '&from=' + from + '&to=' + to)
-          .then((data) => {
-            if (!alive) return;
-            const list = Array.isArray(data.pages) ? data.pages : [];
-            cacheRef.current.set(key, list);
-            setPageState({ key: key, loading: false, pages: list, error: null });
+        let handle = null;
+        setPdfLoading(true);
+        setPdfError(null);
+        setPdfDoc(null);
+        openPdfDocument(book.id)
+          .then((value) => {
+            if (!alive) {
+              try {
+                value.destroy();
+              } catch {
+                /* 已经销毁 */
+              }
+              return;
+            }
+            handle = value;
+            setPdfDoc(value.doc);
+            setPdfLoading(false);
           })
           .catch((err) => {
             if (!alive) return;
-            setPageState({ key: key, loading: false, pages: [], error: err });
+            setPdfError(err);
+            setPdfLoading(false);
           });
         return () => {
           alive = false;
+          if (handle) {
+            try {
+              handle.destroy();
+            } catch {
+              /* 已经销毁 */
+            }
+          }
         };
-      }, [slide && slide.slide_index, book.id]);
+      }, [book.id]);
 
       /* 预加载下一页云端音频；浏览器朗读没有文件可预载 */
       useEffect(() => {
@@ -1520,10 +1750,10 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           'div',
           { className: 'bl-player-main', ref: mainRef },
           h(SourcePane, {
-            pages: pageState.pages,
+            pdfDoc: pdfDoc,
+            pdfLoading: pdfLoading,
+            pdfError: pdfError,
             slide: slide,
-            loading: pageState.loading,
-            error: pageState.error,
             bookId: book.id,
           }),
           h('div', {
@@ -2921,6 +3151,9 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         Player: Player,
         ModuleView: ModuleView,
       },
+
+      /** 测试用：PDF 高亮几何是纯函数，单独验证，不用起浏览器。 */
+      __utils: { normalizePdfText: normalizePdfText, pdfHighlightRects: pdfHighlightRects },
     };
   },
 });

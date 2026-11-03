@@ -21,15 +21,17 @@ delete process.env.DSH_HOME;
 
 const plugin = await import('../index.js');
 
-/** 假 ctx：把 webServer.register 收进一张路由表。 */
+/** 假 ctx：把 webServer.register 收进路由表，prefix 单独存。 */
 function makeContext() {
   const routes = new Map();
+  const prefixes = new Map();
   const commands = [];
   const scoped = {
     webServer: {
       register(options) {
-        routes.set(options.path, options.handler);
-        return () => routes.delete(options.path);
+        const table = options.kind === 'prefix' ? prefixes : routes;
+        table.set(options.path, options.handler);
+        return () => table.delete(options.path);
       },
     },
     commands: {
@@ -48,15 +50,23 @@ function makeContext() {
       return undefined;
     },
   };
-  return { ctx, routes, commands };
+  return { ctx, routes, prefixes, commands };
 }
 
-const { ctx, routes, commands } = makeContext();
+const { ctx, routes, prefixes, commands } = makeContext();
 plugin.apply(ctx);
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
-  const handler = routes.get(url.pathname);
+  let handler = routes.get(url.pathname);
+  if (!handler) {
+    for (const [prefix, candidate] of prefixes) {
+      if (url.pathname === prefix || url.pathname.startsWith(prefix + '/')) {
+        handler = candidate;
+        break;
+      }
+    }
+  }
   if (!handler) {
     res.statusCode = 404;
     res.end('no route');
@@ -316,6 +326,27 @@ test('偏好：分隔条比例与语速夹到合法区间并持久化', async ()
 test('方法不对返回 405', async () => {
   const res = await post('/dsh-book-slides/books', '{}');
   assert.equal(res.status, 405);
+});
+
+test('pdf.js 资源：module / worker / cmaps 同源可取，越界路径拒绝', async () => {
+  const moduleRes = await fetch(base + '/dsh-book-slides/vendor/pdfjs/build/pdf.min.mjs');
+  assert.equal(moduleRes.status, 200);
+  assert.match(moduleRes.headers.get('content-type'), /javascript/);
+  const moduleBody = await moduleRes.text();
+  assert.ok(moduleBody.length > 10000, 'pdf.min.mjs 应该不是空文件');
+
+  const workerRes = await fetch(base + '/dsh-book-slides/vendor/pdfjs/build/pdf.worker.min.mjs');
+  assert.equal(workerRes.status, 200);
+  assert.match(workerRes.headers.get('content-type'), /javascript/);
+  assert.ok((await workerRes.text()).length > 10000);
+
+  const cmapRes = await fetch(base + '/dsh-book-slides/vendor/pdfjs/cmaps/UniGB-UCS2-H.bcmap');
+  assert.equal(cmapRes.status, 200);
+
+  const outside = await fetch(base + '/dsh-book-slides/vendor/pdfjs/package.json');
+  assert.equal(outside.status, 404);
+  const traversal = await fetch(base + '/dsh-book-slides/vendor/pdfjs/build/..%2f..%2fpackage.json');
+  assert.equal(traversal.status, 404);
 });
 
 test('生成：没有模型服务时明确报 E_LLM_UNAVAILABLE，不建半截模块', async () => {
