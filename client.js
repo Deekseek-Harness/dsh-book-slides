@@ -746,18 +746,17 @@ window.__ModuleLoader__.load({
             if (data.fallback) {
               setToc((prev) => ({ ...prev, busy: false, message: '已按页眉回退：' + String(data.message || data.code) }));
             } else {
-              setToc((prev) => ({
-                ...prev,
-                busy: false,
-                message:
-                  (data.cached ? '用的是上次结果：' : '') +
-                  data.status +
-                  ' · 偏移 ' +
-                  data.offset +
-                  ' 页 · 标题命中率 ' +
-                  Math.round((data.hitRate || 0) * 100) +
-                  '%',
-              }));
+              const summary =
+                (data.cached ? '用的是上次结果：' : '') +
+                data.status +
+                ' · 偏移 ' +
+                data.offset +
+                ' 页 · 标题命中率 ' +
+                Math.round((data.hitRate || 0) * 100) +
+                '%';
+              // 目录被截断时，少掉的章不是模型的错，得说清楚
+              const cut = data.truncated ? '；目录原文超过上限被截断，后面的章没读（已读 ' + (data.tocChars || 0) + ' 字）' : '';
+              setToc((prev) => ({ ...prev, busy: false, message: summary + cut }));
             }
           } catch (err) {
             setToc((prev) => ({ ...prev, busy: false }));

@@ -219,3 +219,136 @@ test('真书：目录读对之后，边界和标题都对', async (t) => {
   assert.equal(list[11].from, 558);
   assert.equal(verifyChapters(pages, chapters), 1, '每一章的标题都应该能在自己的页区间里找到');
 });
+
+test('目录原文：引导点压掉，长目录不截断', async () => {
+  const { tocTextOf, squeezeDots } = await import('../tocparse.js');
+  assert.equal(squeezeDots('第 1 章 函数 · · · · · · · 1'), '第 1 章 函数 1');
+  assert.equal(squeezeDots('1.1 函数· · · · · · · · · · · · 1'), '1.1 函数 1');
+
+  // 造一个两万字上下的目录（真书见过 15k），确认一页不落地给到模型
+  const pages = [];
+  let count = 0;
+  for (let p = 1; p <= 20; p += 1) {
+    const lines = [];
+    for (let i = 0; i < 12; i += 1) {
+      count += 1;
+      lines.push('第 ' + count + ' 章 一个写得比较长的章节标题用来把目录撑到两万字以上 · · · · · ' + count);
+    }
+    pages.push({ page: p, text: lines.join('\n') });
+  }
+  const out = tocTextOf(pages, 1, 20);
+  assert.equal(out.truncated, false);
+  assert.ok(out.chars > 8000, '这份目录必须超过旧上限 8000，才能证明不再被截断；实际 ' + out.chars);
+  assert.equal((out.text.match(/第 \d+ 章/g) || []).length, count, count + ' 条章标题一条都不能少');
+});
+test('目录原文：超过上限时明确标出被截断', async () => {
+  const { tocTextOf, TOC_TEXT_LIMIT } = await import('../tocparse.js');
+  const lines = [];
+  for (let i = 0; i < 3000; i += 1) lines.push('第 ' + (i + 1) + ' 章 一个很长很长很长很长很长的章节标题 · · · · · ' + (i + 1));
+  const out = tocTextOf([{ page: 1, text: lines.join('\n') }], 1, 1);
+  assert.equal(out.truncated, true);
+  assert.ok(out.chars <= TOC_TEXT_LIMIT);
+});
+
+test('buildTocMessages：截断时给模型一句提醒，不截断时没有', async () => {
+  const { buildTocMessages } = await import('../tocparse.js');
+  const small = buildTocMessages({ promptFile: 'S', book: { title: '书' }, pages: [{ page: 1, text: '第 1 章 甲 1\n第 2 章 乙 5' }], from: 1, to: 1 });
+  assert.equal(small.truncated, false);
+  assert.doesNotMatch(small.user, /被截断/);
+
+  const huge = [];
+  for (let i = 0; i < 3000; i += 1) huge.push('第 ' + (i + 1) + ' 章 一个很长很长很长很长很长的章节标题 · · · · · ' + (i + 1));
+  const big = buildTocMessages({ promptFile: 'S', book: { title: '书' }, pages: [{ page: 1, text: huge.join('\n') }], from: 1, to: 1 });
+  assert.equal(big.truncated, true);
+  assert.match(big.user, /被截断/);
+});
+test('偏移信任判据：压倒性众数就算占比五成也信', async () => {
+  const { isTrustedOffset } = await import('../tocparse.js');
+  // 《普林斯顿微积分读本》实测：22 有 309 票，第二名 6 票，占比 51.6%
+  assert.equal(isTrustedOffset({ offset: 22, share: 0.516, samples: 599, mode: 309, second: 6 }), true);
+  // 噪声均匀、没有明显众数 → 不信
+  assert.equal(isTrustedOffset({ offset: 3, share: 0.2, samples: 100, mode: 20, second: 18 }), false);
+  // 占比很高 → 信
+  assert.equal(isTrustedOffset({ offset: 15, share: 0.9, samples: 100, mode: 90, second: 3 }), true);
+  assert.equal(isTrustedOffset({ offset: 0, share: 0, samples: 0, mode: 0, second: 0 }), false);
+});
+
+test('标题命中：章号对不上的行一律不认', async () => {
+  const { pageHasTitle } = await import('../tocparse.js');
+  const page = '第 18 章 积分的方法 I\n让我们开始发展一套求反导数的技巧.';
+  assert.equal(pageHasTitle(page, '第 18 章 积分的方法 I'), true);
+  assert.equal(pageHasTitle(page, '第 19 章 积分的方法 II'), false, '只差两个字也必须拒');
+  // 页眉没有章号时不受这条约束
+  assert.equal(pageHasTitle('控制器的硬件实现 545', '附录C 控制器的硬件实现'), true);
+});
+
+test('校准：跳过目录页，不会把第 1 章钉在目录页上', async () => {
+  const { calibrate } = await import('../tocparse.js');
+  const body = '正文'.repeat(80) + '。';
+  const pages = [];
+  // 第 1–2 页是目录，上面印着第 1 章的标题
+  pages.push({ page: 1, text: '目 录\n第 1 章 起点 · · · 1\n第 2 章 转折 · · · 50' });
+  pages.push({ page: 2, text: '第 2 章 转折 · · · 50' });
+  // 正文从第 8 页开始，页眉带印刷页码
+  for (let p = 3; p <= 12; p += 1) {
+    const printed = p + 40;
+    const lines = [p % 2 ? '某某书 ' + printed : printed + ' 某某书'];
+    if (p === 8) lines.push('第 1 章 起点');
+    if (p === 11) lines.push('第 2 章 转折');
+    lines.push(body, body, body, body, body, body);
+    pages.push({ page: p, text: lines.join('\n') });
+  }
+  const entries = [
+    { title: '第 1 章 起点', printed: 48, level: 'chapter', fixedChar: false },
+    { title: '第 2 章 转折', printed: 51, level: 'chapter', fixedChar: false },
+  ];
+  const withSkip = calibrate(pages, entries, { from: 1, to: 2 });
+  assert.equal(withSkip.entries[0].physical, 8, '跳过目录页之后应该锚到正文第 8 页');
+
+  const noSkip = calibrate(pages, entries, null);
+  assert.equal(noSkip.entries[0].physical, 1, '不跳过时会被目录页骗到第 1 页（这就是原先的 bug）');
+});
+test('标题命中：分卷页不是章的标题页', async () => {
+  const { pageHasTitle } = await import('../tocparse.js');
+  const partPage = '第 1 章 逃逸分析\n第 1 部分\n语 言 基 础';
+  assert.equal(pageHasTitle(partPage, '第 1 章 逃逸分析'), false, '分卷页列着章名，不能当锚点');
+
+  const titlePage = 'Go 程序员面试笔试宝典\n第 1 章 逃 逸 分 析\n在 C/C++ 中，可以调用 malloc';
+  assert.equal(pageHasTitle(titlePage, '第 1 章 逃逸分析'), true);
+});
+
+test('标题命中：两三个字的短标题不容错', async () => {
+  const { pageHasTitle } = await import('../tocparse.js');
+  // 「前言」两个字的标题容一个字就等于随便撞，会把后面所有章推出搜索范围
+  assert.equal(pageHasTitle('接口定义如下，这是一段正文。', '前言'), false);
+  assert.equal(pageHasTitle('前 言\n本书写给……', '前言'), true);
+});
+
+test('回放：只信 printed，存下来的 physical 一律重算', async () => {
+  const { replayToc } = await import('../tocparse.js');
+  const body = '正文'.repeat(80) + '。';
+  const pages = [];
+  for (let p = 1; p <= 12; p += 1) {
+    const lines = [p % 2 ? '某书 ' + p : p + ' 某书'];
+    if (p === 4) lines.push('第 1 章 起点');
+    if (p === 9) lines.push('第 2 章 转折');
+    lines.push(body, body, body, body, body, body);
+    pages.push({ page: p, text: lines.join('\n') });
+  }
+  // 存下来的 physical 故意写错：33 和 44
+  const cached = {
+    status: 'verified',
+    range: { from: 1, to: 1 },
+    entries: [
+      { title: '第 1 章 起点', printed: 45, physical: 33, level: 'chapter' },
+      { title: '第 2 章 转折', printed: 50, physical: 44, level: 'chapter' },
+    ],
+  };
+  const replayed = replayToc(pages, cached);
+  assert.ok(replayed, '应该能重放');
+  assert.deepEqual(
+    replayed.calibrated.entries.map((e) => e.physical),
+    [4, 9],
+    '物理页必须按标题重新锚定，不能照抄 33/44',
+  );
+});

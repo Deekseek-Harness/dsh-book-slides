@@ -38,6 +38,7 @@ import {
   TOC_PROMPT_VERSION,
   buildTocMessages,
   calibrate,
+  replayToc,
   chaptersFromToc,
   parseTocReply,
   suggestTocRange,
@@ -46,6 +47,7 @@ import {
   verifyChapters,
 } from './tocparse.js';
 import { coverSvg } from './cover.js';
+import { runBookCheck } from './check.js';
 
 const require = createRequire(import.meta.url);
 const PKG = require('./package.json');
@@ -623,8 +625,8 @@ async function handleTocPreview(req, res) {
     sendError(res, 'E_BAD_RANGE', '页码范围不合法', '这本书一共 ' + total + ' 页。');
     return;
   }
-  const text = tocTextOf(pages, from, to, 3000);
-  sendJson(res, 200, { ok: true, chars: text.length, preview: text.slice(0, 800) });
+  const toc = tocTextOf(pages, from, to);
+  sendJson(res, 200, { ok: true, chars: toc.chars, truncated: toc.truncated, preview: toc.text.slice(0, 800) });
 }
 
 /** POST /toc/parse：读目录 → 模型抽取 → 校准 → 落盘（失败回退机械切章）。 */
@@ -655,16 +657,22 @@ async function handleTocParse(req, res, ctx) {
 
   const tocFile = path.join(loaded.dir, 'toc.json');
   // 缓存键只认「书 + 范围 + 提示词版本」：读缓存不该要求现在还配着模型，
-  // 也避免换个模型就把已经算好的结果判成失效。
+  // 也不该因为校准算法改了就重花一次模型调用——重放会按 printed 重新校准，
+  // 存下来的 physical 只是缓存，不是权威。
   const cacheKey = sha256Of(Buffer.from([loaded.book.sha256 || '', from, to, TOC_PROMPT_VERSION].join('|'), 'utf8'));
   const cached = readJson(tocFile, null);
   if (!body.force && cached && cached.cacheKey === cacheKey && cached.status !== 'failed' && Array.isArray(cached.entries)) {
-    // 关键：不读 chapters.json —— 它可能已经被「重新解析」换成机械结果了。
-    // 目录结果以 toc.json 里的 entries 为准，每次都从它重建，这样「重放」才是幂等的。
-    const again = chaptersFromToc(pages, { status: cached.status, entries: cached.entries });
+    // 关键 1：不读 chapters.json —— 它可能已经被「重新解析」换成机械结果了。
+    // 关键 2：不直接用 entries 里的 physical —— 那是算法算出来的，算法一改就该重算，
+    //         否则老结果会一直沿用（Go 那本书第 5 章停在 73，正确答案是 91）。
+    const replay = replayToc(pages, cached);
+    const again = replay ? replay.chapters : null;
     if (again) {
       const hit = verifyChapters(pages, again);
       persistChapters(loaded, pages, again);
+      cached.entries = replay.calibrated.entries;
+      cached.offset = replay.calibrated.offset;
+      cached.offsetShare = replay.calibrated.offsetShare;
       cached.hitRate = hit;
       writeJson(tocFile, cached);
       sendJson(res, 200, {
@@ -721,7 +729,7 @@ async function handleTocParse(req, res, ctx) {
     return;
   }
 
-  const calibrated = calibrate(pages, entries);
+  const calibrated = calibrate(pages, entries, { from: from, to: to });
   const chapters = chaptersFromToc(pages, calibrated);
   if (calibrated.status === 'failed' || !chapters) {
     const toc = fallbackToMechanical(loaded, pages, { code: 'E_TOC_ALIGN', stage: 'calibrate', message: '目录页码对不上 PDF 页', range: { from, to }, entries: calibrated.entries });
@@ -750,6 +758,8 @@ async function handleTocParse(req, res, ctx) {
     status: status,
     offset: calibrated.offset,
     hitRate: hitRate,
+    truncated: !!built.truncated,
+    tocChars: built.chars,
     chapterCount: chapters.filter((c) => !c.front).length,
     chapters: chapters,
   });
@@ -877,8 +887,50 @@ function methodIs(req, method) {
   return String((req && req.method) || 'GET').toUpperCase() === method;
 }
 
+/** 把 `/chapter-check @测试书籍` 里的参数解析成绝对目录。 */
+function resolveCheckDir(ctx, agent, rawInput) {
+  const arg = String(rawInput || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/^["']|["']$/g, '')
+    .trim();
+  if (!arg) return '';
+  if (path.isAbsolute(arg)) return arg;
+  let base = '';
+  try {
+    const session = agent && agent.session;
+    const service = ctx.get && ctx.get('workingDirectory');
+    if (session && service && typeof service.get === 'function') base = String(service.get(session) || '');
+  } catch {
+    base = '';
+  }
+  return path.resolve(base || process.cwd(), arg);
+}
+
 export function apply(ctx) {
   ensureDirs();
+  // 真书对照命令：跑「目录 → 校准」这条路，按严重程度分类报告
+  ctx.inject(['commands'], (scoped) => {
+    scoped.commands.register({
+      name: 'chapter-check',
+      description: '真书对照测试：逐章比对书签，按严重程度分类报告（默认按目录切章，末尾加 mech 改测机械切分）',
+      input: { hint: '@数据目录 [mech]' },
+      handler: async ({ agent, rawInput, signal }) => {
+        const raw = String(rawInput || '').trim();
+        const mech = /\s+mech\s*$/i.test(raw);
+        const arg = mech ? raw.replace(/\s+mech\s*$/i, '') : raw;
+        const root = resolveCheckDir(ctx, agent, arg);
+        if (!root) return { kind: 'error', text: '用法：/chapter-check @数据目录（目录里放 PDF + 【书签】txt + 【目录页码】txt；末尾加 mech 测机械切分）' };
+        try {
+          const result = await runBookCheck(root, { mode: mech ? 'mech' : 'toc', signal: signal });
+          return { kind: result.summary.serious > 0 ? 'error' : 'success', text: result.text };
+        } catch (err) {
+          return { kind: 'error', text: '跑不起来：' + String((err && err.message) || err) };
+        }
+      },
+    });
+  });
+
   ctx.inject(['webServer'], (scoped) => {
     const offs = [];
     const route = (path, handler) => {

@@ -24,11 +24,18 @@ const plugin = await import('../index.js');
 /** 假 ctx：把 webServer.register 收进一张路由表。 */
 function makeContext() {
   const routes = new Map();
+  const commands = [];
   const scoped = {
     webServer: {
       register(options) {
         routes.set(options.path, options.handler);
         return () => routes.delete(options.path);
+      },
+    },
+    commands: {
+      register(definition) {
+        commands.push(definition);
+        return () => {};
       },
     },
   };
@@ -37,11 +44,14 @@ function makeContext() {
       fn(scoped);
     },
     on() {},
+    get() {
+      return undefined;
+    },
   };
-  return { ctx, routes };
+  return { ctx, routes, commands };
 }
 
-const { ctx, routes } = makeContext();
+const { ctx, routes, commands } = makeContext();
 plugin.apply(ctx);
 
 const server = http.createServer((req, res) => {
@@ -338,11 +348,11 @@ test('目录重放：chapters.json 被机械结果覆盖后，靠 toc.json 重�
   const dir = path.join(ROOT, 'books', id);
   const book = JSON.parse(fs.readFileSync(path.join(dir, 'book.json'), 'utf8'));
 
-  // 造一份「目录切过」的痕迹：条目对得上这本书（第 1 章从第 1 页起）
-  const entries = [
-    { title: '第1章 起点', printed: 1, physical: 1, level: 'chapter', anchor: 'header' },
-    { title: '第3章 收尾', printed: 3, physical: 3, level: 'chapter', anchor: 'header' },
-  ];
+  // 造一份「目录切过」的痕迹：标题取自这本书真实切出来的章，
+  // 并故意把 physical 写成错的（1），验证重放会重算而不是照抄。
+  const mech = JSON.parse(fs.readFileSync(path.join(dir, 'chapters.json'), 'utf8')).filter((c) => !c.front);
+  // 用第 2、3 章做条目：范围 1-1 会跳过第 1 页，而第 1 章恰好在那页上
+  const entries = mech.slice(1, 3).map((c) => ({ title: c.title, printed: c.from, physical: 1, level: 'chapter', anchor: 'title' }));
   // 缓存键由服务端算：书 sha + 范围 + 提示词版本
   const { sha256Of } = await import('../store.js');
   const { TOC_PROMPT_VERSION } = await import('../tocparse.js');
@@ -362,6 +372,8 @@ test('目录重放：chapters.json 被机械结果覆盖后，靠 toc.json 重�
 
   const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'chapters.json'), 'utf8'));
   assert.ok(onDisk.every((c) => c.source === 'toc'), '重放之后章节应标回目录来源');
+  const first = onDisk.filter((c) => !c.front)[0];
+  assert.equal(first.from, mech[1].from, '重放必须按 printed 重算起点，不能照抄 toc.json 里错的 physical');
   assert.ok(cacheKey);
 });
 
@@ -446,4 +458,15 @@ test('重新解析：有手改时先拦住，带 force 才覆盖', async () => {
 
   const onDisk = JSON.parse(fs.readFileSync(path.join(ROOT, 'books', id, 'chapters.json'), 'utf8'));
   assert.equal(onDisk.some((c) => c.manual), false, '覆盖之后不该还留着 manual 标记');
+});
+
+test('命令：注册了 chapter-check，参数支持 @目录 与末尾 mech', async () => {
+  const command = commands.find((item) => item.name === 'chapter-check');
+  assert.ok(command, '没注册 chapter-check');
+  assert.equal(typeof command.handler, 'function');
+  assert.match(String(command.description), /书签/);
+
+  const empty = await command.handler({ agent: null, rawInput: '  ', signal: undefined });
+  assert.equal(empty.kind, 'error');
+  assert.match(empty.text, /用法/);
 });

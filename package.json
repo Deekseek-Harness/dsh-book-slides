@@ -18,6 +18,7 @@
     "pdfread.js",
     "cover.js",
     "tocparse.js",
+    "check.js",
     "prompts/*.md",
     "cordis.patch.yml",
     "icon.svg",
@@ -49,7 +50,9 @@
     "pdfjs-dist": "^6.5.438"
   },
   "scripts": {
-    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs"
+    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/check.test.mjs",
+    "test:mech": "node test/books.mech.e2e.mjs",
+    "test:chapters": "node test/books.toc.e2e.mjs"
   },
   "keywords": [
     "dsh-plugin",

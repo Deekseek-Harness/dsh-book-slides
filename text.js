@@ -391,7 +391,12 @@ function scanCandidates(pages, allowParts) {
     // 散文页：行长、行少。目录页是一列短条目，不能按散文的规矩卡它
     const prose = !(lines.length >= 8 && pageStats[i].avgLen <= 25);
 
+    // 分卷页会列出这一部分的章名（「第 1 章 逃逸分析 / 第 1 部分 / 语言基础」），
+    // 整页都不该产出章节候选——否则章会从那页起算，前移一页。
+    const partPage = lines.slice(0, 4).some((line) => /^(第\s*[0-9一二三四五六七八九十百千零〇两]+\s*部分|part\s+[0-9ivxlcdm]+)/i.test(normalizeLine(line)));
+
     for (let j = 0; j < lines.length; j += 1) {
+      if (partPage) continue;
       const line = lines[j];
       const hit = matchHead(line, j, allowParts, prose);
       if (!hit) continue;
@@ -501,6 +506,9 @@ function anchorOpeners(runs, pages) {
       const lines = text.split('\n').slice(0, 3);
       // 标题页的头一行总是很短，且以「第」/Chapter/Part 开头；
       // 正文页的第一行是「页码 + 书名」或「章名 + 页码」，长度过不了这一关。
+      // 分卷页会列出这一部分的章名（「第 1 章 逃逸分析 / 第 1 部分 / 语言基础」），
+      // 它不是章的标题页，认下来会让整章前移一页。
+      if (lines.some((line) => /^(第\s*[0-9一二三四五六七八九十百千零〇两]+\s*部分|part\s+[0-9ivxlcdm]+)/i.test(normalizeLine(line)))) continue;
       const head = normalizeLine(lines[0] || '');
       // 标题页有两条长相：
       //   a) 首行是「第X章 / Chapter N」这类章号行（≤12 字）

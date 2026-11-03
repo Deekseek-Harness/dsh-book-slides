@@ -7,7 +7,7 @@
  *
  * 这样模型出错是可测的：页码不单调、标题在区间里找不到，都能被机械检查抓到。
  */
-import { CHAPTER_RE, normalizeLine, editDistance } from './text.js';
+import { CHAPTER_RE, chapterNumberOf, normalizeLine, editDistance } from './text.js';
 
 export const TOC_PROMPT_VERSION = 'toc-extract-v1';
 export const TOC_MAX_ENTRIES = 60;
@@ -51,22 +51,46 @@ export function suggestTocRange(pages) {
 
 /* ------------------------------ 目录原文 ------------------------------ */
 
-/** 取目录页文本，带行号，供模型引用；总长截断到 8000 字。 */
-export function tocTextOf(pages, from, to, limit = 8000) {
+/** 默认上限：真书目录最长见过 15k 字，留到 40k 足够一次读完。 */
+export const TOC_TEXT_LIMIT = 40000;
+
+/**
+ * 把引导点压掉：「第 1 章 … · · · · · 1」→「第 1 章 … 1」。
+ * 双栏目录里引导点能占全文四成以上，压掉既省 token 也让模型少读噪声；
+ * 页码仍然紧跟在标题后面，不影响取数。
+ */
+export function squeezeDots(text) {
+  return String(text || '')
+    .replace(/(?:·\s*){2,}/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * 取目录页文本，带行号，供模型引用。
+ * @returns {{text: string, truncated: boolean, chars: number}}
+ */
+export function tocTextOf(pages, from, to, limit) {
+  const cap = Number(limit) > 0 ? Number(limit) : TOC_TEXT_LIMIT;
   const parts = [];
   let n = 0;
+  let size = 0;
   for (const page of pages) {
     const no = Number((page && page.page) || 0);
     if (no < from || no > to) continue;
     for (const line of String((page && page.text) || '').split('\n')) {
-      const text = normalizeLine(line);
+      const text = squeezeDots(normalizeLine(line));
       if (!text) continue;
       n += 1;
-      parts.push('L' + n + ': ' + text);
-      if (parts.join('\n').length > limit) return parts.join('\n');
+      const piece = 'L' + n + ': ' + text;
+      if (size + piece.length + 1 > cap) {
+        return { text: parts.join('\n'), truncated: true, chars: size };
+      }
+      parts.push(piece);
+      size += piece.length + 1;
     }
   }
-  return parts.join('\n');
+  return { text: parts.join('\n'), truncated: false, chars: size };
 }
 
 /* ------------------------------ 提示词 ------------------------------ */
@@ -74,13 +98,11 @@ export function tocTextOf(pages, from, to, limit = 8000) {
 /** 拼两条消息：system 来自 prompts/toc-extract-v1.md，user 是这本书的目录原文。 */
 export function buildTocMessages({ promptFile, book, pages, from, to }) {
   const total = pages.length;
-  const user = [
-    '【书名】' + String((book && book.title) || ''),
-    '【总页数】' + total,
-    '【目录原文】',
-    tocTextOf(pages, from, to),
-  ].join('\n');
-  return { system: String(promptFile || ''), user: user };
+  const toc = tocTextOf(pages, from, to);
+  const head = ['【书名】' + String((book && book.title) || ''), '【总页数】' + total, '【目录原文】'];
+  const user = head.concat([toc.text]).join('\n') +
+    (toc.truncated ? '\n\n【注意】目录原文到这里被截断了，后面的章节没有提供给你；只输出你确实看到的条目，不要猜。' : '');
+  return { system: String(promptFile || ''), user: user, truncated: toc.truncated, chars: toc.chars };
 }
 
 /* ------------------------------ 解析与校验 ------------------------------ */
@@ -172,10 +194,37 @@ export function guessOffset(pages) {
     const delta = Number((page && page.page) || 0) - printed;
     counts.set(delta, (counts.get(delta) || 0) + 1);
   }
-  if (samples < 10) return { offset: 0, share: 0, samples: samples };
-  let best = { delta: 0, count: 0 };
-  for (const [delta, count] of counts) if (count > best.count) best = { delta: delta, count: count };
-  return { offset: best.delta, share: best.count / samples, samples: samples };
+  if (samples < 10) return { offset: 0, share: 0, samples: samples, mode: 0, second: 0 };
+  let first = { delta: 0, count: 0 };
+  let second = 0;
+  for (const [delta, count] of counts) {
+    if (count > first.count) {
+      second = first.count;
+      first = { delta: delta, count: count };
+    } else if (count > second) {
+      second = count;
+    }
+  }
+  return {
+    offset: first.delta,
+    share: first.count / samples,
+    samples: samples,
+    mode: first.count,
+    second: second,
+  };
+}
+
+/**
+ * 这个偏移值不值得信。
+ *
+ * 不能只看占比：真书的页码噪声会把占比压到五成左右，但第一名仍然可能是压倒性的
+ * （《普林斯顿微积分读本》22 有 309 票、第二名只有 6 票，占 51.6%——按 60% 卡就被误废了）。
+ * 所以改成「占比够 + 比第二名多得多」这条相对判据。
+ */
+export function isTrustedOffset(vote) {
+  if (!vote || !vote.samples) return false;
+  if (vote.share >= 0.35 && vote.mode >= 3 * Math.max(1, vote.second)) return true;
+  return vote.share >= 0.6;
 }
 
 /** 标题去掉章号后的部分：「第7章 层次结构的存储器」→「层次结构的存储器」。 */
@@ -197,26 +246,61 @@ export function pageHasTitle(text, title) {
   const whole = String(title || '').replace(/\s+/g, '');
   if (whole.length < 2) return false;
   const tail = titleTailOf(title);
-  const tolerance = whole.length >= 10 ? 2 : 1;
+  const titleHead = headOf(whole);
+  // 容错按长度分档：两三个字的标题容一个字就等于「随便撞」——
+  // 「前言」会被正文里的「前面铺垫了半天」命中，把后面所有章都推出搜索范围。
+  const toleranceWhole = whole.length >= 10 ? 2 : whole.length >= 5 ? 1 : 0;
+  const toleranceTail = tail.length <= 3 ? 0 : toleranceWhole;
   const lines = String(text || '').split('\n').slice(0, 3);
+  // 分卷页上会列出这一部分的章名（「第 1 章 逃逸分析 / 第 1 部分 / 语言基础」），
+  // 它不是章的标题页，认成锚点会让整章前移一页。
+  if (lines.some((line) => PART_RE.test(normalizeLine(line)))) return false;
   for (const line of lines) {
-    const text2 = normalizeLine(line).replace(/\s+/g, '');
+    // 标题页常把标题印在装饰符号后面（「◎附录C 控制器的硬件实现」），先剥掉再比
+    const text2 = normalizeLine(line).replace(/^[◎●○◇◆■□△▲※*·•—–-]+\s*/, '').replace(/\s+/g, '');
     if (!text2) continue;
+    // 章号对不上的行直接跳过。第 18 章「积分的方法 I」和第 19 章「积分的方法 II」
+    // 整行只差两个字，纯比字符串必然互相命中；章号是这里唯一可靠的区分。
+    const lineHead = headOf(text2);
+    if (lineHead && titleHead && lineHead.toLowerCase() !== titleHead.toLowerCase()) continue;
     // a) 行首就是标题正文（页眉写法：「控制器的硬件实现 545」）
     if (tail.length >= 2) {
       const probe = text2.slice(0, tail.length);
-      if (probe.length >= Math.min(2, tail.length) && editDistance(probe, tail) <= tolerance) return true;
+      if (probe.length >= Math.min(2, tail.length) && editDistance(probe, tail) <= toleranceTail) return true;
     }
     // b) 整行就是完整标题（标题页写法：「第3章 计算机的算术运算」「附录C」）
     const probe2 = text2.slice(0, whole.length);
-    if (editDistance(probe2, whole) <= tolerance) return true;
+    if (editDistance(probe2, whole) <= toleranceWhole) return true;
     // c) 标题页把副标题省了，只印前半截（TOC 写「处理器：数据通路及其控制」，书里只印「处理器」）
     const pageTail = titleTailOf(text2);
     if (pageTail.length >= 3 && tail.length >= pageTail.length) {
-      if (editDistance(tail.slice(0, pageTail.length), pageTail) <= tolerance) return true;
+      if (editDistance(tail.slice(0, pageTail.length), pageTail) <= toleranceWhole) return true;
     }
   }
   return false;
+}
+
+const PART_RE = /^(第\s*[0-9一二三四五六七八九十百千零〇两]+\s*部分|part\s+[0-9ivxlcdm]+)/i;
+
+/** 一行里的章号部分（「第16章 定积分」→「第16章」）。 */
+function headOf(text) {
+  const m = CHAPTER_RE.exec(String(text || ''));
+  return m ? String((m.groups && m.groups.head) || '') : '';
+}
+
+/**
+ * 用已存的目录结果重放一遍：只信模型给的 title/printed，不信存下来的 physical。
+ *
+ * 物理页是「算出来的」，算法一改就该重算。缓存命中如果直接拿 entries 里的 physical，
+ * 老算法算错的页会一直沿用（Go 那本书第 5 章就停在 73，而正确答案是 91）。
+ */
+export function replayToc(pages, cached) {
+  const list = (cached && Array.isArray(cached.entries) ? cached.entries : []).filter((e) => e && e.title && Number(e.printed) > 0);
+  if (list.length === 0) return null;
+  const entries = list.map((e) => ({ title: e.title, printed: Number(e.printed), level: e.level, fixedChar: !!e.fixedChar }));
+  const calibrated = calibrate(pages, entries, cached.range || null);
+  const chapters = chaptersFromToc(pages, calibrated);
+  return { calibrated: calibrated, chapters: chapters };
 }
 
 /**
@@ -225,14 +309,20 @@ export function pageHasTitle(text, title) {
  * 两条独立证据：
  *   A 页眉页码众数（全局偏移）
  *   B 目录标题在正文里首次命中（逐章定位）
- * A 可信（占比 ≥ 0.6）且与 B 相差 ≤ 2 页 → 用 A；否则用 B。
+ * A 可信（isTrustedOffset）且与 B 相差 ≤ 2 页 → 用 A；否则用 B。
  * 两条都没命中才算这一章定位失败。
+ *
+ * @param {{from:number,to:number}} [tocRange] 目录页范围。证据 B 必须跳过它——
+ *   目录页上印着所有章标题，搜到那里会把每一章都钉在目录页上。
  */
-export function calibrate(pages, entries) {
+export function calibrate(pages, entries, tocRange) {
   const vote = guessOffset(pages);
   const offsetA = vote.offset;
   const total = pages.length;
-  const trusted = vote.share >= 0.6;
+  const trusted = isTrustedOffset(vote);
+  const skipFrom = tocRange && Number(tocRange.from) > 0 ? Number(tocRange.from) : 0;
+  const skipTo = tocRange && Number(tocRange.to) > 0 ? Number(tocRange.to) : 0;
+  const inToc = (no) => skipFrom > 0 && no >= skipFrom && no <= skipTo;
   const out = [];
   let searchFrom = 0;
 
@@ -240,11 +330,13 @@ export function calibrate(pages, entries) {
     const entry = entries[i];
     const guess = entry.printed + offsetA;
 
-    // 证据 B：从上一章起点往后找标题
+    // 证据 B：从上一章起点往后找标题，跳过目录页
     let found = 0;
     for (let k = searchFrom; k < total; k += 1) {
+      const no = Number((pages[k] && pages[k].page) || k + 1);
+      if (inToc(no)) continue;
       if (!pageHasTitle(pages[k] && pages[k].text, entry.title)) continue;
-      found = Number((pages[k] && pages[k].page) || k + 1);
+      found = no;
       break;
     }
 
