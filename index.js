@@ -121,6 +121,8 @@ import {
   reconcileImagingJobs,
   startImaging,
 } from './imaging.js';
+import { buildPptxPlan, planPptx } from './pptexport.js';
+import { loadShellParts, writePptx } from './pptx.js';
 
 const require = createRequire(import.meta.url);
 const PKG = require('./package.json');
@@ -170,6 +172,8 @@ export const ROUTE_TRASH_CLEAR = ROUTE_PREFIX + '/trash/clear';
 export const ROUTE_PDFJS_VENDOR = ROUTE_PREFIX + '/vendor/pdfjs';
 export const ROUTE_EXPORT = ROUTE_PREFIX + '/export';
 export const ROUTE_EXPORT_SIZE = ROUTE_PREFIX + '/export/size';
+export const ROUTE_EXPORT_PPTX = ROUTE_PREFIX + '/export/pptx';
+export const ROUTE_EXPORT_PPTX_PLAN = ROUTE_PREFIX + '/export/pptx/plan';
 export const ROUTE_IMPORT_PACKAGE = ROUTE_PREFIX + '/import/package';
 export const ROUTE_REVOICE = ROUTE_PREFIX + '/revoice';
 export const ROUTE_IMAGE = ROUTE_PREFIX + '/image';
@@ -1811,6 +1815,65 @@ async function handleExportSize(req, res) {
   }
 }
 
+/* ------------------------------ PPT 导出（v1.5） ------------------------------ */
+
+function sendPptxError(res, err) {
+  const code = (err && err.code) || 'E_PPT_FAIL';
+  sendError(res, code, String((err && err.message) || err), (err && err.hint) || '');
+}
+
+function pptxParams(req) {
+  const params = query(req);
+  return {
+    moduleId: String(params.get('moduleId') || '').trim(),
+    includeAudio: String(params.get('audio') || '1') !== '0',
+  };
+}
+
+function handlePptxPlan(req, res) {
+  const params = pptxParams(req);
+  if (!isValidId(params.moduleId)) {
+    sendError(res, 'E_BAD_ID', '参数不合法', '');
+    return;
+  }
+  try {
+    const plan = planPptx(params.moduleId, { includeAudio: params.includeAudio });
+    sendJson(res, 200, plan);
+  } catch (err) {
+    sendPptxError(res, err);
+  }
+}
+
+async function handlePptxExport(req, res) {
+  const params = pptxParams(req);
+  if (!isValidId(params.moduleId)) {
+    sendError(res, 'E_BAD_ID', '参数不合法', '');
+    return;
+  }
+  let built;
+  try {
+    built = buildPptxPlan(params.moduleId, { includeAudio: params.includeAudio });
+    // 模板缺失属于构建前置错误：必须在写流之前暴露成 JSON，不能让客户端拿到空 200。
+    await loadShellParts();
+  } catch (err) {
+    sendPptxError(res, err);
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('content-type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  res.setHeader('content-disposition', contentDisposition(built.plan.fileName));
+  res.setHeader('cache-control', 'no-store');
+  try {
+    await writePptx(res, built.deck);
+  } catch {
+    try {
+      res.destroy();
+    } catch {
+      /* 客户端已经断开 */
+    }
+  }
+}
+
 /** 上传直接落盘：书档是 GB 级，不能像 JSON 接口那样整包进内存。 */
 function receiveToFile(req, file, limit) {
   return new Promise((resolve, reject) => {
@@ -2387,6 +2450,24 @@ export function apply(ctx) {
         return;
       }
       return handleExportSize(req, res);
+    });
+
+    route(ROUTE_EXPORT_PPTX_PLAN, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handlePptxPlan(req, res);
+    });
+
+    route(ROUTE_EXPORT_PPTX, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handlePptxExport(req, res);
     });
 
     route(ROUTE_IMPORT_PACKAGE, (req, res, headers) => {

@@ -40,6 +40,8 @@ window.__ModuleLoader__.load({
     const TRASH_CLEAR_API = '/dsh-book-slides/trash/clear';
     const EXPORT_API = '/dsh-book-slides/export';
     const EXPORT_SIZE_API = '/dsh-book-slides/export/size';
+    const PPTX_API = '/dsh-book-slides/export/pptx';
+    const PPTX_PLAN_API = '/dsh-book-slides/export/pptx/plan';
     const IMPORT_PACKAGE_API = '/dsh-book-slides/import/package';
     const REVOICE_API = '/dsh-book-slides/revoice';
     const IMAGE_API = '/dsh-book-slides/image';
@@ -1306,7 +1308,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     }
 
     /** 详情页的模块列表：打开 / 重试 / 重新生成 / 删除；生成中的模块就地显示进度与取消。 */
-    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate, onRevoice, onImages, imageEnabled }) {
+    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate, onRevoice, onImages, onPptx, imageEnabled }) {
       const list = Array.isArray(modules) ? modules : [];
       const active = job && job.moduleId ? job : null;
       const runningId = active ? active.moduleId : '';
@@ -1366,6 +1368,9 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   'div',
                   { className: 'bl-mod-actions' },
                   ready ? h('button', { className: 'bl-btn', disabled: busy, onClick: () => onOpen(item.id) }, '打开') : null,
+                  ready && onPptx
+                    ? h('button', { className: 'bl-btn', disabled: busy, title: '导出为 PPT（画面 + 配音 + 备注）', onClick: () => onPptx(item) }, '导出 PPT')
+                    : null,
                   item.status === 'ready_degraded' && onRevoice
                     ? h(
                         'button',
@@ -1800,6 +1805,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [pdfLoading, setPdfLoading] = useState(true);
       const [pdfError, setPdfError] = useState(null);
       const [fullscreen, setFullscreen] = useState(false);
+      const [pptxOpen, setPptxOpen] = useState(false);
 
       const rootRef = useRef(null);
       const mainRef = useRef(null);
@@ -2406,6 +2412,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
               { className: 'bl-btn', onClick: () => savePreference({ muted: !pref.muted }), 'aria-label': pref.muted ? '取消静音' : '静音' },
               pref.muted ? '取消静音' : '静音',
             ),
+            h('button', { className: 'bl-btn', onClick: () => setPptxOpen(true), title: '导出为 PPT（画面 + 配音 + 备注）' }, '导出 PPT'),
           ),
           h(
             'div',
@@ -2435,6 +2442,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             ),
           ),
         ),
+        pptxOpen
+          ? h(PptxDialog, {
+              moduleId: module.id,
+              title: module.title || '精讲',
+              onClose: () => setPptxOpen(false),
+            })
+          : null,
       );
     }
 
@@ -2569,6 +2583,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [jobId, setJobId] = useState('');
       const [jobFocus, setJobFocus] = useState(0);
       const [genBusy, setGenBusy] = useState(false);
+      const [pptxModule, setPptxModule] = useState(null);
 
       /** 详情页滚动容器：生成开始后用它找到对应条目。 */
       const bodyRef = useRef(null);
@@ -3226,6 +3241,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                     onRegenerate: regenerateModule,
                     onRevoice: revoiceModule,
                     onImages: imagesModule,
+                    onPptx: setPptxModule,
                     imageEnabled: state.imageProvider === 'comfyui',
                   }),
                   h(TocBox, {
@@ -3281,6 +3297,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             genBusy || jobId ? '生成中…' : '生成精讲',
           ),
         ),
+        pptxModule
+          ? h(PptxDialog, {
+              moduleId: pptxModule.id,
+              title: pptxModule.title || '精讲',
+              onClose: () => setPptxModule(null),
+            })
+          : null,
       );
     }
 
@@ -4188,6 +4211,132 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       );
     }
 
+    /** 导出 PPT 确认层：先取计划（页数 / 音频页 / 配图页 / 体积），再下载。 */
+    function PptxDialog({ moduleId, title, onClose }) {
+      const [audio, setAudio] = useState(true);
+      const [info, setInfo] = useState(null);
+      const [error, setError] = useState(null);
+      const [busy, setBusy] = useState(false);
+
+      useEffect(() => {
+        let alive = true;
+        setInfo(null);
+        setError(null);
+        const params = '?moduleId=' + encodeURIComponent(moduleId) + '&audio=' + (audio ? 1 : 0);
+        getJson(PPTX_PLAN_API + params)
+          .then((data) => {
+            if (alive) setInfo(data);
+          })
+          .catch((err) => {
+            if (alive) setError(err);
+          });
+        return () => {
+          alive = false;
+        };
+      }, [moduleId, audio]);
+
+      const download = useCallback(async () => {
+        setBusy(true);
+        setError(null);
+        try {
+          const params = '?moduleId=' + encodeURIComponent(moduleId) + '&audio=' + (audio ? 1 : 0);
+          const response = await fetch(PPTX_API + params, {
+            headers: { accept: 'application/vnd.openxmlformats-officedocument.presentationml.presentation, application/json' },
+          });
+          const type = String(response.headers.get('content-type') || '');
+          if (!response.ok || type.includes('application/json')) {
+            let data = null;
+            try {
+              data = await response.json();
+            } catch {
+              /* 不是 JSON 就按通用错误处理 */
+            }
+            const err = new Error((data && (data.error || data.message)) || '导出失败');
+            err.code = data && data.code;
+            throw err;
+          }
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = objectUrl;
+          anchor.download = (info && info.fileName) || '精讲.pptx';
+          anchor.rel = 'noopener';
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => {
+            try {
+              URL.revokeObjectURL(objectUrl);
+            } catch {
+              /* 忽略 */
+            }
+          }, 30000);
+          onClose();
+        } catch (err) {
+          setError(err);
+        } finally {
+          setBusy(false);
+        }
+      }, [moduleId, audio, info, onClose]);
+
+      const tooLarge = info && info.bytes > 150 * 1024 ** 2;
+      return h(
+        'div',
+        {
+          className: 'bl-overlay',
+          onClick: (event) => {
+            if (event.target === event.currentTarget && !busy) onClose();
+          },
+        },
+        h(
+          'div',
+          { className: 'bl-dialog', role: 'dialog', 'aria-label': '导出 PPT' },
+          h('h2', null, '导出 PPT'),
+          title ? h('p', { className: 'bl-hint' }, title) : null,
+          error ? h('div', { className: 'bl-err' }, String(error.message || error)) : null,
+          !info && !error ? h('div', { className: 'bl-hint' }, h('span', { className: 'bl-spin' }), ' 正在检查音频与配图…') : null,
+          info
+            ? h(
+                'div',
+                null,
+                h(
+                  'div',
+                  { className: 'bl-pkg-sum' },
+                  '共 ' + info.slides + ' 页 · 含音频 ' + info.audioPages + ' 页 · 含配图 ' + info.imagePages + ' 页 · 约 ' + formatSize(info.bytes),
+                ),
+                h(
+                  'label',
+                  { className: 'bl-check' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: audio && info.audioPages > 0,
+                    disabled: !info.audioPages,
+                    onChange: (event) => setAudio(event.target.checked),
+                  }),
+                  '含音频',
+                ),
+                h(
+                  'p',
+                  null,
+                  audio && info.audioPages > 0
+                    ? '每页一个音频对象，进入自动播放，点喇叭可重播。'
+                    : '不含音频：文件更小，幻灯片没有声音。',
+                ),
+                info.warnings && info.warnings.length ? h('div', { className: 'bl-note' }, info.warnings.join('；')) : null,
+                h('p', { className: 'bl-hint' }, '导出文件包含书籍文字、配图与配音，转发前请自行确认范围。'),
+                tooLarge ? h('div', { className: 'bl-err' }, '超过 150 MB，请去掉「含音频」或减少页数。') : null,
+              )
+            : null,
+          h(
+            'div',
+            { className: 'bl-dialog-foot' },
+            h('button', { className: 'bl-btn', onClick: onClose, disabled: busy }, '取消'),
+            h('button', { className: 'bl-btn bl-btn-primary', disabled: !info || busy || tooLarge, onClick: download }, busy ? '正在导出…' : '开始导出'),
+          ),
+        ),
+      );
+    }
+
     /** 导入结果层：四类计数 + 逐项明细，失败项直接给错误码。 */
     function ImportResult({ result, onClose, onOpenBook }) {
       const items = (result && result.items) || [];
@@ -4641,6 +4790,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         Player: Player,
         ModuleView: ModuleView,
         ExportDialog: ExportDialog,
+        PptxDialog: PptxDialog,
         ImportResult: ImportResult,
       },
 

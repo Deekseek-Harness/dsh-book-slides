@@ -3,6 +3,62 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [1.3.0] - 2026-11-04
+
+v1.5「导出 PPT」：把一个已就绪的精讲模块导出为可直接放映的 `.pptx`，每页包含演示画面、该页配音（页内媒体对象）与台词（备注）。
+
+### 新增
+
+- **导出计划**：`GET /export/pptx/plan?moduleId=` 返回页数、含音频页数、含配图页数、缺页清单、体积预估与警告；
+  只接受 `ready` / `ready_degraded`，生成中报 `E_PPT_BUSY`，其它状态报 `E_PPT_NOT_READY`，空模块报 `E_PPT_EMPTY`。
+- **流式导出**：`GET /export/pptx?moduleId=&audio=1|0` 直接流式写 PPTX，不落临时文件；WAV/PNG 用 store，
+  单文件上限 150MB；`content-disposition` 同时给 ASCII fallback 与 UTF-8 文件名。
+- **PPTX 生成器**：`pptx.js` 生成 `presentation.xml`、逐页 slide、逐页 notes 与媒体关系；
+  母版 / 版式 / 主题 / notesMaster 取自 `assets/pptx-template.pptx`（PowerPoint 生成的空白 16:9 模板），
+  音频图标为 `assets/audio-icon.png`。
+- **三部分**：画面用原生文本框 / 形状（封面、要点、引文三种版式，米色底 + 宋体标题）；音频嵌为
+  `a:audioFile` 媒体对象（右下角、页码上方），进入页面自动播放、点喇叭可重播；台词写入 `notesSlide`，
+  逐字等于该页 `audio_script`。
+- **逐页降级**：没有音频文件、或 `.wav` 不是 RIFF/WAVE 的页跳过音频；`image_status != ready` 的页不嵌图，
+  正文占满整宽；缺页在计划里报数，不阻断导出。
+- **面板入口**：播放器控制条与模块行各一个「导出 PPT」；确认层显示页数 / 音频页 / 配图页 / 体积，
+  可勾掉「含音频」；下载走 `fetch` + blob，错误以 JSON 回显，不把错误页当文件下载。
+
+### 修复
+
+- **PowerPoint 报「无法定位链接的多媒体文件」**：音频对象补齐 `p:cNvPr/a:hlinkClick action="ppaction://media"`、
+  `p:nvPr` 的 `p14:media r:embed`，以及同一 WAV 的 `.../audio` 与
+  `http://schemas.microsoft.com/office/2007/relationships/media` 两条关系。此前只有 `a:audioFile r:link`，
+  PowerPoint 会当外链去找 `ppt\media\audio1.wav`；WPS 会回退到包内关系。
+- **WPS 12.1 不自动播**：timing 按 WPS 自己生成的音频页结构：`nodeType="withEffect"`、
+  `p:cTn id="6" dur="音频时长"`、`p:audio/p:cMediaNode`（`repeatCount="indefinite"`、
+  `showWhenStopped="1"`、`onPrev` / `onStopAudio`）。`showWhenStopped="1"` 让喇叭播完仍可见，保留手动重播；
+  不加 `p:transition`，保持手动翻页。
+- **关系编号**：音频 `rId3`、media `rId4`、图标 `rId5`、正文配图 `rId6`；音频 `blip` 用图标，不占配图关系。
+
+### 变更
+
+- `package.json` 版本 1.3.0；发布清单新增 `pptx.js`、`pptexport.js`、`assets/*`。
+- `slides.json` / `module.json` 结构不变；导出全程只读，不调用 LLM / TTS / ComfyUI。
+- SRS 新增 FR-10、附录 O 与 AC-60 ~ AC-70；§2.2 非目标从「导出 PDF/HTML/PPT 成品」改为「导出 PDF/HTML 成品、MP4/视频」。
+
+### 测试基线
+
+| 项 | 结果 |
+|---|---|
+| `npm test`（16 套） | 228 项：**226 通过 / 2 跳过（无真书样本） / 0 失败** |
+| 新增 | `test/pptx.test.mjs` 7 项（部件 / 页序 / 备注 / 音频嵌入与自动播 timing / 转义 / 裁切）、`test/pptexport.test.mjs` 7 项（计划 / 只读 / 非 RIFF / 时长 / 文件名 / HTTP 下载），`panel.test` 补 1 项导出层 |
+| 真机 | PowerPoint 16：音频 `LinkFormat.SourceFullName` 为空，`Timeline.MainSequence` 识别为 `mediacall`（type 83）；WPS 12.1：自动播与点喇叭重播由用户真机验收通过 |
+
+### 已知限制
+
+- **字体**：PPT 用宋体、不嵌字体；与面板的 `Noto Serif SC` 不完全一致，缺字体会由 PowerPoint 替换。
+- **兼容**：只保证 Windows PowerPoint 2010+ 与 WPS 12.1；Mac PowerPoint 尽力，Google Slides 通常不保留导入的嵌入音频。
+- **没声音的模块**：浏览器朗读 / 关闭语音的模块导出后没有音频，导出不会补配音；确认层会报「X/Y 页含音频」。
+- **播放行为**：PowerPoint 16 与 WPS 12.1 均按目标结构验证（用户真机）；每页自动播、点喇叭重播正常。
+  翻页时是否强制停止仍按各软件默认，本版不加额外 timing。
+- **真机待复核**：30 页真实长音频的体积与耗时（当前 30 页 0.5s 测试音频 890KB、53ms）。
+
 ## [1.2.0] - 2026-11-04
 
 v1.4「本地 ComfyUI 配图」：配图从「只出提示词」扩成两档策略，默认行为与以前完全一致。

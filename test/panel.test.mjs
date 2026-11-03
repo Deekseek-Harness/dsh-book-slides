@@ -302,12 +302,14 @@ test('模块列表：就绪、失败、删除/重试按钮都能渲染', () => {
       onRetry: () => {},
       onDelete: () => {},
       onRegenerate: () => {},
+      onPptx: () => {},
     }),
   );
   assert.match(html, /精讲：第 1–3 章/);
   assert.match(html, /已就绪/);
   assert.match(html, /锚定 95%/);
   assert.match(html, /打开/);
+  assert.match(html, /导出 PPT/);
   assert.match(html, /失败/);
   assert.match(html, /E_LLM_JSON/);
   assert.match(html, /重试/);
@@ -587,6 +589,7 @@ test('分屏播放器：初始页、舞台、控制条、缩略图都能渲染',
   assert.match(html, /正在渲染 PDF 原文/);
   assert.match(html, /播放语速/);
   assert.match(html, /静音/);
+  assert.match(html, /导出 PPT/);
   assert.match(html, /空格 播放\/暂停/);
   assert.match(html, /bl-thumbs/);
   assert.match(html, /封面标题/);
@@ -748,6 +751,22 @@ test('导出确认层：先估体积，再决定含不含音频', () => {
   assert.match(html, /正在估算体积/);
   assert.match(html, /开始导出/);
   assert.match(html, /aria-label="导出书档"/);
+});
+
+test('导出 PPT 确认层：加载态与标题能渲染', () => {
+  const { mod } = bootPlugin();
+  const html = renderToString(
+    React.createElement(mod.__components.PptxDialog, {
+      moduleId: 'aaaaaaaaaaaa',
+      title: '精讲：第 1–3 章',
+      onClose: () => {},
+    }),
+  );
+  assert.match(html, /role="dialog"/);
+  assert.match(html, /aria-label="导出 PPT"/);
+  assert.match(html, /正在检查音频与配图/);
+  assert.match(html, /精讲：第 1–3 章/);
+  assert.match(html, /开始导出/);
 });
 
 test('导入结果层：四类计数、逐项错误码与「打开」入口', () => {
