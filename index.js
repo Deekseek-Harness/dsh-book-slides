@@ -40,6 +40,7 @@ import {
   calibrate,
   replayToc,
   chaptersFromToc,
+  describeEmptyReply,
   parseTocReply,
   suggestTocRange,
   tocTextOf,
@@ -489,6 +490,20 @@ async function handleChapters(req, res) {
 const PROMPT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompts');
 let promptCache = null;
 
+/**
+ * 目录抽取的 token 预算。
+ *
+ * 思考模型的思考内容也计入 maxTokens。双栏 + OCR 错字的目录会让它反复推演
+ * 栏位和页码：实测《导演创作完全手册》第 9 页（47 章）在 4000、8000 预算下
+ * 都是「思考用满、正文为空、stop_reason=max_tokens」，前端只能看到
+ * 「回复里没有 JSON 对象」。16000 才够读完并输出完整 JSON（约 11k token）。
+ * 重试时再翻倍，给更乱的目录留余量；预算不是花费，用不完不会扣。
+ */
+const TOC_MAX_TOKENS = 16000;
+const TOC_RETRY_MAX_TOKENS = 32000;
+/** 思考模型的单次调用可能接近一分钟；120s 对 32k 的重试太紧。 */
+const TOC_CALL_TIMEOUT_MS = 180000;
+
 /** 提示词文件读一次就记住；开头那段「版本说明」对模型没用，切掉。 */
 function loadPrompt() {
   if (promptCache !== null) return promptCache;
@@ -518,25 +533,36 @@ function resolveModel(ctx) {
   return { provider: provider, model: model };
 }
 
-/** 调一次模型，把增量拼成整段文本。 */
+/** 调一次模型，把增量拼成整段文本；顺带记下结束原因，供「为什么没 JSON」用。 */
 async function callModel(ctx, system, user, maxTokens) {
   const llm = ctx.get ? ctx.get('llm') : null;
   if (!llm || typeof llm.prepareCall !== 'function') throw new Error('这个 DSH 里没有可用的模型服务');
   const target = resolveModel(ctx);
-  const signal = AbortSignal.timeout(120000);
-  const prepared = await llm.prepareCall({ provider: target.provider, model: target.model, maxTokens: maxTokens || 4000 }, signal);
+  const budget = Number(maxTokens) > 0 ? Number(maxTokens) : TOC_MAX_TOKENS;
+  const signal = AbortSignal.timeout(TOC_CALL_TIMEOUT_MS);
+  const prepared = await llm.prepareCall({ provider: target.provider, model: target.model, maxTokens: budget }, signal);
   const messages = [{ role: 'user', content: [{ type: 'text', text: user }] }];
   let text = '';
+  let reasoningChars = 0;
+  let stopReason = '';
   for await (const chunk of prepared.stream(Object.assign({}, prepared.config, { system: system, messages: messages, signal: signal }))) {
     if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') {
       text += chunk.text;
       continue;
     }
-    if (chunk && chunk.type === 'finish' && chunk.reason && chunk.reason.kind === 'error') {
-      throw new Error('模型报错：' + ((chunk.reason.failure && chunk.reason.failure.message) || '未知原因'));
+    // 思考内容不拼进正文，但要计数：正文为空时靠它区分「想了但没写」和「什么都没说」
+    if (chunk && chunk.type === 'reasoning-delta' && typeof chunk.text === 'string') {
+      reasoningChars += chunk.text.length;
+      continue;
+    }
+    if (chunk && chunk.type === 'finish' && chunk.reason) {
+      stopReason = String(chunk.reason.kind || '');
+      if (chunk.reason.kind === 'error') {
+        throw new Error('模型报错：' + ((chunk.reason.failure && chunk.reason.failure.message) || '未知原因'));
+      }
     }
   }
-  return { text: text, model: target.model, provider: target.provider };
+  return { text: text, model: target.model, provider: target.provider, stopReason: stopReason, reasoningChars: reasoningChars, maxTokens: budget };
 }
 
 /** 把章节写回盘，并同步 book.json 的章数与字数。 */
@@ -699,11 +725,15 @@ async function handleTocParse(req, res, ctx) {
   let entries = null;
   let lastError = '';
   let usedModel = '';
+  let budget = TOC_MAX_TOKENS;
   for (let attempt = 0; attempt < 2 && !entries; attempt += 1) {
-    const user = attempt === 0 ? built.user : built.user + '\n\n【上一次的输出不合格】' + lastError + '\n请严格按规则重新输出，只输出 JSON。';
+    const user =
+      attempt === 0
+        ? built.user
+        : built.user + '\n\n【上一次的输出不合格】' + lastError + '\n这次不要分析目录、不要解释，直接输出 JSON 对象。';
     let reply;
     try {
-      reply = await callModel(ctx, built.system, user, 4000);
+      reply = await callModel(ctx, built.system, user, budget);
       usedModel = reply.model;
     } catch (err) {
       const toc = fallbackToMechanical(loaded, pages, { code: 'E_TOC_LLM', stage: 'llm', message: String((err && err.message) || err), range: { from, to } });
@@ -711,20 +741,31 @@ async function handleTocParse(req, res, ctx) {
       return;
     }
     try {
+      // 空正文不是「JSON 格式不好」，是预算被思考吃光了——重试要加钱，也要说清楚
+      if (!reply.text.trim()) throw new Error(describeEmptyReply(reply));
       const parsed = parseTocReply(reply.text);
       const errors = validateEntries(parsed);
       if (errors.length) {
         lastError = errors.join('；');
+        // 被截断的 JSON 有时还能解析，但条目已经少了；同样要加预算重试
+        if (reply.stopReason === 'max-tokens') budget = Math.max(budget, TOC_RETRY_MAX_TOKENS);
         continue;
       }
       entries = parsed;
     } catch (err) {
       lastError = String((err && err.message) || err);
+      if (reply.stopReason === 'max-tokens') {
+        if (!/截断|思考/.test(lastError)) lastError += '（输出被 max_tokens 截断）';
+        budget = Math.max(budget, TOC_RETRY_MAX_TOKENS);
+      }
     }
   }
 
   if (!entries) {
-    const toc = fallbackToMechanical(loaded, pages, { code: 'E_TOC_LLM', stage: 'validate', message: lastError || '模型没给出可用的目录', range: { from, to } });
+    // 这几页里一条带页码的条目都没有：多半不是目录页，或目录本身不印页码
+    const empty = /章节太少（0 条）|没有任何条目/.test(lastError);
+    const message = empty ? '这几页没有可用的目录条目（可能不是目录页，或目录没印页码）' : lastError || '模型没给出可用的目录';
+    const toc = fallbackToMechanical(loaded, pages, { code: 'E_TOC_LLM', stage: 'validate', message: message, range: { from, to } });
     sendJson(res, 200, { ok: true, fallback: true, code: toc.code, message: toc.message, chapterCount: loaded.book.chapterCount });
     return;
   }

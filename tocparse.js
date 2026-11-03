@@ -115,7 +115,7 @@ export function parseTocReply(reply) {
     .trim();
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error('回复里没有 JSON 对象');
+  if (start < 0 || end <= start) throw new Error('回复里没有 JSON 对象' + previewOf(raw));
   let data;
   try {
     data = JSON.parse(raw.slice(start, end + 1));
@@ -139,14 +139,57 @@ function normalizeLevel(level) {
 }
 
 /**
+ * 回复为空时到底发生了什么。
+ *
+ * 思考模型的「思考」也计入 maxTokens：目录是双栏、又带 OCR 错字时，模型会在
+ * 推演栏位和页码上花掉整份预算，正文一个字都不剩。这时报「没有 JSON」等于
+ * 什么都没说——必须把「预算被思考吃光」这件事讲出来。
+ * @returns {string} 空回复的诊断；回复有正文时返回空串。
+ */
+export function describeEmptyReply(reply) {
+  const text = String((reply && reply.text) || '').trim();
+  if (text) return '';
+  const budget = Number(reply && reply.maxTokens) || 0;
+  if (reply && reply.stopReason === 'max-tokens') {
+    return '模型把 ' + (budget ? budget + ' ' : '') + 'token 全用在思考上了，正文被截断';
+  }
+  if (Number(reply && reply.reasoningChars) > 0) return '模型只输出了思考过程，没有输出正文';
+  return '模型没有输出正文';
+}
+
+/** 错误信息里带一小段原文，方便人（和重试时的模型）知道它到底说了什么。 */
+function previewOf(text) {
+  const flat = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!flat) return '';
+  return '；开头是「' + flat.slice(0, 60) + (flat.length > 60 ? '…' : '') + '」';
+}
+
+/**
+ * 哪些条目算「内容章节」：只有 chapter / appendix。
+ *
+ * part / front 是结构标记（第X部分、前言、出版后记），不是能单独生成精讲的一章。
+ * 早先把它们也当章节，一本 47 章的书会切出 58 段，多出 8 个只有一页的分卷壳
+ * 和 2 个前言壳；前文页区间也因此被顶到分卷页上。
+ */
+export const CONTENT_LEVELS = ['chapter', 'appendix'];
+
+export function isContentEntry(entry) {
+  const level = String((entry && entry.level) || 'chapter').toLowerCase();
+  return CONTENT_LEVELS.includes(level);
+}
+
+/**
  * 校验模型给的目录表。返回错误列表（空 = 通过）。
  * 这些错误会连同原文一起回灌给模型重试一次。
  */
 export function validateEntries(entries) {
   const errors = [];
   if (!Array.isArray(entries) || entries.length === 0) return ['没有任何条目'];
-  if (entries.length < TOC_MIN_ENTRIES) errors.push('条目太少（' + entries.length + ' 条），至少要 ' + TOC_MIN_ENTRIES + ' 条');
-  if (entries.length > TOC_MAX_ENTRIES) errors.push('条目太多（' + entries.length + ' 条），可能把小节也算进来了');
+  // 只数内容章节：分卷/前言是合法条目，不该把 60 条的上限挤爆
+  // （47 章 + 8 个分卷 + 2 个前言 = 57 条，按总条数算就会逼近误判线）。
+  const contentCount = entries.filter(isContentEntry).length;
+  if (contentCount < TOC_MIN_ENTRIES) errors.push('正文章节太少（' + contentCount + ' 条），至少要 ' + TOC_MIN_ENTRIES + ' 条');
+  if (contentCount > TOC_MAX_ENTRIES) errors.push('正文章节太多（' + contentCount + ' 条），可能把小节也算进来了');
   entries.forEach((entry, index) => {
     const at = '第 ' + (index + 1) + ' 条';
     if (!entry.title) errors.push(at + '没有标题');
@@ -252,6 +295,11 @@ export function pageHasTitle(text, title) {
   const toleranceWhole = whole.length >= 10 ? 2 : whole.length >= 5 ? 1 : 0;
   const toleranceTail = tail.length <= 3 ? 0 : toleranceWhole;
   const lines = String(text || '').split('\n').slice(0, 3);
+  // 有章号的标题，必须在这一页上看到同一个章号，才允许只凭标题后缀命中。
+  // 否则「第32章 开机」会被上一章标题页的「开机之前」抢走——两个字的后缀
+  // 在中文里到处都是，实测把《导演创作完全手册》第 32 章提前了 3 页。
+  const numberedHead = /^第\s*[0-9一二三四五六七八九十百千零〇两]+\s*[章回讲课篇卷部]$/.test(titleHead);
+  const pageHasSameHead = numberedHead && lines.some((line) => headOf(normalizeLine(line)) === titleHead);
   // 分卷页上会列出这一部分的章名（「第 1 章 逃逸分析 / 第 1 部分 / 语言基础」），
   // 它不是章的标题页，认成锚点会让整章前移一页。
   if (lines.some((line) => PART_RE.test(normalizeLine(line)))) return false;
@@ -263,6 +311,7 @@ export function pageHasTitle(text, title) {
     // 整行只差两个字，纯比字符串必然互相命中；章号是这里唯一可靠的区分。
     const lineHead = headOf(text2);
     if (lineHead && titleHead && lineHead.toLowerCase() !== titleHead.toLowerCase()) continue;
+    if (numberedHead && !lineHead && !pageHasSameHead) continue;
     // a) 行首就是标题正文（页眉写法：「控制器的硬件实现 545」）
     if (tail.length >= 2) {
       const probe = text2.slice(0, tail.length);
@@ -365,10 +414,12 @@ export function calibrate(pages, entries, tocRange) {
     });
   }
 
-  const placed = out.filter((item) => item.physical > 0).length;
-  const hitRate = out.length ? placed / out.length : 0;
+  // 命中率只看内容章节：分卷/前言定位失败不该把 47 章全标的书判成「没校验」。
+  const content = out.filter(isContentEntry);
+  const placed = content.filter((item) => item.physical > 0).length;
+  const hitRate = content.length ? placed / content.length : 0;
   let status = 'verified';
-  if (!out.length || hitRate < 0.5) status = 'failed';
+  if (!content.length || hitRate < 0.5) status = 'failed';
   else if (hitRate < 0.8) status = 'unverified';
   return { status: status, offset: offsetA, offsetShare: vote.share, entries: out, hitRate: hitRate };
 }
@@ -376,11 +427,16 @@ export function calibrate(pages, entries, tocRange) {
 /**
  * 校准结果 → chapters。
  * 结构必须和机械路径完全一致（n/title/from/to/chars/toc/front/verified/source）。
+ *
+ * 只用内容章节（chapter/appendix）定边界；分卷页和前言页并进「前文」，
+ * 否则会多出只有一页的「第X部分」壳，章号也跟着整体错位。
  */
 export function chaptersFromToc(pages, calibrated) {
   const total = pages.length;
   const pageNo = (i) => Number((pages[i] && pages[i].page) || i + 1);
-  const list = (calibrated && calibrated.entries ? calibrated.entries : []).filter((item) => item.physical > 0);
+  const list = (calibrated && calibrated.entries ? calibrated.entries : []).filter(
+    (item) => item.physical > 0 && isContentEntry(item),
+  );
   list.sort((a, b) => a.physical - b.physical);
   if (list.length < 2) return null;
 

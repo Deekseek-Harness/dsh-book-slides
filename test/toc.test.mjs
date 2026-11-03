@@ -18,6 +18,7 @@ import {
   buildTocMessages,
   calibrate,
   chaptersFromToc,
+  describeEmptyReply,
   parseTocReply,
   printedPageOf,
   suggestTocRange,
@@ -91,6 +92,14 @@ test('parseTocReply：能剥掉代码围栏，并纠正字段', () => {
 
 test('parseTocReply：没有 JSON 时抛错，错误里带原文片段', () => {
   assert.throws(() => parseTocReply('抱歉，我无法完成。'), /没有 JSON/);
+  assert.throws(() => parseTocReply('抱歉，我无法完成。'), /抱歉，我无法完成/);
+});
+
+test('思考吃光预算：空正文要说清是 max_tokens 用尽，不是「格式不对」', () => {
+  assert.match(describeEmptyReply({ text: '', stopReason: 'max-tokens', maxTokens: 16000 }), /16000 token 全用在思考上/);
+  assert.match(describeEmptyReply({ text: '', stopReason: 'stop', reasoningChars: 3000 }), /只输出了思考过程/);
+  assert.match(describeEmptyReply({ text: '', stopReason: 'stop', reasoningChars: 0 }), /没有输出正文/);
+  assert.equal(describeEmptyReply({ text: '{"entries":[]}' }), '', '有正文就不是空回复');
 });
 
 test('validateEntries：页码倒退、条目过多都要报错', () => {
@@ -98,7 +107,7 @@ test('validateEntries：页码倒退、条目过多都要报错', () => {
   const backwards = [ENTRIES[0], { title: '第二章', printed: 50, level: 'chapter' }, ENTRIES[2]];
   assert.match(validateEntries(backwards).join('；'), /页码比上一条小/);
   const many = Array.from({ length: TOC_MAX_ENTRIES + 1 }, (_, i) => ({ title: '第' + (i + 1) + '章 标题', printed: i + 1, level: 'chapter' }));
-  assert.match(validateEntries(many).join('；'), /条目太多/);
+  assert.match(validateEntries(many).join('；'), /正文章节太多/);
 });
 
 /* -------------------------------- 校准 -------------------------------- */
@@ -146,6 +155,53 @@ test('落盘：目录结果变成章节，页区间首尾相接', () => {
   );
   assert.equal(list[0].title, '第一章 起点');
   assert.equal(list[0].source, 'toc');
+});
+
+test('落盘：分卷页和前言不单独成章，章号也不被顶偏', () => {
+  const pages = makeBook();
+  // 《导演创作完全手册》就是这样：简目里混着 8 个「第X部分」和前言/后记。
+  // 早先它们会各占一段，47 章的书切成 58 段；现在只留内容章节。
+  const entries = [
+    { title: '第一部分 开头', printed: 101, level: 'part', fixedChar: false },
+    { title: '前言', printed: 101, level: 'front', fixedChar: false },
+    ...ENTRIES,
+    { title: '出版后记', printed: 110, level: 'front', fixedChar: false },
+  ];
+  const calibrated = calibrate(pages, entries);
+  assert.equal(calibrated.status, 'verified', '分卷/前言没锚定，不该拖累整本书的判定');
+  assert.equal(calibrated.hitRate, 1, '命中率只数内容章节');
+  const chapters = chaptersFromToc(pages, calibrated);
+  assert.ok(chapters);
+  const list = chapters.filter((chapter) => !chapter.front);
+  assert.equal(list.length, 3, '分卷/前言不能算成章');
+  assert.deepEqual(
+    list.map((chapter) => chapter.n),
+    [1, 2, 3],
+    '章号要连续，不能被分卷顶偏',
+  );
+  assert.equal(list[0].title, '第一章 起点');
+  assert.equal(list[0].from, 2, '第 1 章仍从自己的标题页开始');
+  assert.ok(!list.some((chapter) => /部分|前言|后记/.test(chapter.title)), '结构标记不该出现在章节里');
+});
+
+test('校验：分卷/前言不占 60 条正文上限', () => {
+  // 按页码顺序混排：8 个分卷 + 60 章，正文刚好到上限
+  const mixed = [];
+  let page = 1;
+  let part = 0;
+  for (let i = 0; i < TOC_MAX_ENTRIES; i += 1) {
+    if (i % 8 === 0 && part < 8) {
+      part += 1;
+      mixed.push({ title: '第' + part + '部分 篇', printed: page, level: 'part', fixedChar: false });
+      page += 1;
+    }
+    mixed.push({ title: '第' + (i + 1) + '章 标题', printed: page, level: 'chapter', fixedChar: false });
+    page += 1;
+  }
+  assert.deepEqual(validateEntries(mixed), [], '8 个分卷 + 60 章不该误判成小节混入');
+
+  const tooMany = mixed.concat([{ title: '第61章 多出来的', printed: page, level: 'chapter', fixedChar: false }]);
+  assert.match(validateEntries(tooMany).join('；'), /正文章节太多/);
 });
 
 test('抽查：标题在区间里出现才算 verified', () => {
@@ -322,6 +378,18 @@ test('标题命中：两三个字的短标题不容错', async () => {
   // 「前言」两个字的标题容一个字就等于随便撞，会把后面所有章推出搜索范围
   assert.equal(pageHasTitle('接口定义如下，这是一段正文。', '前言'), false);
   assert.equal(pageHasTitle('前 言\n本书写给……', '前言'), true);
+});
+
+test('标题命中：页面上没有这一章的章号时，不许只凭标题后缀抢锚点', async () => {
+  const { pageHasTitle } = await import('../tocparse.js');
+  // 《导演创作完全手册》第 31 章标题页（OCR 把「第31章」认成「第3章」），
+  // 末尾是「开机之前」；不能让它把第 32 章「开机」抢到这一页（实测提前 3 页）。
+  const prevChapterPage = '第3章\n开机之前\n31.1 装配布景';
+  assert.equal(pageHasTitle(prevChapterPage, '第32章 开机'), false);
+  // 真正的第 32 章标题页：章号在
+  assert.equal(pageHasTitle('第32章\n开 机\n准备开机时', '第32章 开机'), true);
+  // 页眉没章号的普通章，仍可按标题正文命中
+  assert.equal(pageHasTitle('控制器的硬件实现 545', '附录C 控制器的硬件实现'), true);
 });
 
 test('回放：只信 printed，存下来的 physical 一律重算', async () => {
