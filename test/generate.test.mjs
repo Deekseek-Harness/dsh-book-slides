@@ -496,6 +496,27 @@ test('中断恢复：磁盘上遗留的 structuring 模块读出来就是 interr
   assert.equal(onDisk.status, 'interrupted', '读一次就要写回，别让它永远转圈');
 });
 
+test('播放进度：保存、读回、夹到模块页数，非法模块拒绝', async () => {
+  const moduleId = globalThis.__firstModuleId;
+  const saved = await postJson('/dsh-book-slides/progress', { bookId: bookId, moduleId: moduleId, slide: 3 });
+  onlyOk(saved);
+  assert.equal(saved.progress.lastBookId, bookId);
+  assert.equal(saved.progress.lastModuleId, moduleId);
+  assert.equal(saved.progress.lastSlide, 3);
+
+  const fetched = await getJson('/dsh-book-slides/progress');
+  onlyOk(fetched);
+  assert.equal(fetched.progress.lastSlide, 3);
+
+  const clamped = await postJson('/dsh-book-slides/progress', { bookId: bookId, moduleId: moduleId, slide: 99 });
+  onlyOk(clamped);
+  assert.equal(clamped.progress.lastSlide, 6, '超过模块页数要夹到最后一页');
+
+  const bad = await postJson('/dsh-book-slides/progress', { bookId: bookId, moduleId: 'aaaaaaaaaaaa', slide: 1 });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.code, 'E_NOT_FOUND');
+});
+
 test('模块删除：只删模块，书还在', async () => {
   const moduleId = globalThis.__firstModuleId;
   const res = await fetch(base + '/dsh-book-slides/module?moduleId=' + moduleId, { method: 'DELETE' });
@@ -506,4 +527,6 @@ test('模块删除：只删模块，书还在', async () => {
   assert.equal(missing.code, 'E_NOT_FOUND');
   const book = await getJson('/dsh-book-slides/book?bookId=' + bookId);
   onlyOk(book);
+  const progress = await getJson('/dsh-book-slides/progress');
+  assert.equal(progress.progress.lastModuleId, '', '删模块后「继续听」不能指向它');
 });

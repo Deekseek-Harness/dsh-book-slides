@@ -31,6 +31,10 @@ export const ROOT = resolveRoot();
 export const BOOKS_DIR = path.join(ROOT, 'books');
 export const TRASH_DIR = path.join(ROOT, 'trash');
 export const PREF_FILE = path.join(ROOT, 'preference.json');
+export const PROGRESS_FILE = path.join(ROOT, 'progress.json');
+
+/** 播放器默认值：分隔条 55%，语速 1.0，不静音。 */
+export const DEFAULT_PREFERENCE = { splitRatio: 0.55, rate: 1, muted: false, fontSize: 16 };
 
 /** 建目录：幂等，任何读之前都可以调。 */
 export function ensureDirs() {
@@ -218,6 +222,119 @@ export function trashBook(bookId) {
   const target = path.join(TRASH_DIR, bookId + '-' + stamp);
   fs.renameSync(dir, target);
   return true;
+}
+
+/** 回收站统计：多少本、占多少字节。 */
+export function trashStats() {
+  ensureDirs();
+  let count = 0;
+  let bytes = 0;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(TRASH_DIR, { withFileTypes: true });
+  } catch {
+    return { count: 0, bytes: 0 };
+  }
+  for (const entry of entries) {
+    const full = path.join(TRASH_DIR, entry.name);
+    if (entry.isDirectory()) {
+      count += 1;
+      bytes += dirSize(full);
+    } else {
+      try {
+        bytes += fs.statSync(full).size;
+      } catch {
+        /* 读不到就不计 */
+      }
+    }
+  }
+  return { count: count, bytes: bytes };
+}
+
+/** 清空回收站。返回清掉几本、释放多少字节，供设置页显示。 */
+export function clearTrash() {
+  const stats = trashStats();
+  let entries = [];
+  try {
+    entries = fs.readdirSync(TRASH_DIR);
+  } catch {
+    return { count: 0, bytes: 0 };
+  }
+  for (const name of entries) {
+    try {
+      fs.rmSync(path.join(TRASH_DIR, name), { recursive: true, force: true });
+    } catch {
+      /* 删不掉的留到下次 */
+    }
+  }
+  ensureDirs();
+  return stats;
+}
+
+/* ------------------------------ 播放进度与偏好 ------------------------------ */
+
+/** 书架「继续听」：只存三个字段，坏了就当没有。 */
+export function readProgress() {
+  const data = readJson(PROGRESS_FILE, null) || {};
+  return {
+    lastBookId: isValidId(data.lastBookId) ? data.lastBookId : '',
+    lastModuleId: isValidId(data.lastModuleId) ? data.lastModuleId : '',
+    lastSlide: Math.max(1, Math.round(Number(data.lastSlide) || 1)),
+    updatedAt: String(data.updatedAt || ''),
+  };
+}
+
+export function writeProgress(patch) {
+  const current = readProgress();
+  const next = {
+    lastBookId: String((patch && patch.lastBookId) || current.lastBookId || ''),
+    lastModuleId: String((patch && patch.lastModuleId) || current.lastModuleId || ''),
+    lastSlide: Math.max(1, Math.round(Number((patch && patch.lastSlide) || current.lastSlide || 1))),
+    updatedAt: new Date().toISOString(),
+  };
+  writeJson(PROGRESS_FILE, next);
+  return next;
+}
+
+export function clearProgressForModule(moduleId) {
+  const current = readProgress();
+  if (!current.lastModuleId || current.lastModuleId !== moduleId) return;
+  writeJson(PROGRESS_FILE, { lastBookId: '', lastModuleId: '', lastSlide: 1, updatedAt: new Date().toISOString() });
+}
+
+export function clearProgressForBook(bookId) {
+  const current = readProgress();
+  if (!current.lastBookId || current.lastBookId !== bookId) return;
+  writeJson(PROGRESS_FILE, { lastBookId: '', lastModuleId: '', lastSlide: 1, updatedAt: new Date().toISOString() });
+}
+
+/** 偏好：夹在合法区间里，坏值一律回默认。 */
+export function readPreference() {
+  const data = readJson(PREF_FILE, null) || {};
+  const ratio = Number(data.splitRatio);
+  const rate = Number(data.rate);
+  const fontSize = Number(data.fontSize);
+  return {
+    splitRatio: Number.isFinite(ratio) ? Math.min(0.75, Math.max(0.25, ratio)) : DEFAULT_PREFERENCE.splitRatio,
+    rate: Number.isFinite(rate) ? Math.min(2, Math.max(0.5, rate)) : DEFAULT_PREFERENCE.rate,
+    muted: data.muted === true,
+    fontSize: Number.isFinite(fontSize) ? Math.min(20, Math.max(14, Math.round(fontSize))) : DEFAULT_PREFERENCE.fontSize,
+  };
+}
+
+export function writePreference(patch) {
+  const merged = Object.assign({}, readPreference(), patch && typeof patch === 'object' ? patch : {});
+  const ratio = Number(merged.splitRatio);
+  const rate = Number(merged.rate);
+  const fontSize = Number(merged.fontSize);
+  const next = {
+    splitRatio: Number.isFinite(ratio) ? Math.min(0.75, Math.max(0.25, ratio)) : DEFAULT_PREFERENCE.splitRatio,
+    rate: Number.isFinite(rate) ? Math.min(2, Math.max(0.5, rate)) : DEFAULT_PREFERENCE.rate,
+    muted: merged.muted === true,
+    fontSize: Number.isFinite(fontSize) ? Math.min(20, Math.max(14, Math.round(fontSize))) : DEFAULT_PREFERENCE.fontSize,
+  };
+  writeJson(PREF_FILE, next);
+  return next;
 }
 
 /** 目录占用（递归求和），设置页要用。 */

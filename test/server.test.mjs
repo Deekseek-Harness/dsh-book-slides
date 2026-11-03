@@ -266,6 +266,53 @@ test('存储概况：目录、占用、回收站数量', async () => {
   assert.equal(data.trashCount, 1);
 });
 
+test('清空回收站：trash 为空，占用空间下降（AC-24）', async () => {
+  const before = await fetch(base + '/dsh-book-slides/storage').then((r) => r.json());
+  const result = await post('/dsh-book-slides/trash/clear', '{}').then((r) => r.json());
+  assert.equal(result.ok, true);
+  assert.ok(result.cleared >= 1);
+  assert.ok(result.bytesFreed > 0);
+  assert.deepEqual(fs.readdirSync(path.join(ROOT, 'trash')), []);
+
+  const after = await fetch(base + '/dsh-book-slides/storage').then((r) => r.json());
+  assert.equal(after.trashCount, 0);
+  assert.equal(after.trashBytes, 0);
+  assert.ok(after.bytes < before.bytes, '清空回收站后总占用应下降');
+});
+
+test('原文页：按页区间返回未清洗文本，坏范围拒绝', async () => {
+  const shelf = await fetch(base + '/dsh-book-slides/books').then((r) => r.json());
+  const id = shelf.books[0].id;
+  const data = await fetch(base + '/dsh-book-slides/pages?bookId=' + id + '&from=1&to=1').then((r) => r.json());
+  assert.equal(data.ok, true);
+  assert.equal(data.pages.length, 1);
+  assert.equal(data.pages[0].page, 1);
+  assert.ok(data.pages[0].text.length > 0);
+
+  const bad = await fetch(base + '/dsh-book-slides/pages?bookId=' + id + '&from=5&to=2').then((r) => r.json());
+  assert.equal(bad.code, 'E_BAD_RANGE');
+});
+
+test('偏好：分隔条比例与语速夹到合法区间并持久化', async () => {
+  const initial = await fetch(base + '/dsh-book-slides/preference').then((r) => r.json());
+  assert.equal(initial.ok, true);
+  assert.equal(initial.preference.splitRatio, 0.55);
+  assert.equal(initial.preference.rate, 1);
+
+  const saved = await post(
+    '/dsh-book-slides/preference',
+    JSON.stringify({ splitRatio: 0.1, rate: 9, muted: true, fontSize: 99 }),
+  ).then((r) => r.json());
+  assert.equal(saved.ok, true);
+  assert.equal(saved.preference.splitRatio, 0.25);
+  assert.equal(saved.preference.rate, 2);
+  assert.equal(saved.preference.muted, true);
+  assert.equal(saved.preference.fontSize, 20);
+
+  const again = await fetch(base + '/dsh-book-slides/preference').then((r) => r.json());
+  assert.deepEqual(again.preference, saved.preference);
+});
+
 test('方法不对返回 405', async () => {
   const res = await post('/dsh-book-slides/books', '{}');
   assert.equal(res.status, 405);

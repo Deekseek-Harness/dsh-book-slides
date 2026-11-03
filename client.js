@@ -5,8 +5,8 @@
  *   - 拖入 PDF，看得到上传进度与解析等待
  *   - 卡片流看书封、章数、字数、模块数
  *   - 点开一本书：目录切章、勾选章节、生成精讲（M3：进度/取消/重试）
- *   - 生成完进模块预览：逐页文字 + 配音稿 + 配图提示词，本机朗读试听
- *   - 设置页：语音供应商/音色/语速、试听、存储概况
+ *   - 生成完进分屏播放器（M4）：左原文高亮、右幻灯片、本机朗读、自动翻页、快捷键
+ *   - 书架「继续听」回到上次页码；设置页：语音、试听、存储与回收站
  *
  * 本文件不碰磁盘：所有数据走 Host 半体的 /dsh-book-slides/* 路由。
  */
@@ -35,6 +35,10 @@ window.__ModuleLoader__.load({
     const AUDIO_API = '/dsh-book-slides/audio';
     const VOICE_API = '/dsh-book-slides/voice';
     const VOICE_PROBE_API = '/dsh-book-slides/voice/probe';
+    const PAGES_API = '/dsh-book-slides/pages';
+    const PROGRESS_API = '/dsh-book-slides/progress';
+    const PREFERENCE_API = '/dsh-book-slides/preference';
+    const TRASH_CLEAR_API = '/dsh-book-slides/trash/clear';
     const FILE_API = '/dsh-book-slides/file';
     const COVER_API = '/dsh-book-slides/cover';
     const STORAGE_API = '/dsh-book-slides/storage';
@@ -169,6 +173,70 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
 .bl-select option:disabled{color:var(--dsw-alias-label-tertiary,GrayText)}
 .bl-select:focus-visible{outline:2px solid color-mix(in oklab,currentColor 45%,transparent);outline-offset:1px}
 .bl-kv{margin-bottom:14px}
+/* ------------------------------ 播放器 ------------------------------ */
+.bl-player{height:100%;display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base,Canvas);color:var(--dsw-alias-label-primary,CanvasText)}
+.bl-player-main{flex:1 1 auto;display:flex;min-height:0;overflow:hidden}
+.bl-pane-source{flex:0 0 var(--bl-split,55%);min-width:0;overflow-y:auto;overflow-x:hidden;padding:12px 16px 40px;scroll-behavior:smooth}
+.bl-pane-stage{flex:1 1 auto;min-width:0;display:flex;align-items:flex-start;justify-content:center;padding:14px;overflow:auto;background:color-mix(in oklab,currentColor 3%,transparent)}
+.bl-divider{flex:0 0 6px;position:relative;cursor:col-resize;touch-action:none}
+.bl-divider::before{content:"";position:absolute;left:2px;top:0;bottom:0;width:1px;background:var(--bl-line)}
+.bl-divider:hover::before,.bl-divider:focus-visible::before{width:2px;background:currentColor;opacity:.5}
+.bl-divider:focus-visible{outline:none}
+.bl-source-sticky{position:sticky;top:-12px;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0;background:var(--dsw-alias-bg-base,Canvas);border-bottom:1px solid var(--bl-line);margin-bottom:10px}
+.bl-source-sticky a{color:inherit;text-decoration:none}
+.bl-source-banner{border:1px solid var(--bl-line);border-radius:7px;padding:5px 9px;font-size:11.5px;opacity:.7;margin:0 0 10px;background:color-mix(in oklab,currentColor 4%,transparent)}
+.bl-source-page{margin:0 0 18px}
+.bl-source-page-head{font-size:10.5px;opacity:.42;letter-spacing:.1em;margin-bottom:3px}
+.bl-source-para{margin:0;min-height:1.85em;font-size:13px;line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 5px;border-radius:5px}
+.bl-source-para.bl-hl{background:color-mix(in oklab,#f0b429 30%,transparent);box-shadow:inset 3px 0 0 #d99a00}
+.bl-stage-wrap{width:100%;max-width:min(100%,calc((100vh - 250px) * 16 / 9));margin:0 auto}
+.bl-stage{width:100%;aspect-ratio:16/9;container-type:inline-size;background:#fbf8f1;color:#241f1a;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.22);overflow:hidden;position:relative;display:flex;flex-direction:column;padding:clamp(14px,3.4cqw,44px)}
+.bl-stage-cover{justify-content:center}
+.bl-stage-kicker{font-size:clamp(9px,1.4cqw,15px);letter-spacing:.2em;color:#9a6b3f;margin-bottom:clamp(8px,1.6cqw,18px)}
+.bl-stage-title{font-family:"Noto Serif SC","Songti SC",serif;font-size:clamp(20px,5cqw,60px);line-height:1.28;font-weight:700;letter-spacing:.01em;overflow-wrap:anywhere}
+.bl-stage-sub{margin-top:clamp(8px,1.8cqw,22px);font-size:clamp(12px,2.1cqw,24px);color:#6f5a43;line-height:1.6}
+.bl-stage-rule{width:clamp(40px,8cqw,110px);height:3px;background:#b23a2e;margin-top:clamp(14px,3cqw,34px);border-radius:2px}
+.bl-stage-body{display:flex;gap:clamp(14px,3cqw,40px);flex:1;min-height:0;margin-top:clamp(10px,2.4cqw,28px)}
+.bl-stage-copy{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;overflow:auto;padding-right:2px}
+.bl-stage-bullets{margin:0;padding-left:1.3em;font-size:clamp(11px,1.9cqw,22px);line-height:1.6}
+.bl-stage-bullets li{margin:0 0 clamp(6px,1.2cqw,14px);padding-left:.15em;overflow-wrap:anywhere}
+.bl-stage-figure{flex:0 0 34%;min-width:0;position:relative;border:1px dashed #c9b79b;border-radius:10px;background:linear-gradient(135deg,#f4ecdf,#fbf7ee);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:clamp(8px,1.6cqw,16px);color:#8a7355;cursor:pointer;text-align:center;overflow:hidden}
+.bl-stage-figure:hover{background:linear-gradient(135deg,#f0e6d4,#f8f2e6)}
+.bl-stage-figure b{font-size:clamp(11px,1.6cqw,17px);font-weight:600}
+.bl-stage-figure span{font-size:clamp(9px,1.3cqw,13px);opacity:.75}
+.bl-stage-figure-prompt{font-size:clamp(10px,1.5cqw,15px);line-height:1.6;color:#5c4a33;white-space:pre-wrap;overflow-wrap:anywhere;max-height:100%;overflow:auto;text-align:left}
+.bl-stage-figure .bl-btn{color:#5c4a33;border-color:#c9b79b;padding:1px 7px;font-size:11px}
+.bl-stage-quote{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:0 4%}
+.bl-stage-quote blockquote{margin:0;font-family:"Noto Serif SC","Songti SC",serif;font-size:clamp(17px,3.4cqw,42px);line-height:1.55;color:#2a241c}
+.bl-stage-quote cite{margin-top:clamp(10px,2.4cqw,26px);font-style:normal;font-size:clamp(10px,1.6cqw,17px);color:#8a7355;letter-spacing:.06em}
+.bl-stage-foot{position:absolute;right:clamp(10px,2cqw,24px);bottom:clamp(8px,1.6cqw,18px);font-size:clamp(8px,1.1cqw,12px);color:#b3a28a;letter-spacing:.08em}
+.bl-player-foot{flex:0 0 auto;border-top:1px solid var(--bl-line);padding:8px 12px 10px;display:flex;flex-direction:column;gap:7px;background:var(--dsw-alias-bg-base,Canvas)}
+.bl-controls{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
+.bl-controls .bl-btn{padding:3px 9px}
+.bl-play-btn{min-width:88px;font-weight:600}
+.bl-pagebar{flex:1 1 120px;min-width:70px;height:5px;border-radius:3px;background:color-mix(in oklab,currentColor 12%,transparent);overflow:hidden}
+.bl-pagebar i{display:block;height:100%;background:currentColor;transition:width .15s linear}
+.bl-thumbs{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}
+.bl-thumb{position:relative;flex:0 0 98px;height:56px;overflow:hidden;border:1px solid #d8ccb6;background:#fbf8f1;color:#241f1a;font:inherit;font-size:9px;line-height:1.3;padding:15px 6px 4px;border-radius:5px;cursor:pointer;opacity:.72;text-align:left}
+.bl-thumb b{position:absolute;left:5px;top:2px;font-size:9px;font-weight:700;color:#b23a2e}
+.bl-thumb-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;font-family:"Noto Serif SC","Songti SC",serif}
+.bl-thumb-cover{background:#f1e6d2}
+.bl-thumb-quote .bl-thumb-title{font-style:italic;text-align:center}
+.bl-thumb:hover{opacity:1}
+.bl-thumb.on{opacity:1;border-color:#b23a2e;box-shadow:0 0 0 1px #b23a2e}
+.bl-noaudio{font-size:11.5px;color:#b8860b}
+.bl-player-status{font-size:11.5px;opacity:.65;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bl-continue{margin-top:2px;align-self:flex-start;font-size:11px;padding:2px 7px;border-radius:6px}
+.bl-player:fullscreen{background:var(--dsw-alias-bg-base,Canvas)}
+.bl-player:fullscreen .bl-player-main{background:var(--dsw-alias-bg-base,Canvas)}
+.bl-player:fullscreen .bl-stage-wrap{max-width:min(100%,calc((100vh - 180px) * 16 / 9))}
+@media (max-width:1023px){
+ .bl-player-main{flex-direction:column}
+ .bl-pane-stage{order:1;flex:0 0 46%;padding:8px;background:color-mix(in oklab,currentColor 4%,transparent)}
+ .bl-pane-source{order:2;flex:1 1 auto;padding:10px 12px 24px;border-top:1px solid var(--bl-line)}
+ .bl-divider{display:none}
+ .bl-stage-wrap{max-width:100%;height:100%;display:flex;align-items:center}
+}
 `;
 
     /* ------------------------------ 数据 ------------------------------ */
@@ -285,6 +353,14 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       return ['ready', 'ready_degraded', 'failed', 'cancelled', 'interrupted'].includes(String(status));
     }
 
+    /** 语速下拉固定三档；配置里若有别的值，临时补一个，避免 select 显示空白。 */
+    function rateOptions(value) {
+      const base = [0.8, 1, 1.2];
+      const rate = Number(value);
+      if (Number.isFinite(rate) && !base.includes(rate)) return base.concat([rate]).sort((a, b) => a - b);
+      return base;
+    }
+
     /* ------------------------------ 本机朗读（Web Speech） ------------------------------ */
 
     function speechSupported() {
@@ -320,6 +396,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       utterance.lang = 'zh-CN';
       const rate = Number(options && options.rate);
       utterance.rate = Number.isFinite(rate) ? Math.min(2, Math.max(0.5, rate)) : 1;
+      const volume = Number(options && options.volume);
+      utterance.volume = Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 1;
       const wanted = String((options && options.voice) || '');
       if (wanted) {
         const voice = speechVoices().find((item) => item.name === wanted || item.voiceURI === wanted);
@@ -420,12 +498,13 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       );
     }
 
-    function BookCard({ book, onOpen, onRename, onDelete }) {
+    function BookCard({ book, onOpen, onRename, onDelete, progress, onContinue }) {
       const [menu, setMenu] = useState(false);
       const [renaming, setRenaming] = useState(false);
       const [draft, setDraft] = useState(book.title);
       const [armed, setArmed] = useState(false);
       const inputRef = useRef(null);
+      const resume = progress && progress.lastBookId === book.id && progress.lastModuleId ? progress : null;
 
       useEffect(() => {
         if (renaming && inputRef.current) {
@@ -456,6 +535,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
             onOpen(book.id);
           },
           onKeyDown: (event) => {
+            if (event.target !== event.currentTarget) return;
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
               onOpen(book.id);
@@ -530,10 +610,23 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           (book.chapters || 0) + ' 章 · ' + formatChars(book.chars),
           book.modules > 0 ? ' · ' + book.modules + ' 个精讲' : '',
         ),
+        resume
+          ? h(
+              'button',
+              {
+                className: 'bl-btn bl-continue',
+                onClick: (event) => {
+                  event.stopPropagation();
+                  if (onContinue) onContinue(book.id, resume.lastModuleId, resume.lastSlide);
+                },
+              },
+              '继续听 · 第 ' + (Number(resume.lastSlide) || 1) + ' 页',
+            )
+          : null,
       );
     }
 
-    function Shelf({ books, loading, onOpen, onRename, onDelete, onImport, error, onDismissError }) {
+    function Shelf({ books, loading, onOpen, onRename, onDelete, onImport, error, onDismissError, progress, onContinue }) {
       const [dragging, setDragging] = useState(false);
       const dragDepth = useRef(0);
 
@@ -613,6 +706,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                       onOpen: onOpen,
                       onRename: onRename,
                       onDelete: onDelete,
+                      progress: progress,
+                      onContinue: onContinue,
                     }),
                   ),
                 ),
@@ -769,18 +864,17 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       );
     }
 
-    /** 一页幻灯片：封面/要点/引文 + 配音稿 + 配图提示词（M3 先做文字预览，M4 接播放器）。 */
-    function SlidePreview({ slide, voice, onSpeak, speaking }) {
+    /** 幻灯片舞台：独立「书页白」主题，不跟着编辑器明暗变灰（§6.4）。 */
+    function SlideStage({ slide }) {
+      const [showPrompt, setShowPrompt] = useState(false);
       const [copied, setCopied] = useState(false);
+      if (!slide) return null;
       const layout = String(slide.layout || 'content_text');
-      const label = layout === 'cover' ? '封面' : layout === 'quote' ? '引文' : '内容';
-      const anchor = slide.source_anchor;
-      const canSpeak = !!onSpeak && speechSupported() && (voice.provider === 'browser');
-      const copy = () => {
-        const text = String(slide.image_prompt || '');
+      const copyPrompt = (event) => {
+        if (event) event.stopPropagation();
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text);
+            navigator.clipboard.writeText(String(slide.image_prompt || ''));
             setCopied(true);
             setTimeout(() => setCopied(false), 1200);
           }
@@ -788,63 +882,755 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           setCopied(false);
         }
       };
+      const figure = h(
+        'div',
+        {
+          className: 'bl-stage-figure',
+          role: 'button',
+          tabIndex: 0,
+          'aria-label': '配图提示词',
+          onClick: () => setShowPrompt((value) => !value),
+          onKeyDown: (event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setShowPrompt((value) => !value);
+            }
+          },
+        },
+        showPrompt
+          ? h(
+              React.Fragment,
+              null,
+              h('div', { className: 'bl-stage-figure-prompt' }, slide.image_prompt || '（没有配图提示词）'),
+              h('button', { className: 'bl-btn', onClick: copyPrompt }, copied ? '已复制' : '复制提示词'),
+            )
+          : h(React.Fragment, null, h('b', null, '配图位'), h('span', null, '点击查看提示词')),
+      );
+      const foot = h('div', { className: 'bl-stage-foot' }, '第 ' + slide.slide_index + ' 页');
+
+      if (layout === 'cover') {
+        return h(
+          'div',
+          { className: 'bl-stage-wrap' },
+          h(
+            'div',
+            { className: 'bl-stage bl-stage-cover' },
+            h('div', { className: 'bl-stage-kicker' }, '精讲'),
+            h('div', { className: 'bl-stage-title' }, slide.title || ''),
+            slide.subtitle ? h('div', { className: 'bl-stage-sub' }, slide.subtitle) : null,
+            h('div', { className: 'bl-stage-rule' }),
+            foot,
+          ),
+        );
+      }
+      if (layout === 'quote') {
+        return h(
+          'div',
+          { className: 'bl-stage-wrap' },
+          h(
+            'div',
+            { className: 'bl-stage' },
+            h('div', { className: 'bl-stage-kicker' }, '原文摘引'),
+            h(
+              'div',
+              { className: 'bl-stage-quote' },
+              h('blockquote', null, slide.quote_text || ''),
+              h('cite', null, '—— ' + (slide.quote_source || '出处未知')),
+            ),
+            foot,
+          ),
+        );
+      }
       return h(
         'div',
-        { className: 'bl-slide' + (layout === 'cover' ? ' bl-slide-cover' : '') },
+        { className: 'bl-stage-wrap' },
         h(
           'div',
-          { className: 'bl-slide-head' },
-          h('span', null, '第 ' + slide.slide_index + ' 页'),
-          h('span', { className: 'bl-chip' }, label),
-          h('span', { className: 'bl-grow' }),
-          anchor
-            ? h('span', null, '锚定 · 第 ' + anchor.page + ' 页第 ' + (Number(anchor.para_index) + 1) + ' 段')
-            : h('span', { className: 'bl-source-warn' }, '未定位到原句'),
-        ),
-        h('div', { className: 'bl-slide-title' }, slide.title || '（无标题）'),
-        slide.subtitle ? h('div', { className: 'bl-slide-sub' }, slide.subtitle) : null,
-        layout === 'content_text' && Array.isArray(slide.bullet_points)
-          ? h('ul', null, slide.bullet_points.map((bullet, index) => h('li', { key: index }, bullet)))
-          : null,
-        layout === 'quote' && slide.quote_text
-          ? h('blockquote', { className: 'bl-slide-quote' }, slide.quote_text, h('small', null, '—— ' + (slide.quote_source || '出处未知')))
-          : null,
-        slide.audio_script ? h('div', { className: 'bl-slide-script' }, slide.audio_script) : null,
-        slide.image_prompt
-          ? h(
-              'div',
-              { className: 'bl-img-hint' },
-              h('span', null, '配图位'),
-              h('code', null, slide.image_prompt),
-              h('button', { className: 'bl-btn', onClick: copy }, copied ? '已复制' : '复制'),
-            )
-          : null,
-        h(
-          'div',
-          { className: 'bl-slide-foot' },
-          h('span', null, '原文第 ' + (slide.source_pages ? slide.source_pages.from : '?') + (slide.source_pages && slide.source_pages.to !== slide.source_pages.from ? '–' + slide.source_pages.to : '') + ' 页'),
+          { className: 'bl-stage' },
+          h('div', { className: 'bl-stage-title' }, slide.title || ''),
           h(
-            'span',
-            null,
-            voice.provider === 'browser'
-              ? '· 朗读约 ' + Math.max(1, Math.round((Number(slide.audio_ms) || 0) / 1000)) + ' 秒'
-              : voice.provider === 'off'
-                ? '· 仅文字'
-                : '· 语音降级',
+            'div',
+            { className: 'bl-stage-body' },
+            h(
+              'div',
+              { className: 'bl-stage-copy' },
+              h(
+                'ul',
+                { className: 'bl-stage-bullets' },
+                (Array.isArray(slide.bullet_points) ? slide.bullet_points : []).map((bullet, index) =>
+                  h('li', { key: index }, bullet),
+                ),
+              ),
+            ),
+            figure,
           ),
-          canSpeak
-            ? h('button', { className: 'bl-btn', 'aria-label': '朗读第 ' + slide.slide_index + ' 页', onClick: () => onSpeak(slide) }, speaking ? '停止' : '朗读本页')
-            : null,
-          slide.anchor_status !== 'anchored' ? h('span', { className: 'bl-source-warn' }, '播放时按页定位，不高亮') : null,
+          foot,
         ),
       );
     }
 
-    /** 模块预览：M3 只做到「看文字 + 听本页」，分屏播放器在 M4。 */
-    function ModuleView({ moduleId, onBack, error, setError }) {
+    /** 原文窗格：按 source_pages 显示原始文本，命中锚点的段落高亮并滚进视野。 */
+    function SourcePane({ pages, slide, loading, error, bookId }) {
+      const rootRef = useRef(null);
+      const anchor = slide && slide.source_anchor ? slide.source_anchor : null;
+      const range = (slide && slide.source_pages) || { from: 1, to: 1 };
+      const from = Math.max(1, Math.round(Number(range.from) || 1));
+      const to = Math.max(from, Math.round(Number(range.to) || from));
+      const chipPage = anchor ? Math.max(1, Math.round(Number(anchor.page) || from)) : from;
+      const highlightKey = slide ? slide.slide_index : 0;
+
+      useEffect(() => {
+        if (loading) return;
+        const root = rootRef.current;
+        if (!root) return;
+        const node = root.querySelector('[data-highlight="1"]');
+        if (node && typeof node.scrollIntoView === 'function') {
+          try {
+            node.scrollIntoView({ block: 'center' });
+          } catch {
+            /* 某些嵌入环境不支持参数 */
+          }
+        }
+      }, [loading, highlightKey, from, to]);
+
+      let body = null;
+      if (loading) {
+        body = h('div', { style: { padding: '22px 4px', opacity: 0.65 } }, h('span', { className: 'bl-spin' }), ' 正在取原文…');
+      } else if (error) {
+        body = h('div', { className: 'bl-err' }, '原文没取到：' + String((error && error.message) || error));
+      } else if (!Array.isArray(pages) || pages.length === 0) {
+        body = h('div', { className: 'bl-note' }, '这一页附近没有原文。');
+      } else {
+        body = pages.map((page) =>
+          h(
+            'section',
+            { className: 'bl-source-page', key: page.page, 'data-page': page.page },
+            h('div', { className: 'bl-source-page-head' }, '第 ' + page.page + ' 页'),
+            String(page.text || '')
+              .split('\n')
+              .map((line, lineIndex) => {
+                const hit =
+                  anchor &&
+                  Number(page.page) === Number(anchor.page) &&
+                  lineIndex === Number(anchor.para_index);
+                return h(
+                  'p',
+                  {
+                    key: lineIndex,
+                    className: 'bl-source-para' + (hit ? ' bl-hl' : ''),
+                    'data-highlight': hit ? '1' : undefined,
+                  },
+                  line || '\u00a0',
+                );
+              }),
+          ),
+        );
+      }
+
+      return h(
+        'div',
+        { className: 'bl-pane-source', ref: rootRef },
+        h(
+          'div',
+          { className: 'bl-source-sticky' },
+          h('span', { className: 'bl-chip bl-chip-ok' }, '第 ' + chipPage + ' 页'),
+          h('span', { className: 'bl-hint' }, from === to ? '原文第 ' + from + ' 页' : '原文第 ' + from + '–' + to + ' 页'),
+          h('span', { className: 'bl-grow' }),
+          h(
+            'a',
+            {
+              className: 'bl-btn',
+              href: FILE_API + '?bookId=' + encodeURIComponent(bookId || '') + '#page=' + chipPage,
+              target: '_blank',
+              rel: 'noreferrer',
+            },
+            '打开原始 PDF',
+          ),
+        ),
+        !anchor ? h('div', { className: 'bl-source-banner' }, '本页未定位到原句，显示整页原文') : null,
+        body,
+      );
+    }
+
+    /**
+     * 分屏播放器（M4）。
+     *
+     * 音频优先级：云端 mp3（audio_file）> 浏览器 speechSynthesis > 无配音。
+     * 浏览器朗读没有可 seek 的音频，进度条按 audio_ms 估算；云端音频用 timeupdate。
+     * 翻页统一走「停当前 → 改 index → effect 起新页」，旧回调用 token 作废，
+     * 避免 AC-18 里上一页的 onend 把播放器又推回下一页。
+     */
+    function Player({ book, module, slides, initialSlide, onBack }) {
+      const total = slides.length;
+      const startIndex = Math.min(Math.max(1, Math.round(Number(initialSlide) || 1)), total || 1) - 1;
+      const moduleVoice = (module && module.voice) || {};
+      const voiceName = String(moduleVoice.voice || '');
+      const [index, setIndex] = useState(startIndex);
+      const [playing, setPlaying] = useState(false);
+      const [pref, setPref] = useState({
+        splitRatio: 0.55,
+        rate: Number(moduleVoice.rate) || 1,
+        muted: false,
+      });
+      const [split, setSplit] = useState(0.55);
+      const [dragging, setDragging] = useState(false);
+      const [status, setStatus] = useState('点「开始听」从这一页开始朗读');
+      const [noAudio, setNoAudio] = useState(false);
+      const [progress, setProgress] = useState(0);
+      const [pageState, setPageState] = useState({ key: '', loading: true, pages: [], error: null });
+      const [fullscreen, setFullscreen] = useState(false);
+
+      const rootRef = useRef(null);
+      const mainRef = useRef(null);
+      const cacheRef = useRef(new Map());
+      const audioRef = useRef(null);
+      const skipTimerRef = useRef(null);
+      const tickTimerRef = useRef(null);
+      const preloadRef = useRef(null);
+      const tokenRef = useRef(0);
+      const indexRef = useRef(index);
+      const playingRef = useRef(playing);
+      const prefRef = useRef(pref);
+      const splitRef = useRef(split);
+      const slidesRef = useRef(slides);
+      const actionsRef = useRef({});
+      indexRef.current = index;
+      playingRef.current = playing;
+      prefRef.current = pref;
+      splitRef.current = split;
+      slidesRef.current = slides;
+
+      const slide = slides[index] || null;
+
+      /* 从「继续听」进来时初始页来自 props；同一播放器里若外部再指定页码，也跟着走 */
+      useEffect(() => {
+        if (!slides.length) return;
+        const next = Math.min(Math.max(1, Math.round(Number(initialSlide) || 1)), slides.length) - 1;
+        setIndex(next);
+      }, [initialSlide, slides.length]);
+
+      /* 偏好：分隔条比例、语速、静音跨面板保留 */
+      useEffect(() => {
+        let alive = true;
+        getJson(PREFERENCE_API)
+          .then((data) => {
+            if (!alive || !data || !data.preference) return;
+            const next = data.preference;
+            setPref((prev) => Object.assign({}, prev, next));
+            if (Number.isFinite(Number(next.splitRatio))) setSplit(Number(next.splitRatio));
+          })
+          .catch(() => {});
+        return () => {
+          alive = false;
+        };
+      }, []);
+
+      const savePreference = useCallback((patch) => {
+        setPref((prev) => Object.assign({}, prev, patch));
+        postJson(PREFERENCE_API, patch).catch(() => {});
+      }, []);
+
+      const stopAudio = useCallback(() => {
+        tokenRef.current += 1;
+        if (skipTimerRef.current) {
+          clearTimeout(skipTimerRef.current);
+          skipTimerRef.current = null;
+        }
+        if (tickTimerRef.current) {
+          clearInterval(tickTimerRef.current);
+          tickTimerRef.current = null;
+        }
+        if (audioRef.current) {
+          const audio = audioRef.current;
+          audioRef.current = null;
+          try {
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+          } catch {
+            /* 已经停了 */
+          }
+        }
+        if (speechSupported()) {
+          try {
+            window.speechSynthesis.cancel();
+          } catch {
+            /* 忽略 */
+          }
+        }
+      }, []);
+
+      /* 挂载时存一次进度，之后每次翻页都存（AC-19 依赖它） */
+      useEffect(() => {
+        if (!slides.length) return;
+        postJson(PROGRESS_API, { bookId: book.id, moduleId: module.id, slide: index + 1 }).catch(() => {});
+      }, [index, book.id, module.id, slides.length]);
+
+      /* 取当前页 source_pages 的原文；同一页范围只取一次 */
+      useEffect(() => {
+        if (!slide) return undefined;
+        const range = slide.source_pages || { from: 1, to: 1 };
+        const from = Math.max(1, Math.round(Number(range.from) || 1));
+        const to = Math.max(from, Math.round(Number(range.to) || from));
+        const key = from + '-' + to;
+        if (cacheRef.current.has(key)) {
+          setPageState({ key: key, loading: false, pages: cacheRef.current.get(key), error: null });
+          return undefined;
+        }
+        setPageState({ key: key, loading: true, pages: [], error: null });
+        let alive = true;
+        getJson(PAGES_API + '?bookId=' + encodeURIComponent(book.id) + '&from=' + from + '&to=' + to)
+          .then((data) => {
+            if (!alive) return;
+            const list = Array.isArray(data.pages) ? data.pages : [];
+            cacheRef.current.set(key, list);
+            setPageState({ key: key, loading: false, pages: list, error: null });
+          })
+          .catch((err) => {
+            if (!alive) return;
+            setPageState({ key: key, loading: false, pages: [], error: err });
+          });
+        return () => {
+          alive = false;
+        };
+      }, [slide && slide.slide_index, book.id]);
+
+      /* 预加载下一页云端音频；浏览器朗读没有文件可预载 */
+      useEffect(() => {
+        if (preloadRef.current) {
+          try {
+            preloadRef.current.pause();
+          } catch {
+            /* 忽略 */
+          }
+          preloadRef.current = null;
+        }
+        const nextSlide = slides[index + 1];
+        if (nextSlide && nextSlide.audio_file) {
+          try {
+            const audio = new Audio(AUDIO_API + '?moduleId=' + encodeURIComponent(module.id) + '&i=' + (index + 2));
+            audio.preload = 'auto';
+            preloadRef.current = audio;
+          } catch {
+            preloadRef.current = null;
+          }
+        }
+        return () => {
+          if (preloadRef.current) {
+            try {
+              preloadRef.current.pause();
+            } catch {
+              /* 忽略 */
+            }
+            preloadRef.current = null;
+          }
+        };
+      }, [index, module.id, slides]);
+
+      /* 播放：当前页有音频就播，没有就提示并在自动模式下跳过（AC-21） */
+      useEffect(() => {
+        stopAudio();
+        if (!playing) {
+          setProgress(0);
+          return undefined;
+        }
+        const token = tokenRef.current;
+        const current = indexRef.current;
+        const currentSlide = slidesRef.current[current];
+        if (!currentSlide) return undefined;
+        const canSpeech =
+          (currentSlide.audio_provider === 'browser' || !currentSlide.audio_provider) &&
+          !!currentSlide.audio_script &&
+          speechSupported();
+        const mode = currentSlide.audio_file ? 'file' : canSpeech ? 'speech' : 'none';
+
+        const advance = () => {
+          if (token !== tokenRef.current) return;
+          const next = indexRef.current + 1;
+          if (next >= slidesRef.current.length) {
+            setPlaying(false);
+            setStatus('已经读到最后一页');
+            return;
+          }
+          setStatus('正在播放第 ' + (next + 1) + ' 页');
+          setIndex(next);
+        };
+        const scheduleSkip = () => {
+          if (skipTimerRef.current) return;
+          skipTimerRef.current = setTimeout(advance, 1100);
+        };
+
+        if (mode === 'none') {
+          setNoAudio(true);
+          setProgress(0);
+          const hasNext = current + 1 < slidesRef.current.length;
+          setStatus('本页无配音' + (hasNext ? '，即将跳过' : ''));
+          if (hasNext) {
+            scheduleSkip();
+          } else {
+            setPlaying(false);
+          }
+          return () => stopAudio();
+        }
+
+        setNoAudio(false);
+        setStatus('正在播放第 ' + (current + 1) + ' 页');
+        setProgress(0);
+
+        if (mode === 'speech') {
+          const estimate = Math.max(1200, Number(currentSlide.audio_ms) || String(currentSlide.audio_script).length * 240);
+          const startedAt = Date.now();
+          tickTimerRef.current = setInterval(() => {
+            if (token !== tokenRef.current) return;
+            setProgress(Math.min(0.98, (Date.now() - startedAt) / estimate));
+          }, 250);
+          try {
+            speakText(currentSlide.audio_script, {
+              rate: prefRef.current.rate,
+              voice: voiceName,
+              volume: prefRef.current.muted ? 0 : 1,
+              onend: advance,
+              onerror: () => {
+                if (token !== tokenRef.current) return;
+                setNoAudio(true);
+                setStatus('本页配音失败');
+                if (tickTimerRef.current) {
+                  clearInterval(tickTimerRef.current);
+                  tickTimerRef.current = null;
+                }
+                if (current + 1 < slidesRef.current.length) {
+                  scheduleSkip();
+                } else {
+                  setPlaying(false);
+                }
+              },
+            });
+          } catch (err) {
+            if (tickTimerRef.current) {
+              clearInterval(tickTimerRef.current);
+              tickTimerRef.current = null;
+            }
+            setNoAudio(true);
+            setStatus('本页配音失败：' + String((err && err.message) || err));
+          }
+        } else {
+          const audio = new Audio(AUDIO_API + '?moduleId=' + encodeURIComponent(module.id) + '&i=' + (current + 1));
+          audio.preload = 'auto';
+          audio.volume = prefRef.current.muted ? 0 : 1;
+          audio.playbackRate = prefRef.current.rate;
+          audio.ontimeupdate = () => {
+            if (token !== tokenRef.current) return;
+            const duration = audio.duration;
+            if (Number.isFinite(duration) && duration > 0) setProgress(Math.min(0.99, audio.currentTime / duration));
+          };
+          audio.onended = advance;
+          audio.onerror = () => {
+            if (token !== tokenRef.current) return;
+            setNoAudio(true);
+            setStatus('本页没有音频文件');
+            if (current + 1 < slidesRef.current.length) {
+              scheduleSkip();
+            } else {
+              setPlaying(false);
+            }
+          };
+          audioRef.current = audio;
+          const promise = audio.play();
+          if (promise && typeof promise.catch === 'function') {
+            promise.catch(() => {
+              if (token !== tokenRef.current) return;
+              setPlaying(false);
+              setStatus('浏览器阻止了自动播放，点「开始听」继续');
+            });
+          }
+        }
+        return () => stopAudio();
+      }, [index, playing, pref.rate, pref.muted, module.id, voiceName, stopAudio]);
+
+      /* 分隔条拖动：拖完才写 preference，别在 pointermove 里打接口 */
+      useEffect(() => {
+        if (!dragging) return undefined;
+        const move = (event) => {
+          const rect = mainRef.current ? mainRef.current.getBoundingClientRect() : null;
+          if (!rect || !rect.width) return;
+          const next = Math.min(0.75, Math.max(0.25, (event.clientX - rect.left) / rect.width));
+          splitRef.current = next;
+          setSplit(next);
+        };
+        const up = () => {
+          setDragging(false);
+          postJson(PREFERENCE_API, { splitRatio: splitRef.current }).catch(() => {});
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up, { once: true });
+        return () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+        };
+      }, [dragging]);
+
+      const adjustSplit = useCallback((delta) => {
+        const next = Math.min(0.75, Math.max(0.25, splitRef.current + delta));
+        splitRef.current = next;
+        setSplit(next);
+        postJson(PREFERENCE_API, { splitRatio: next }).catch(() => {});
+      }, []);
+
+      const toggleFullscreen = useCallback(async () => {
+        const element = rootRef.current;
+        if (!element) return;
+        try {
+          if (document.fullscreenElement) await document.exitFullscreen();
+          else if (element.requestFullscreen) await element.requestFullscreen();
+        } catch {
+          setStatus('浏览器不允许进入全屏');
+        }
+      }, []);
+
+      useEffect(() => {
+        const onChange = () => setFullscreen(!!document.fullscreenElement);
+        document.addEventListener('fullscreenchange', onChange);
+        return () => document.removeEventListener('fullscreenchange', onChange);
+      }, []);
+
+      const togglePlay = useCallback(() => {
+        const next = !playingRef.current;
+        setPlaying(next);
+        setStatus(next ? '正在开始…' : '已暂停');
+      }, []);
+
+      const goTo = useCallback(
+        (target) => {
+          const next = Math.max(0, Math.min(total - 1, Math.round(Number(target) || 0)));
+          if (next === indexRef.current) return;
+          setIndex(next);
+        },
+        [total],
+      );
+
+      const nextPage = useCallback(() => {
+        if (indexRef.current >= total - 1) {
+          setPlaying(false);
+          setStatus('已经到最后一页');
+          return;
+        }
+        setIndex(indexRef.current + 1);
+      }, [total]);
+
+      const prevPage = useCallback(() => {
+        if (indexRef.current <= 0) return;
+        setIndex(indexRef.current - 1);
+      }, []);
+
+      const handleBack = useCallback(() => {
+        stopAudio();
+        if (onBack) onBack();
+      }, [stopAudio, onBack]);
+
+      /* 键盘：空格、←/→、F、Esc（AC-20）；表单控件里不抢键 */
+      actionsRef.current = {
+        togglePlay: togglePlay,
+        next: nextPage,
+        prev: prevPage,
+        fullscreen: toggleFullscreen,
+        back: handleBack,
+      };
+      useEffect(() => {
+        const onKey = (event) => {
+          const target = event.target || {};
+          const tag = String(target.tagName || '').toUpperCase();
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return;
+          if (event.ctrlKey || event.metaKey || event.altKey) return;
+          if (event.code === 'Space') {
+            event.preventDefault();
+            actionsRef.current.togglePlay();
+            return;
+          }
+          if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            actionsRef.current.next();
+            return;
+          }
+          if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            actionsRef.current.prev();
+            return;
+          }
+          if (event.key === 'f' || event.key === 'F') {
+            event.preventDefault();
+            actionsRef.current.fullscreen();
+            return;
+          }
+          if (event.key === 'Escape') {
+            if (document.fullscreenElement) {
+              document.exitFullscreen().catch(() => {});
+            } else {
+              actionsRef.current.back();
+            }
+          }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, []);
+
+      useEffect(
+        () => () => {
+          if (preloadRef.current) {
+            try {
+              preloadRef.current.pause();
+            } catch {
+              /* 忽略 */
+            }
+            preloadRef.current = null;
+          }
+          stopAudio();
+        },
+        [stopAudio],
+      );
+
+      const pageLabel = fromToLabel(slide);
+      return h(
+        'div',
+        {
+          className: 'bl-player bl-line',
+          ref: rootRef,
+          style: { '--bl-split': (split * 100).toFixed(2) + '%', cursor: dragging ? 'col-resize' : undefined },
+        },
+        h(
+          'div',
+          { className: 'bl-bar' },
+          h('button', { className: 'bl-back', onClick: handleBack }, '\u2039 返回'),
+          h('span', { className: 'bl-hint' }, module.title || '精讲'),
+          h('div', { className: 'bl-grow' }),
+          h('span', { className: 'bl-chip' }, '第 ' + (index + 1) + ' / ' + total + ' 页'),
+          h('button', { className: 'bl-btn', onClick: toggleFullscreen, title: '全屏（F）' }, fullscreen ? '退出全屏' : '全屏'),
+          h(
+            'a',
+            {
+              className: 'bl-btn',
+              href: FILE_API + '?bookId=' + encodeURIComponent(book.id),
+              target: '_blank',
+              rel: 'noreferrer',
+            },
+            '打开 PDF',
+          ),
+        ),
+        h(
+          'div',
+          { className: 'bl-player-main', ref: mainRef },
+          h(SourcePane, {
+            pages: pageState.pages,
+            slide: slide,
+            loading: pageState.loading,
+            error: pageState.error,
+            bookId: book.id,
+          }),
+          h('div', {
+            className: 'bl-divider',
+            role: 'separator',
+            'aria-orientation': 'vertical',
+            'aria-label': '拖动调整原文与幻灯片宽度',
+            'aria-valuenow': Math.round(split * 100),
+            tabIndex: 0,
+            onPointerDown: (event) => {
+              event.preventDefault();
+              setDragging(true);
+            },
+            onDoubleClick: () => adjustSplit(0.55 - splitRef.current),
+            onKeyDown: (event) => {
+              if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                adjustSplit(-0.02);
+              } else if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                adjustSplit(0.02);
+              }
+            },
+          }),
+          h('div', { className: 'bl-pane-stage' }, h(SlideStage, { slide: slide })),
+        ),
+        h(
+          'div',
+          { className: 'bl-player-foot' },
+          module.status === 'ready_degraded'
+            ? h('div', { className: 'bl-voice-note bl-source-warn' }, '部分页没有音频：播放时会自动跳过，或停在本页显示「本页无配音」。')
+            : null,
+          h(
+            'div',
+            { className: 'bl-controls' },
+            h(
+              'button',
+              {
+                className: 'bl-btn bl-btn-primary bl-play-btn',
+                onClick: togglePlay,
+                'aria-label': playing ? '暂停' : '开始听',
+              },
+              playing ? '暂停' : '开始听',
+            ),
+            h('button', { className: 'bl-btn', onClick: prevPage, disabled: index === 0, 'aria-label': '上一页' }, '\u2039'),
+            h('button', { className: 'bl-btn', onClick: nextPage, disabled: index >= total - 1, 'aria-label': '下一页' }, '\u203a'),
+            h('span', { className: 'bl-hint' }, pageLabel),
+            h('div', { className: 'bl-pagebar', 'aria-hidden': 'true' }, h('i', { style: { width: Math.round(progress * 100) + '%' } })),
+            h('span', { className: 'bl-hint' }, Math.round(progress * 100) + '%'),
+            h(
+              'select',
+              {
+                className: 'bl-select',
+                'aria-label': '播放语速',
+                value: String(pref.rate),
+                onChange: (event) => savePreference({ rate: Number(event.target.value) }),
+              },
+              rateOptions(pref.rate).map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
+            ),
+            h(
+              'button',
+              { className: 'bl-btn', onClick: () => savePreference({ muted: !pref.muted }), 'aria-label': pref.muted ? '取消静音' : '静音' },
+              pref.muted ? '取消静音' : '静音',
+            ),
+          ),
+          h(
+            'div',
+            { className: 'bl-controls' },
+            noAudio ? h('span', { className: 'bl-noaudio' }, '本页无配音') : null,
+            h('span', { className: 'bl-player-status' }, status),
+            h('span', { className: 'bl-grow' }),
+            h('span', { className: 'bl-hint' }, '空格 播放/暂停 · ←/→ 翻页 · F 全屏 · Esc 返回'),
+          ),
+          h(
+            'div',
+            { className: 'bl-thumbs' },
+            slides.map((item, itemIndex) =>
+              h(
+                'button',
+                {
+                  key: item.slide_index,
+                  className: 'bl-thumb bl-thumb-' + (item.layout || 'content_text') + (itemIndex === index ? ' on' : ''),
+                  title: item.title || '',
+                  'aria-label': '跳到第 ' + (itemIndex + 1) + ' 页',
+                  'aria-current': itemIndex === index ? 'page' : undefined,
+                  onClick: () => goTo(itemIndex),
+                },
+                h('b', null, itemIndex + 1),
+                h('span', { className: 'bl-thumb-title' }, item.title || '未命名'),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    function fromToLabel(slide) {
+      const range = (slide && slide.source_pages) || {};
+      const from = Math.round(Number(range.from) || 0);
+      const to = Math.round(Number(range.to) || 0);
+      if (!from) return '原文页码未知';
+      return from === to ? '原文第 ' + from + ' 页' : '原文第 ' + from + '–' + to + ' 页';
+    }
+
+    /** 模块入口：取模块数据，就绪就交给分屏播放器。 */
+    function ModuleView({ moduleId, initialSlide, onBack, error, setError }) {
       const [state, setState] = useState({ loading: true, module: null, slides: null, book: null });
-      const [speaking, setSpeaking] = useState(0);
-      const [stopAll, setStopAll] = useState(false);
 
       useEffect(() => {
         let alive = true;
@@ -864,152 +1650,92 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         };
       }, [moduleId, setError]);
 
-      const module = state.module;
-      const voice = (module && module.voice) || { provider: 'browser', rate: 1, voice: '' };
-      const slides = state.slides && Array.isArray(state.slides.slides) ? state.slides.slides : [];
-      const ready = module && isReady(module.status);
-
-      const speakOne = useCallback(
-        (slide) => {
-          if (speaking === slide.slide_index) {
-            stopSpeech();
-            setSpeaking(0);
-            return;
-          }
-          try {
-            setSpeaking(slide.slide_index);
-            speakText(slide.audio_script, {
-              rate: voice.rate,
-              voice: voice.voice,
-              onend: () => setSpeaking(0),
-              onerror: () => setSpeaking(0),
-            });
-          } catch (err) {
-            setSpeaking(0);
-            setError(err);
-          }
-        },
-        [speaking, voice.rate, voice.voice, setError],
-      );
-
-      /** 从第 1 页连着念到最后一页；页与页之间靠 utterance 的 onend 接力。 */
-      const speakAll = useCallback(() => {
-        if (stopAll || speaking) {
-          stopSpeech();
-          setSpeaking(0);
-          setStopAll(false);
-          return;
-        }
-        const scripts = slides.map((slide) => slide.audio_script).filter(Boolean);
-        if (!scripts.length) return;
-        let index = 0;
-        setStopAll(true);
-        setSpeaking(-1);
-        const next = () => {
-          if (index >= scripts.length) {
-            setSpeaking(0);
-            setStopAll(false);
-            return;
-          }
-          const current = index;
-          index += 1;
-          speakText(scripts[current], {
-            rate: voice.rate,
-            voice: voice.voice,
-            onend: next,
-            onerror: () => {
-              setSpeaking(0);
-              setStopAll(false);
-            },
-          });
-        };
-        next();
-      }, [slides, speaking, stopAll, voice.rate, voice.voice]);
-
-      let body = null;
       if (state.loading) {
-        body = h('div', { style: { padding: '26px 4px', opacity: 0.7 } }, h('span', { className: 'bl-spin' }), ' 正在打开模块…');
-      } else if (!module) {
-        body = h('div', { style: { opacity: 0.7 } }, '这个模块打不开了。');
-      } else if (!ready) {
-        body = h(
+        return h(
           'div',
-          { className: 'bl-note' },
-          '这个模块还没就绪（' + statusLabel(module.status) + '）。' +
-            (module.code ? '错误码 ' + module.code + '：' + (module.error || '') : '回书籍详情重新生成。'),
-        );
-      } else if (!slides.length) {
-        body = h('div', { className: 'bl-note' }, '模块里没有幻灯片数据。');
-      } else {
-        body = h(
-          'div',
-          null,
+          { className: 'bl-root bl-line' },
           h(
             'div',
-            { className: 'bl-note' },
-            '本页文字与配音稿已就绪，语音由浏览器本机朗读。分屏播放器在 M4 接入；这里先逐页核对内容，点「朗读本页」能直接试听。',
+            { className: 'bl-bar' },
+            h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回书籍'),
+            h('div', { className: 'bl-grow' }),
           ),
-          slides.map((slide) =>
-            h(SlidePreview, {
-              key: slide.slide_index,
-              slide: slide,
-              voice: voice,
-              speaking: speaking === slide.slide_index,
-              onSpeak: voice.provider === 'browser' ? speakOne : null,
-            }),
+          h(
+            'div',
+            { className: 'bl-body' },
+            h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+            h('div', { style: { padding: '26px 4px', opacity: 0.7 } }, h('span', { className: 'bl-spin' }), ' 正在打开模块…'),
           ),
         );
       }
-
-      return h(
-        'div',
-        { className: 'bl-root bl-line' },
-        h(
+      const module = state.module;
+      const slides = state.slides && Array.isArray(state.slides.slides) ? state.slides.slides : [];
+      if (!module) {
+        return h(
           'div',
-          { className: 'bl-bar' },
-          h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回书籍'),
-          h('div', { className: 'bl-grow' }),
-          module && ready && slides.length
-            ? h('button', { className: 'bl-btn', onClick: speakAll, 'aria-label': '连续朗读整个模块' }, stopAll ? '停止朗读' : '连续朗读')
-            : null,
-          module && state.book
-            ? h(
-                'a',
-                {
-                  className: 'bl-btn',
-                  href: FILE_API + '?bookId=' + encodeURIComponent(state.book.id),
-                  target: '_blank',
-                  rel: 'noreferrer',
-                  style: { textDecoration: 'none' },
-                },
-                '打开 PDF',
-              )
-            : null,
-        ),
-        h(
+          { className: 'bl-root bl-line' },
+          h(
+            'div',
+            { className: 'bl-bar' },
+            h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回书籍'),
+            h('div', { className: 'bl-grow' }),
+          ),
+          h(
+            'div',
+            { className: 'bl-body' },
+            h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+            h('div', { style: { opacity: 0.7 } }, '这个模块打不开了。'),
+          ),
+        );
+      }
+      if (!isReady(module.status)) {
+        return h(
           'div',
-          { className: 'bl-body' },
-          h(ErrorBanner, { error: error, onClose: () => setError(null) }),
-          module
-            ? h(
-                'div',
-                { className: 'bl-book-info', style: { marginBottom: 10 } },
-                h('div', { className: 'bl-book-title' }, module.title || '精讲'),
-                h(
-                  'div',
-                  { className: 'bl-book-meta' },
-                  '第 ' + (module.chapters || []).join('、') + ' 章 · ' + slides.length + ' 页 · 锚定 ' +
-                    Math.round((Number(module.anchorHitRate) || 0) * 100) + '% · ' +
-                    (voice.provider === 'browser' ? '浏览器朗读' : voice.provider === 'off' ? '仅文字' : '语音降级'),
-                ),
-                module.status === 'ready_degraded'
-                  ? h('div', { className: 'bl-voice-note bl-source-warn' }, '部分音频不可用：本次只有文字，播放器会按页翻。')
-                  : null,
-              )
-            : null,
-          body,
-        ),
-      );
+          { className: 'bl-root bl-line' },
+          h(
+            'div',
+            { className: 'bl-bar' },
+            h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回书籍'),
+            h('div', { className: 'bl-grow' }),
+          ),
+          h(
+            'div',
+            { className: 'bl-body' },
+            h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+            h(
+              'div',
+              { className: 'bl-note' },
+              '这个模块还没就绪（' + statusLabel(module.status) + '）。' +
+                (module.code ? '错误码 ' + module.code + '：' + (module.error || '') : '回书籍详情重新生成。'),
+            ),
+          ),
+        );
+      }
+      if (!slides.length) {
+        return h(
+          'div',
+          { className: 'bl-root bl-line' },
+          h(
+            'div',
+            { className: 'bl-bar' },
+            h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回书籍'),
+            h('div', { className: 'bl-grow' }),
+          ),
+          h(
+            'div',
+            { className: 'bl-body' },
+            h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+            h('div', { className: 'bl-note' }, '模块里没有幻灯片数据。'),
+          ),
+        );
+      }
+      return h(Player, {
+        book: state.book || { id: module.bookId, title: '' },
+        module: module,
+        slides: slides,
+        initialSlide: initialSlide,
+        onBack: onBack,
+      });
     }
 
     function Detail({ bookId, onBack, error, setError, onOpenModule, onSettings }) {
@@ -1668,6 +2394,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [voices, setVoices] = useState([]);
       const [message, setMessage] = useState('');
       const [saving, setSaving] = useState(false);
+      const [trashBusy, setTrashBusy] = useState(false);
+      const [trashMessage, setTrashMessage] = useState('');
       const [error, setError] = useState(null);
 
       useEffect(() => {
@@ -1757,6 +2485,25 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const speechOk = speechSupported();
       const providerNote = (providers.find((item) => item.id === form.provider) || {}).note || (voice && voice.note) || '';
 
+      /** 清空回收站（AC-24）：清完重新读存储概况，占用空间要立刻下降。 */
+      const clearTrashNow = useCallback(async () => {
+        const ok = typeof window === 'undefined' || window.confirm('清空回收站？删除的书会真正被删掉，不能再恢复。');
+        if (!ok) return;
+        setTrashBusy(true);
+        setTrashMessage('');
+        setError(null);
+        try {
+          const result = await postJson(TRASH_CLEAR_API, {});
+          const storage = await getJson(STORAGE_API);
+          setData(storage);
+          setTrashMessage('已清空 ' + (result.cleared || 0) + ' 本，释放 ' + formatSize(result.bytesFreed || 0));
+        } catch (err) {
+          setError(err);
+        } finally {
+          setTrashBusy(false);
+        }
+      }, [setError]);
+
       return h(
         'div',
         { className: 'bl-root bl-line' },
@@ -1784,11 +2531,23 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                 h('dt', null, '占用空间'),
                 h('dd', null, formatSize(data.bytes)),
                 h('dt', null, '回收站'),
-                h('dd', null, (data.trashCount || 0) + ' 本'),
+                h('dd', null, (data.trashCount || 0) + ' 本 · ' + formatSize(data.trashBytes || 0)),
                 h('dt', null, '插件版本'),
                 h('dd', null, data.pluginVersion || '—'),
               )
             : h('div', { style: { opacity: 0.7 } }, h('span', { className: 'bl-spin' }), ' 正在读…'),
+          data
+            ? h(
+                'div',
+                { className: 'bl-voice-row', style: { marginTop: 0 } },
+                h(
+                  'button',
+                  { className: 'bl-btn', disabled: trashBusy || !data.trashCount, onClick: clearTrashNow },
+                  trashBusy ? '清理中…' : '清空回收站',
+                ),
+                trashMessage ? h('span', { className: 'bl-voice-note bl-toc-msg' }, trashMessage) : null,
+              )
+            : null,
           h('div', { className: 'bl-mods', style: { marginTop: 4 } }, h('div', { className: 'bl-mods-head' }, '语音')),
           h(
             'div',
@@ -1845,7 +2604,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   'aria-label': '朗读语速',
                   onChange: (event) => save({ rate: Number(event.target.value) }),
                 },
-                [0.8, 1, 1.2].map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
+                rateOptions(form.rate).map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
               ),
               h('button', { className: 'bl-btn', disabled: saving, onClick: probe }, '试听'),
               h('button', { className: 'bl-btn', disabled: saving, onClick: () => save({}) }, saving ? '保存中…' : '保存'),
@@ -1868,14 +2627,17 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [error, setError] = useState(null);
       const [bookId, setBookId] = useState('');
       const [moduleId, setModuleId] = useState('');
+      const [initialSlide, setInitialSlide] = useState(1);
+      const [progress, setProgress] = useState(null);
       const [upload, setUpload] = useState(null);
       const fileInputRef = useRef(null);
 
       const load = useCallback(() => {
         setLoading(true);
-        getJson(BOOKS_API)
-          .then((data) => {
+        Promise.all([getJson(BOOKS_API), getJson(PROGRESS_API).catch(() => ({ progress: null }))])
+          .then(([data, saved]) => {
             setBooks(data.books || []);
+            setProgress((saved && saved.progress) || null);
             setError(null);
           })
           .catch((err) => setError(err))
@@ -1885,6 +2647,12 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       useEffect(() => {
         load();
       }, [load]);
+
+      const refreshProgress = useCallback(() => {
+        getJson(PROGRESS_API)
+          .then((saved) => setProgress((saved && saved.progress) || null))
+          .catch(() => {});
+      }, []);
 
       const doImport = useCallback(
         async (fileOrPick, immediateError) => {
@@ -1971,17 +2739,34 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         setNav('detail');
       }, []);
 
-      const openModule = useCallback((id) => {
-        setModuleId(id);
-        setError(null);
-        setNav('module');
-      }, []);
+      const openModule = useCallback(
+        (id, slide) => {
+          const remembered = progress && progress.lastModuleId === id ? Number(progress.lastSlide) || 1 : 1;
+          setModuleId(id);
+          setInitialSlide(Math.max(1, Math.round(Number(slide) || remembered)));
+          setError(null);
+          setNav('module');
+        },
+        [progress],
+      );
+
+      const continueListening = useCallback(
+        (id, savedModuleId, slide) => {
+          setBookId(id);
+          openModule(savedModuleId, slide);
+        },
+        [openModule],
+      );
 
       const body =
         nav === 'module' && moduleId
           ? h(ModuleView, {
               moduleId: moduleId,
-              onBack: () => setNav(bookId ? 'detail' : 'shelf'),
+              initialSlide: initialSlide,
+              onBack: () => {
+                setNav(bookId ? 'detail' : 'shelf');
+                refreshProgress();
+              },
               error: error,
               setError: setError,
             })
@@ -2012,6 +2797,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   onImport: doImport,
                   error: error,
                   onDismissError: () => setError(null),
+                  progress: progress,
+                  onContinue: continueListening,
                 });
 
       return h(
@@ -2129,7 +2916,9 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         SourceNote: SourceNote,
         JobBox: JobBox,
         ModuleList: ModuleList,
-        SlidePreview: SlidePreview,
+        SlideStage: SlideStage,
+        SourcePane: SourcePane,
+        Player: Player,
         ModuleView: ModuleView,
       },
     };

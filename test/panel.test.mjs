@@ -193,7 +193,7 @@ test('模块列表：就绪、失败、删除/重试按钮都能渲染', () => {
   assert.match(html, /重生成/);
 });
 
-test('模块预览：一页的文字、配音稿、配图提示词与锚点状态都渲染', () => {
+test('幻灯片舞台：封面、要点、引文三种版式各自渲染', () => {
   const { mod } = bootPlugin();
   const slide = {
     slide_index: 2,
@@ -201,42 +201,132 @@ test('模块预览：一页的文字、配音稿、配图提示词与锚点状�
     title: '一页讲一个意思',
     subtitle: '',
     bullet_points: ['要点一', '要点二'],
-    quote_text: null,
-    quote_source: null,
     image_prompt: '书桌上摊开的书，暖色晨光',
-    audio_script: '大家好，这一页我们讲一个很短的意思，尽量说得像聊天一样。',
-    source_quote: '导演的工作，远不止喊一声「开机」。',
+    audio_script: '大家好，这一页我们讲一个很短的意思。',
     source_pages: { from: 2, to: 4 },
     source_anchor: { page: 3, para_index: 1 },
     anchor_status: 'anchored',
-    audio_ms: 8000,
-    audio_provider: 'browser',
   };
-  const html = renderToString(
-    React.createElement(mod.__components.SlidePreview, {
-      slide: slide,
-      voice: { provider: 'browser', rate: 1 },
-      onSpeak: null,
-      speaking: false,
+  const content = renderToString(React.createElement(mod.__components.SlideStage, { slide: slide }));
+  assert.match(content, /一页讲一个意思/);
+  assert.match(content, /要点一/);
+  assert.match(content, /配图位/);
+  assert.match(content, /第 2 页/);
+
+  const quote = renderToString(
+    React.createElement(mod.__components.SlideStage, {
+      slide: Object.assign({}, slide, { layout: 'quote', quote_text: '导演的工作，远不止喊一声「开机」。', quote_source: '测试书' }),
     }),
   );
-  assert.match(html, /一页讲一个意思/);
-  assert.match(html, /要点一/);
-  assert.match(html, /配音|大家好/);
-  assert.match(html, /书桌上摊开的书/);
-  assert.match(html, /锚定 · 第 3 页第 2 段/);
-  assert.match(html, /朗读约 8 秒/);
+  assert.match(quote, /bl-stage-quote/);
+  assert.match(quote, /导演的工作/);
+  assert.match(quote, /测试书/);
+
+  const cover = renderToString(
+    React.createElement(mod.__components.SlideStage, {
+      slide: { slide_index: 1, layout: 'cover', title: '封面大标题', subtitle: '第 1 章' },
+    }),
+  );
+  assert.match(cover, /封面大标题/);
+  assert.match(cover, /第 1 章/);
+  assert.match(cover, /bl-stage-rule/);
+});
+
+test('原文窗格：锚点段落高亮，未锚定时出提示条', () => {
+  const { mod } = bootPlugin();
+  const pages = [
+    { page: 2, text: '第一段文字\n第二段文字，应该高亮\n第三段文字' },
+    { page: 3, text: '第三页的原文' },
+  ];
+  const slide = {
+    slide_index: 2,
+    source_pages: { from: 2, to: 3 },
+    source_anchor: { page: 2, para_index: 1 },
+    anchor_status: 'anchored',
+  };
+  const html = renderToString(
+    React.createElement(mod.__components.SourcePane, {
+      pages: pages,
+      slide: slide,
+      loading: false,
+      error: null,
+      bookId: 'aaaaaaaaaaaa',
+    }),
+  );
+  assert.match(html, /第二段文字/);
+  assert.match(html, /bl-source-para bl-hl/);
+  assert.match(html, /#page=2/);
+  assert.match(html, /打开原始 PDF/);
+  assert.doesNotMatch(html, /未定位到原句/);
 
   const unanchored = renderToString(
-    React.createElement(mod.__components.SlidePreview, {
+    React.createElement(mod.__components.SourcePane, {
+      pages: pages,
       slide: Object.assign({}, slide, { source_anchor: null, anchor_status: 'unanchored' }),
-      voice: { provider: 'off', rate: 1 },
-      onSpeak: null,
-      speaking: false,
+      loading: false,
+      error: null,
+      bookId: 'aaaaaaaaaaaa',
     }),
   );
   assert.match(unanchored, /未定位到原句/);
-  assert.match(unanchored, /按页定位/);
+  assert.doesNotMatch(unanchored, /bl-source-para bl-hl/);
+});
+
+test('书架「继续听」：有播放进度时显示页码入口', () => {
+  const { mod } = bootPlugin();
+  const books = [
+    { id: 'aaaaaaaaaaaa', title: '一本书', author: '某人', pages: 10, chapters: 3, modules: 1, chars: 12000 },
+    { id: 'bbbbbbbbbbbb', title: '另一本书', author: '', pages: 5, chapters: 1, modules: 1, chars: 800 },
+  ];
+  const progress = { lastBookId: 'aaaaaaaaaaaa', lastModuleId: 'cccccccccccc', lastSlide: 7 };
+  const html = renderToString(
+    React.createElement(mod.__components.Shelf, {
+      books: books,
+      loading: false,
+      onOpen: () => {},
+      onRename: () => {},
+      onDelete: () => {},
+      onImport: () => {},
+      error: null,
+      onDismissError: () => {},
+      progress: progress,
+      onContinue: () => {},
+    }),
+  );
+  assert.match(html, /继续听 · 第 7 页/);
+  assert.equal((html.match(/继续听/g) || []).length, 1, '只有进度指向的那本书显示继续听');
+});
+
+test('分屏播放器：初始页、舞台、控制条、缩略图都能渲染', () => {
+  const { mod } = bootPlugin();
+  const slides = [
+    { slide_index: 1, layout: 'cover', title: '封面标题', source_pages: { from: 1, to: 1 }, source_anchor: { page: 1, para_index: 0 }, anchor_status: 'anchored' },
+    { slide_index: 2, layout: 'content_text', title: '第二页标题', bullet_points: ['要点'], source_pages: { from: 2, to: 2 }, source_anchor: { page: 2, para_index: 0 }, anchor_status: 'anchored' },
+    { slide_index: 3, layout: 'quote', title: '第三页标题', quote_text: '一句引文', quote_source: '书', source_pages: { from: 3, to: 3 }, source_anchor: { page: 3, para_index: 0 }, anchor_status: 'anchored' },
+  ];
+  const html = renderToString(
+    React.createElement(mod.__components.Player, {
+      book: { id: 'aaaaaaaaaaaa', title: '一本书' },
+      module: { id: 'bbbbbbbbbbbb', title: '精讲：第 1 章', status: 'ready', voice: { provider: 'browser', rate: 1 }, slides: 3 },
+      slides: slides,
+      initialSlide: 2,
+      onBack: () => {},
+      setError: () => {},
+    }),
+  );
+  assert.match(html, /第二页标题/);
+  assert.match(html, /第 2 \/ 3 页/);
+  assert.match(html, /开始听/);
+  assert.match(html, /正在取原文/);
+  assert.match(html, /播放语速/);
+  assert.match(html, /静音/);
+  assert.match(html, /空格 播放\/暂停/);
+  assert.match(html, /bl-thumbs/);
+  assert.match(html, /封面标题/);
+  assert.match(html, /第三页标题/);
+  assert.match(html, /aria-label="跳到第 1 页"/);
+  assert.match(html, /aria-current="page"/);
+  assert.match(html, /width:0%/);
 });
 
 test('模块预览页：加载态能渲染', () => {

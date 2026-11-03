@@ -16,8 +16,10 @@ import { fileURLToPath } from 'node:url';
 import {
   BOOKS_DIR,
   ROOT,
-  TRASH_DIR,
   bookDir,
+  clearProgressForBook,
+  clearProgressForModule,
+  clearTrash,
   dirSize,
   ensureDirs,
   existingBookDir,
@@ -27,10 +29,15 @@ import {
   markOpened,
   newId,
   readJson,
+  readPreference,
+  readProgress,
   renameBook,
   sha256Of,
   trashBook,
+  trashStats,
   writeJson,
+  writePreference,
+  writeProgress,
 } from './store.js';
 import { PdfError, PDF_ERROR, extractPages, guessTitle, totalChars } from './pdfread.js';
 import { buildChapters, cleanPages, summarize } from './text.js';
@@ -90,6 +97,10 @@ export const ROUTE_MODULE = ROUTE_PREFIX + '/module';
 export const ROUTE_AUDIO = ROUTE_PREFIX + '/audio';
 export const ROUTE_VOICE = ROUTE_PREFIX + '/voice';
 export const ROUTE_VOICE_PROBE = ROUTE_PREFIX + '/voice/probe';
+export const ROUTE_PAGES = ROUTE_PREFIX + '/pages';
+export const ROUTE_PROGRESS = ROUTE_PREFIX + '/progress';
+export const ROUTE_PREFERENCE = ROUTE_PREFIX + '/preference';
+export const ROUTE_TRASH_CLEAR = ROUTE_PREFIX + '/trash/clear';
 
 /** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -399,6 +410,8 @@ async function handleDelete(req, res) {
     sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
     return;
   }
+  // 继续听的位置不能指向已经进回收站的书
+  clearProgressForBook(bookId);
   sendJson(res, 200, { ok: true });
 }
 
@@ -1046,6 +1059,7 @@ async function handleModuleDelete(req, res) {
     sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
     return;
   }
+  clearProgressForModule(moduleId);
   sendJson(res, 200, { ok: true });
 }
 
@@ -1138,6 +1152,108 @@ async function handleVoiceProbe(req, res) {
   sendJson(res, 200, Object.assign({ ok: true }, result));
 }
 
+/* ------------------------------ 播放器数据 ------------------------------ */
+
+/** 单次最多取 200 页原文：播放器只按 source_pages 取几页，不该整本回传。 */
+const MAX_PAGE_SPAN = 200;
+
+/** GET /pages：原文窗格用未清洗的逐页文本（D7 要求显示原文）。 */
+function handlePages(req, res) {
+  const params = query(req);
+  const bookId = String(params.get('bookId') || '').trim();
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  if (!Array.isArray(pages) || !pages.length) {
+    sendError(res, 'E_NO_PAGES', '这本书没有存下逐页文本', '删掉重新导入一次。');
+    return;
+  }
+  const total = pages.length;
+  const from = Math.round(Number(params.get('from')) || 1);
+  const to = Math.round(Number(params.get('to')) || total);
+  if (!(from >= 1 && to >= from && to <= total)) {
+    sendError(res, 'E_BAD_RANGE', '页码范围不合法', '这本书一共 ' + total + ' 页。');
+    return;
+  }
+  if (to - from + 1 > MAX_PAGE_SPAN) {
+    sendError(res, 'E_BAD_RANGE', '一次最多取 ' + MAX_PAGE_SPAN + ' 页', '按幻灯片的 source_pages 分批取。');
+    return;
+  }
+  const slice = [];
+  for (const page of pages) {
+    const no = Number((page && page.page) || 0);
+    if (no >= from && no <= to) slice.push({ page: no, text: String((page && page.text) || '') });
+  }
+  sendJson(res, 200, { ok: true, from: from, to: to, total: total, pages: slice });
+}
+
+/** GET /progress：书架「继续听」位置；模块没就绪或已删就当作没有。 */
+function handleProgressGet(req, res) {
+  let progress = readProgress();
+  if (progress.lastModuleId) {
+    const found = loadModuleById(progress.lastModuleId);
+    const ready = found && found.bookId === progress.lastBookId && ['ready', 'ready_degraded'].includes(String(found.module.status));
+    if (!ready) progress = { lastBookId: '', lastModuleId: '', lastSlide: 1, updatedAt: progress.updatedAt };
+  }
+  sendJson(res, 200, { ok: true, progress: progress });
+}
+
+/** POST /progress：{bookId, moduleId, slide}，只认已存在模块，slide 会被夹到合法范围。 */
+async function handleProgressPost(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const moduleId = String(body.moduleId || '').trim();
+  const slide = Math.round(Number(body.slide) || 0);
+  if (!isValidId(bookId) || !isValidId(moduleId) || slide < 1) {
+    sendError(res, 'E_BAD_ID', '播放位置不合法', '');
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found || found.bookId !== bookId) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个模块', '它可能已经被删掉了。');
+    return;
+  }
+  if (!['ready', 'ready_degraded'].includes(String(found.module.status))) {
+    sendError(res, 'E_NOT_READY', '这个模块还没就绪', '等生成完成后再记录播放位置。');
+    return;
+  }
+  const total = Number(found.module.slides) || 0;
+  const clamped = Math.min(slide, Math.max(1, total));
+  const progress = writeProgress({ lastBookId: bookId, lastModuleId: moduleId, lastSlide: clamped });
+  sendJson(res, 200, { ok: true, progress: progress });
+}
+
+/** GET /preference：分隔条比例、语速、静音。 */
+function handlePreferenceGet(req, res) {
+  sendJson(res, 200, { ok: true, preference: readPreference() });
+}
+
+/** POST /preference：只写传进来的字段，区间由 store 夹紧。 */
+async function handlePreferencePost(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const patch = {};
+  if (body && body.splitRatio != null) patch.splitRatio = Number(body.splitRatio);
+  if (body && body.rate != null) patch.rate = Number(body.rate);
+  if (body && body.muted != null) patch.muted = body.muted === true;
+  if (body && body.fontSize != null) patch.fontSize = Number(body.fontSize);
+  const preference = writePreference(patch);
+  sendJson(res, 200, { ok: true, preference: preference });
+}
+
+/** POST /trash/clear：清空回收站（AC-24）。 */
+async function handleTrashClear(req, res) {
+  try {
+    await readJsonBody(req, 64 * 1024);
+  } catch {
+    /* 没有 body 也照样清 */
+  }
+  const cleared = clearTrash();
+  sendJson(res, 200, { ok: true, cleared: cleared.count, bytesFreed: cleared.bytes, trash: trashStats() });
+}
+
 /* ------------------------------ 文件 ------------------------------ */
 
 /** 原始 PDF：支持 Range，浏览器内置阅读器才肯翻页。 */
@@ -1218,17 +1334,13 @@ function handleCover(req, res) {
 
 /** 设置页要看的存储概况。 */
 function handleStorage(req, res) {
-  let trashCount = 0;
-  try {
-    trashCount = fs.readdirSync(TRASH_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).length;
-  } catch {
-    trashCount = 0;
-  }
+  const trash = trashStats();
   sendJson(res, 200, {
     ok: true,
     dataRoot: ROOT,
     bytes: dirSize(ROOT),
-    trashCount: trashCount,
+    trashCount: trash.count,
+    trashBytes: trash.bytes,
     pluginVersion: PLUGIN_VERSION,
   });
 }
@@ -1486,6 +1598,48 @@ export function apply(ctx) {
         return;
       }
       return handleVoiceProbe(req, res);
+    });
+
+    route(ROUTE_PAGES, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handlePages(req, res);
+    });
+
+    route(ROUTE_PROGRESS, (req, res) => {
+      if (methodIs(req, 'GET')) {
+        handleProgressGet(req, res);
+        return;
+      }
+      if (methodIs(req, 'POST')) {
+        return handleProgressPost(req, res);
+      }
+      res.statusCode = 405;
+      res.end();
+    });
+
+    route(ROUTE_PREFERENCE, (req, res) => {
+      if (methodIs(req, 'GET')) {
+        handlePreferenceGet(req, res);
+        return;
+      }
+      if (methodIs(req, 'POST')) {
+        return handlePreferencePost(req, res);
+      }
+      res.statusCode = 405;
+      res.end();
+    });
+
+    route(ROUTE_TRASH_CLEAR, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleTrashClear(req, res);
     });
 
     route(ROUTE_PREFIX + '/storage', (req, res) => {
