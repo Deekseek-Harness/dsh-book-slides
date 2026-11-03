@@ -3,7 +3,7 @@
 DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，勾几章交给模型写成幻灯片式精讲，
 左侧 PDF 原文、右侧讲稿同步播放。
 
-当前版本 **1.2.0**（2026-11-04，含 v1.2 语音、v1.3 书档与 v1.4 本地 ComfyUI 配图）。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **包 1.2.0 / 功能阶段 v1.4**（2026-11-04，含 v1.2 语音、v1.3 书档与 v1.4 本地 ComfyUI 配图；阶段号 ≠ 包版本）。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 为什么做这个
 
@@ -207,6 +207,7 @@ npm test
 | `node test/generate.test.mjs` | 假模型走真路由：四阶段、修复、锚点修复、取消、超时、幂等、重试复用、播放进度 |
 | `node test/tts.test.mjs` | Qwen 配置、Key 掩码、WAV 时长、逐页合成、缓存、部分失败 |
 | `node test/qwen.test.mjs` | 假千问服务走真路由：试听、6 页 WAV 落盘、缺 Key、部分失败、缓存、错误 Key |
+| `node test/package.test.mjs` | 书档导入/导出：ZIP 往返、只读、幂等、合并、手改保留、篡改/穿越拦截、批量 |
 | `node test/comfy.test.mjs` | 配图配置默认值、默认工作流识别、API/界面格式校验、提示词与种子、假 ComfyUI 出图与缺模型 |
 | `node test/imaging.test.mjs` | 后台配图作业：只给正文页出图、落盘与状态回写、`/image` 取图、force 换图、失败降级、重启归一、测试生图 |
 | `node test/image-auto.test.mjs` | 生成 → 自动起配图作业：模块先 ready，5 张正文页图随后落盘 |
@@ -251,11 +252,12 @@ node test/books.gen.e2e.mjs "..\测试书籍\911780342-故事-材质-结构-风�
 | 文件 | 内容 |
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更、测试基线、已知限制 |
-| [doc/requirements/规范需求.md](doc/requirements/规范需求.md) | v1.0 需求基线（已冻结，含 M1–M5 与 v1.2 交付记录） |
+| [doc/requirements/规范需求.md](doc/requirements/规范需求.md) | v1.0 基线 + v1.1–v1.4 附录（目录切章、语音、书档、配图） |
 | [doc/requirements/初步需求.md](doc/requirements/初步需求.md) | 最初一版需求原文（历史存档） |
 | [test/truth/README.md](test/truth/README.md) | 真值语料、基线数字、已知缺口 |
 | [prompts/](prompts/) | 目录抽取与幻灯片生成的提示词（版本号进缓存键） |
 | [doc/qwen/](doc/qwen/) | 千问语音接口与音色表的抓取存档 |
+| [doc/z_image/](doc/z_image/) | 默认 ComfyUI 工作流（Z-Image Turbo，API 格式） |
 
 ## 许可
 

@@ -46,6 +46,36 @@ v1.4「本地 ComfyUI 配图」：配图从「只出提示词」扩成两档策�
 - 工作流必须是 API 格式；中文提示词直接发送，不额外翻译。
 - 真机 ComfyUI（真实显卡、首次加载模型）未在自动化里跑过；测试用假 ComfyUI 覆盖协议与降级。
 
+## [1.1.0] - 2026-11-04
+
+v1.3「书档导入/导出」：把一本书的全部可再生状态打成一个自包含 ZIP，换机或换数据根导入后无需重新生成。
+
+### 新增
+
+- **书档容器**：`manifest.json` + `books/<bookId>/…`，单本 N=1、批量 N本 一个包；不产生嵌套 ZIP。
+- **导出**：`GET /export` 流式写 ZIP（PDF/WAV store，不落临时文件）、`GET /export/size` 预检体积；
+  默认含音频，原文 PDF 不可省；`voice.json`、`audio-cache/`、`trash/`、`batches/`、`preference.json` 等禁止入包。
+- **导入**：`POST /import/package` 流式落 `.import/`，校验 manifest 哈希、路径、符号链接、条目数与压缩比；
+  全部通过后整目录 rename 进 `books/`，失败清理，启动时清理超 24 小时残留。
+- **冲突策略**：`merge`（默认，只补模块）/ `skip` / `copy`；书的身份是 `sha256`，模块身份是 `contentKey`，
+  章节对不上的模块标 `orphan` 不导入；批量逐本判定，一本失败不拖累其它本。
+- **仅补配音**：`POST /revoice` 只重跑 `voicing`，不调用 LLM；无音频模块导入后按 `ready_degraded` 归一，
+  且 `audio_provider="none"` 不清空，避免播放器退回浏览器朗读。
+- **面板**：导入书档（多选）、冲突策略下拉、多选导出、导出确认层、导入结果层、卡片菜单「导出书档」、
+  语音降级模块「仅补配音」。
+
+### 变更
+
+- `package.json` 版本 1.1.0；新增 `pkgzip.js`、`package.js`，`dependencies` 加 `yazl` / `yauzl`。
+- `slides.json` / `book.json` 只追加可选字段；书档导入零 LLM、零 TTS、零 PDF 重解析。
+
+### 测试基线
+
+| 项 | 结果 |
+|---|---|
+| `npm test` | 188 项通过 / 2 跳过（无真书样本） / 0 失败；新增 `test/package.test.mjs` 19 项 |
+| 待真机 | GB 级包的内存峰值（AC-45）、生成中导出（AC-48） |
+
 ## [1.0.0] - 2026-11-03
 
 首个正式版本。M1–M4 + v1.2 语音全部交付，M5 只完成两条体验修复（见「未完成」）。
