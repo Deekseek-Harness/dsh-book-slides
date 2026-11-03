@@ -148,10 +148,9 @@ window.__ModuleLoader__.load({
 .bl-chip-ok{border-color:#2f9e5566;color:#2f9e55}
 .bl-chip-run{border-color:#b8860b66;color:#b8860b}
 .bl-chip-bad{border-color:#d9484b66;color:#d9484b}
-.bl-job{border:1px solid var(--bl-line);border-radius:9px;padding:9px 11px;margin:10px 0;font-size:12px;background:color-mix(in oklab,currentColor 4%,transparent)}
-.bl-job-head{display:flex;align-items:center;gap:8px}
-.bl-job-stage{font-weight:600}
-.bl-job .bl-progress{margin-top:7px}
+.bl-mod-run{background:color-mix(in oklab,#b8860b 7%,transparent);box-shadow:inset 3px 0 0 #b8860b;scroll-margin:14px}
+.bl-mod-run .bl-mod-title{font-weight:600}
+.bl-mod-run .bl-progress{margin-top:7px}
 .bl-job-msg{font-size:11.5px;opacity:.7;margin-top:4px}
 .bl-slide{border:1px solid var(--bl-line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
 .bl-slide-cover{background:color-mix(in oklab,currentColor 5%,transparent)}
@@ -561,6 +560,47 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       // pdf.js 的取消异常名固定；不能只看 message 里有没有 "cancelled"，
       // 「same canvas ... cancelled or completed」也含这个词，但那是真错误。
       return /RenderingCancel/i.test(name) || /^Rendering cancelled/i.test(message);
+    }
+
+    /* ------------------------------ 生成定位 ------------------------------ */
+
+    /**
+     * 点「生成精讲」后，把模块列表里对应的「生成中」条目滚进视野，焦点落到「取消」上（AC-14）。
+     * 条目就是 JobBox；找不到（例如列表尚未挂载）或嵌入环境不支持滚动时静默放弃。
+     */
+    function focusJobEntry(root, moduleId) {
+      if (!root || !moduleId || typeof root.querySelector !== 'function') return false;
+      let node = null;
+      try {
+        node = root.querySelector('[data-job-item="' + moduleId + '"]');
+      } catch {
+        return false;
+      }
+      if (!node) return false;
+      if (typeof node.scrollIntoView === 'function') {
+        try {
+          node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        } catch {
+          try {
+            node.scrollIntoView({ block: 'center' });
+          } catch {
+            /* 忽略：某些嵌入环境不接受参数 */
+          }
+        }
+      }
+      const cancel = typeof node.querySelector === 'function' ? node.querySelector('[data-job-cancel="1"]') : null;
+      if (cancel && typeof cancel.focus === 'function') {
+        try {
+          cancel.focus({ preventScroll: true });
+        } catch {
+          try {
+            cancel.focus();
+          } catch {
+            /* 忽略：焦点被别处抢走也不影响取消按钮可见 */
+          }
+        }
+      }
+      return true;
     }
 
     /* ------------------------------ 弹出菜单 ------------------------------ */
@@ -995,36 +1035,70 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         toc.preview ? h('pre', { className: 'bl-toc-preview' }, toc.preview) : null,
       );
     }
-    /** 生成进度条：四阶段名 + 当前批/页 + 取消（AC-13 / AC-14）。 */
-    function JobBox({ job, onCancel }) {
+    /**
+     * 生成中的模块条目：作为模块列表里的一行，显示阶段 / 进度 / 取消（AC-13 / AC-14）。
+     * 和普通模块行共用 .bl-mod 布局，生成一开始就出现在列表顶部，用户不用回头找。
+     */
+    function JobBox({ job, onCancel, title }) {
       const stage = STAGE_LABELS[job.stage] || statusLabel(job.status);
       const total = Number(job.total) || 0;
       const current = Number(job.current) || 0;
       const pct = total > 0 ? Math.max(4, Math.min(100, Math.round((current / total) * 100))) : 6;
       const cancelling = job.status === 'cancelling';
+      const chip = cancelling ? '正在取消' : job.status === 'queued' && job.stage === 'queued' ? '排队中' : '生成中';
+      const stageText = stage && stage !== chip ? ' · ' + stage : '';
       return h(
         'div',
-        { className: 'bl-job', role: 'status', 'aria-live': 'polite' },
+        {
+          className: 'bl-mod bl-mod-run',
+          'data-job-item': job.moduleId || '',
+          'data-module-id': job.moduleId || undefined,
+          tabIndex: -1,
+        },
         h(
           'div',
-          { className: 'bl-job-head' },
-          h('span', { className: 'bl-job-stage' }, (cancelling ? '正在取消' : '生成中') + ' · ' + stage),
-          h('span', { className: 'bl-grow' }),
-          total > 0 ? h('span', { className: 'bl-hint' }, current + '/' + total) : null,
+          { className: 'bl-mod-main' },
+          h('div', { className: 'bl-mod-title' }, title || '正在生成的精讲'),
+          h(
+            'div',
+            { role: 'status', 'aria-live': 'polite' },
+            h(
+              'div',
+              { className: 'bl-mod-meta' },
+              h('span', { className: 'bl-chip bl-chip-run' }, chip),
+              stageText + (total > 0 ? ' · ' + current + '/' + total : ''),
+            ),
+            h('div', { className: 'bl-job-msg' }, job.message || '正在排队…'),
+          ),
+          h('div', { className: 'bl-progress' }, h('i', { style: { width: pct + '%' } })),
+        ),
+        h(
+          'div',
+          { className: 'bl-mod-actions' },
           h(
             'button',
-            { className: 'bl-btn', disabled: cancelling || !onCancel, onClick: onCancel, 'aria-label': '取消生成' },
+            {
+              className: 'bl-btn',
+              disabled: cancelling || !onCancel,
+              onClick: onCancel,
+              title: cancelling ? '正在停止…' : '停止生成，已完成的步骤会保留',
+              'aria-label': '取消生成',
+              'data-job-cancel': '1',
+            },
             cancelling ? '取消中…' : '取消',
           ),
         ),
-        h('div', { className: 'bl-progress' }, h('i', { style: { width: pct + '%' } })),
-        h('div', { className: 'bl-job-msg' }, job.message || '正在排队…'),
       );
     }
 
-    /** 详情页的模块列表：打开 / 重试 / 重新生成 / 删除。 */
-    function ModuleList({ modules, busy, onOpen, onRetry, onDelete, onRegenerate }) {
+    /** 详情页的模块列表：打开 / 重试 / 重新生成 / 删除；生成中的模块就地显示进度与取消。 */
+    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate }) {
       const list = Array.isArray(modules) ? modules : [];
+      const active = job && job.moduleId ? job : null;
+      const runningId = active ? active.moduleId : '';
+      const runningItem = runningId ? list.find((item) => item.id === runningId) : null;
+      const rows = runningId ? list.filter((item) => item.id !== runningId) : list;
+      const count = list.length + (runningId && !runningItem ? 1 : 0);
       return h(
         'div',
         { className: 'bl-mods' },
@@ -1033,17 +1107,18 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           { className: 'bl-mods-head' },
           h('span', null, '精讲模块'),
           h('span', { className: 'bl-grow' }),
-          h('span', { className: 'bl-hint' }, list.length ? list.length + ' 个' : '还没有'),
+          h('span', { className: 'bl-hint' }, count ? count + ' 个' : '还没有'),
         ),
-        list.length === 0
+        active ? h(JobBox, { job: active, onCancel: onCancel, title: runningItem ? runningItem.title : '' }) : null,
+        !active && list.length === 0
           ? h('div', { className: 'bl-mod' }, h('div', { className: 'bl-mod-main bl-hint' }, '勾选章节后点底部的「生成精讲」，生成完在这里打开。'))
-          : list.map((item) => {
+          : rows.map((item) => {
               const ready = isReady(item.status);
               const bad = item.status === 'failed' || item.status === 'interrupted' || item.status === 'cancelled';
               const chip = ready ? 'bl-chip-ok' : bad ? 'bl-chip-bad' : 'bl-chip-run';
               return h(
                 'div',
-                { className: 'bl-mod', key: item.id },
+                { className: 'bl-mod', key: item.id, 'data-module-id': item.id },
                 h(
                   'div',
                   { className: 'bl-mod-main' },
@@ -2114,19 +2189,32 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [toc, setToc] = useState({ from: '', to: '', suggested: null, total: 0, info: null, preview: '', busy: false, message: '' });
       const [job, setJob] = useState(null);
       const [jobId, setJobId] = useState('');
+      const [jobFocus, setJobFocus] = useState(0);
       const [genBusy, setGenBusy] = useState(false);
+
+      /** 详情页滚动容器：生成开始后用它找到对应条目。 */
+      const bodyRef = useRef(null);
+      /** 已经成功载入过的书；刷新模块列表时不要退回「正在打开」把列表卸掉。 */
+      const loadedBookRef = useRef('');
 
       useEffect(() => {
         let alive = true;
-        setState((prev) => ({ ...prev, loading: true }));
+        const sameBook = loadedBookRef.current === bookId;
+        setState((prev) => ({ ...prev, loading: sameBook ? prev.loading : true }));
         getJson(BOOK_API + '?bookId=' + encodeURIComponent(bookId))
           .then((data) => {
             if (!alive) return;
+            loadedBookRef.current = bookId;
             setState({ loading: false, book: data.book, chapters: data.chapters || [], modules: data.modules || [] });
           })
           .catch((err) => {
             if (!alive) return;
-            setState({ loading: false, book: null, chapters: [], modules: [] });
+            // 刷新失败时保留已经显示的书与模块列表，别把生成中的条目一起卸掉
+            setState((prev) =>
+              prev.book && prev.book.id === bookId
+                ? { ...prev, loading: false }
+                : { loading: false, book: null, chapters: [], modules: [] },
+            );
             setError(err);
           });
         // 取目录范围：用户上次填的优先，其次是猜测值
@@ -2223,6 +2311,12 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           if (timer) clearTimeout(timer);
         };
       }, [jobId, onOpenModule, setError]);
+
+      /** 生成一开始就把模块列表里的对应条目滚进视野，焦点落到「取消」上。 */
+      useEffect(() => {
+        if (!jobFocus || !jobId || state.loading) return;
+        focusJobEntry(bodyRef.current, jobId);
+      }, [jobFocus, jobId, state.loading]);
 
       const book = state.book;
       const chapters = state.chapters || [];
@@ -2401,6 +2495,9 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
               message: data.running ? '已有生成作业在跑，接着看进度' : '已排队',
             });
             setJobId(data.moduleId);
+            // 让真实模块记录立刻进列表（标题/章数不必等轮询），随后把这一条滚进视野
+            setRefresh((value) => value + 1);
+            setJobFocus((value) => value + 1);
           } catch (err) {
             setError(err);
           } finally {
@@ -2638,7 +2735,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         ),
         h(
           'div',
-          { className: 'bl-body' },
+          { className: 'bl-body', ref: bodyRef },
           h(ErrorBanner, { error: error, onClose: () => setError(null) }),
           askReparse
             ? h(
@@ -2686,10 +2783,11 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                       ),
                     ),
                   ),
-                  job ? h(JobBox, { job: job, onCancel: cancelGenerate }) : null,
                   h(ModuleList, {
                     modules: state.modules,
                     busy: busy || genBusy,
+                    job: jobId ? job : null,
+                    onCancel: cancelGenerate,
                     onOpen: (id) => onOpenModule && onOpenModule(id),
                     onRetry: retryModule,
                     onDelete: removeModule,
@@ -3472,6 +3570,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         pdfHighlightRects: pdfHighlightRects,
         isRenderCancelled: isRenderCancelled,
         bindPopupDismiss: bindPopupDismiss,
+        focusJobEntry: focusJobEntry,
       },
     };
   },

@@ -172,6 +172,65 @@ test('书架菜单：点屏幕其它区域或按 Esc 关闭，点菜单与「⋯
   assert.equal(typeof mod.__utils.bindPopupDismiss(doc, {}), 'function');
 });
 
+test('生成定位：滚到对应条目，并把焦点放到取消按钮', () => {
+  const { mod } = bootPlugin();
+  const calls = [];
+  const cancel = {
+    focus(options) {
+      calls.push(['focus', options]);
+    },
+  };
+  const node = {
+    scrollIntoView(options) {
+      calls.push(['scroll', options]);
+    },
+    querySelector(selector) {
+      calls.push(['query', selector]);
+      return cancel;
+    },
+  };
+  let queried = '';
+  const root = {
+    querySelector(selector) {
+      queried = selector;
+      return node;
+    },
+  };
+  assert.equal(mod.__utils.focusJobEntry(root, 'aaaaaaaaaaaa'), true);
+  assert.equal(queried, '[data-job-item="aaaaaaaaaaaa"]');
+  assert.deepEqual(calls[0], ['scroll', { block: 'center', behavior: 'smooth' }]);
+  assert.deepEqual(
+    calls.find((call) => call[0] === 'focus'),
+    ['focus', { preventScroll: true }],
+  );
+  assert.equal(
+    calls.some((call) => call[0] === 'query' && call[1] === '[data-job-cancel="1"]'),
+    true,
+  );
+
+  // 不支持 smooth 的嵌入环境退回到普通滚动
+  const fallback = [];
+  const oldBrowser = {
+    scrollIntoView(options) {
+      if (options && options.behavior) throw new Error('unknown option');
+      fallback.push(options);
+    },
+    querySelector() {
+      return null;
+    },
+  };
+  assert.equal(
+    mod.__utils.focusJobEntry({ querySelector: () => oldBrowser }, 'bbbbbbbbbbbb'),
+    true,
+  );
+  assert.deepEqual(fallback, [{ block: 'center' }]);
+
+  // 找不到条目 / 没有容器时不能报错
+  assert.equal(mod.__utils.focusJobEntry({ querySelector: () => null }, 'cccccccccccc'), false);
+  assert.equal(mod.__utils.focusJobEntry(null, 'cccccccccccc'), false);
+  assert.equal(mod.__utils.focusJobEntry({}, 'cccccccccccc'), false);
+});
+
 test('详情页在加载态与出错态都能渲染', () => {
   const { mod } = bootPlugin();
   const loading = renderToString(
@@ -254,6 +313,49 @@ test('模块列表：就绪、失败、删除/重试按钮都能渲染', () => {
   assert.match(html, /重试/);
   assert.match(html, /删除/);
   assert.match(html, /重生成/);
+});
+
+test('模块列表：生成中的模块留在列表里，带进度/取消且不重复', () => {
+  const { mod } = bootPlugin();
+  const modules = [
+    { id: 'aaaaaaaaaaaa', title: '精讲：第 1–3 章', status: 'queued', slides: 0, chapters: [1, 2, 3] },
+    { id: 'bbbbbbbbbbbb', title: '精讲：第 4 章', status: 'ready', slides: 5, anchorHitRate: 0.9, chapters: [4] },
+  ];
+  const html = renderToString(
+    React.createElement(mod.__components.ModuleList, {
+      modules: modules,
+      busy: false,
+      job: { moduleId: 'aaaaaaaaaaaa', status: 'structuring', stage: 'structuring', current: 2, total: 3, message: '正在改写第 2/3 批原文' },
+      onCancel: () => {},
+      onOpen: () => {},
+      onRetry: () => {},
+      onDelete: () => {},
+      onRegenerate: () => {},
+    }),
+  );
+  assert.match(html, /bl-mod-run/, '生成中的条目要有高亮样式');
+  assert.match(html, /data-job-item="aaaaaaaaaaaa"/, '条目要能被定位');
+  assert.match(html, /data-job-cancel="1"/, '取消按钮要能被找到');
+  assert.match(html, /正在改写第 2\/3 批原文/);
+  assert.equal((html.match(/精讲：第 1–3 章/g) || []).length, 1, '同一模块不能既渲染成普通行又渲染成生成中条目');
+  assert.match(html, /精讲：第 4 章/, '其它模块照常显示');
+  assert.match(html, /2 个/, '计数要把生成中的模块算进去');
+
+  const synthetic = renderToString(
+    React.createElement(mod.__components.ModuleList, {
+      modules: [],
+      busy: false,
+      job: { moduleId: 'cccccccccccc', status: 'queued', stage: 'queued', current: 0, total: 0, message: '已排队' },
+      onCancel: () => {},
+      onOpen: () => {},
+      onRetry: () => {},
+      onDelete: () => {},
+      onRegenerate: () => {},
+    }),
+  );
+  assert.match(synthetic, /正在生成的精讲/, '列表还没刷新时也要先占一个条目');
+  assert.match(synthetic, /排队中/);
+  assert.match(synthetic, /1 个/);
 });
 
 test('幻灯片舞台：封面、要点、引文三种版式各自渲染', () => {
