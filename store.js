@@ -1,7 +1,7 @@
 /**
  * 精讲台 · 存储层
  *
- * 所有数据都在本机，目录布局见《规范需求.md》5.1：
+ * 所有数据都在本机，目录布局见 doc/requirements/规范需求.md §5.1：
  *   <root>/books/<bookId>/book.json        ← 书名、页数、sha256（存在即导入完成）
  *   <root>/books/<bookId>/source.pdf       ← 原件副本
  *   <root>/books/<bookId>/pages.json       ← 逐页文本（未清洗）

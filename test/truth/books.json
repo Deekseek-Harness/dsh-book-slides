@@ -1,0 +1,89 @@
+{
+  "purpose": "真书切章核对的人工真值与基线清单。PDF 不进仓库；把本地 PDF 目录指过来就能跑 check.js（npm run test:truth / DSH 命令 /chapter-check）。",
+  "format": {
+    "bookmark": "【书签】*.txt：每行「标题<TAB>物理页码」，从 PDF 书签导出；只认章/前言/附录，分卷与小节不参与对照",
+    "toc": "【目录页码】*.txt：人工标注的目录页范围，如「16-22」；目录没有页码的书不登记这一项",
+    "modes": "这本书能用哪条核对路径：toc = 目录驱动，mech = 纯页眉机械切分",
+    "expect": "当前基线快照（真值章数 / 切出段数 / 一致 / 严重 / 警告）；--baseline 用它判回归"
+  },
+  "books": [
+    {
+      "pdf": "911780342-故事-材质-结构-风格和银幕剧作的原理-罗伯特-麦基.pdf",
+      "bookmark": "【书签】911780342-故事-材质-结构-风格和银幕剧作的原理-罗伯特-麦基.txt",
+      "toc": "【目录页码】911780342-故事-材质-结构-风格和银幕剧作的原理-罗伯特-麦基.txt",
+      "pages": 542,
+      "sha256": "84b3d86581405f956d2dee790c866b98736ce87598fd742c4389c17a2cb60eef",
+      "modes": ["mech"],
+      "expect": {
+        "mech": { "truth": 21, "parsed": 21, "matched": 21, "serious": 0, "warn": 0 }
+      },
+      "note": "目录页（2–2）没有印刷页码，目录路径认不出条目，只能用机械路径"
+    },
+    {
+      "pdf": "导演创作完全手册（后浪出版：插图修订第5版） (迈克尔·拉毕格 米克·胡尔比什-切里耶尔) .pdf",
+      "bookmark": "【书签】导演创作完全手册（后浪出版：插图修订第5版） (迈克尔·拉毕格 米克·胡尔比什-切里耶尔) .txt",
+      "toc": "【目录页码】导演创作完全手册（后浪出版：插图修订第5版） (迈克尔·拉毕格 米克·胡尔比什-切里耶尔).txt",
+      "pages": 582,
+      "sha256": "ec1850d314d1f553725b9756aaa80be34a50d4654763a47bea4b2d98dc9552ed",
+      "modes": ["toc", "mech"],
+      "expect": {
+        "toc": { "truth": 47, "parsed": 40, "matched": 35, "serious": 12, "warn": 0 },
+        "mech": { "truth": 47, "parsed": 47, "matched": 47, "serious": 0, "warn": 0 }
+      },
+      "note": "单页双栏交错的简目：check.js 里的极简目录解析器（不是模型）会漏章，机械路径是准的"
+    },
+    {
+      "pdf": "计算机组成与设计(OCR).pdf",
+      "bookmark": "【书签】计算机组成与设计(OCR).txt",
+      "toc": "【目录页码】计算机组成与设计(OCR).txt",
+      "pages": 608,
+      "sha256": "0d2b9eed37f235fe83036976fe99cb54a7955947f9cc3f73086ef1429b4ad69a",
+      "modes": ["toc", "mech"],
+      "expect": {
+        "toc": { "truth": 14, "parsed": 13, "matched": 13, "serious": 0, "warn": 1 },
+        "mech": { "truth": 14, "parsed": 13, "matched": 12, "serious": 1, "warn": 1 }
+      },
+      "note": "附录 C 的标题只出现在页眉且与正文粘连，机械路径取不到"
+    },
+    {
+      "pdf": "普林斯顿微积分读本(修订版)-2016-中文版.pdf",
+      "bookmark": "【书签】普林斯顿微积分读本(修订版)-2016-中文版.txt",
+      "toc": "【目录页码】普林斯顿微积分读本(修订版)-2016-中文版.txt",
+      "pages": 673,
+      "sha256": "73063803496ad63c80736b7feef087a2dafd53b04c688c51c2e3811c0e5ca19e",
+      "modes": ["toc", "mech"],
+      "expect": {
+        "toc": { "truth": 33, "parsed": 30, "matched": 30, "serious": 2, "warn": 1 },
+        "mech": { "truth": 33, "parsed": 33, "matched": 30, "serious": 2, "warn": 1 }
+      },
+      "note": "目录路径目前漏第 24、26 章；机械路径的附录 A/B 起点取不到"
+    },
+    {
+      "pdf": "Go程序员面试笔试宝典.pdf",
+      "bookmark": "【书签】Go程序员面试笔试宝典.txt",
+      "toc": "【目录页码】Go程序员面试笔试宝典.txt",
+      "pages": 322,
+      "sha256": "95760f21bb5871eb8e8e10d6565a007d8802030441a6a59c8703dae71bdb32e2",
+      "modes": ["toc", "mech"],
+      "expect": {
+        "toc": { "truth": 15, "parsed": 14, "matched": 14, "serious": 0, "warn": 1 },
+        "mech": { "truth": 15, "parsed": 14, "matched": 14, "serious": 0, "warn": 1 }
+      },
+      "note": "目录路径与机械路径都已对齐；首章前的「前言」两条路径都归入前文，只算警告"
+    }
+  ],
+  "ignored": [
+    {
+      "pdf": "计算机组成与设计.pdf",
+      "reason": "无文字层的扫描重本，与 (OCR) 版同书重复；配对时曾被前缀规则误连到 (OCR) 版的真值，必须显式排除"
+    },
+    {
+      "pdf": "Effective Modern C++.pdf",
+      "reason": "英文原版，没有人工真值"
+    },
+    {
+      "pdf": "孙权劝学原文、翻译及赏析、拼音版及朗读_司马光文言文_古文岛_原古诗文网.pdf",
+      "reason": "古文短文，没有人工真值"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "name": "dsh-book-slides",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "DSH 左侧栏「精讲」面板：导入带文字层的 PDF，自动切章，勾选章节生成幻灯片式精讲（配图位只出提示词），分屏对照原文播放。",
@@ -55,7 +55,9 @@
   "scripts": {
     "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs",
     "test:mech": "node test/books.mech.e2e.mjs",
-    "test:chapters": "node test/books.toc.e2e.mjs"
+    "test:chapters": "node test/books.toc.e2e.mjs",
+    "test:truth": "node test/books.toc.e2e.mjs --truth test/truth --baseline",
+    "test:truth:mech": "node test/books.mech.e2e.mjs --truth test/truth --baseline"
   },
   "keywords": [
     "dsh-plugin",

@@ -2,9 +2,11 @@
 node_modules/
 .npm-cache/
 
-# 文档暂时不进这次提交；要收 README 时删掉这一行
-README.md
-
 # 杂项
 *.log
+*.tmp
 .DS_Store
+Thumbs.db
+
+# 本地运行时残留（书与音频都落在 ~/.dsh/book-slides，不进仓库）
+.dsh/

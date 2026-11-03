@@ -1544,9 +1544,17 @@ export function apply(ctx) {
         const mech = /\s+mech\s*$/i.test(raw);
         const arg = mech ? raw.replace(/\s+mech\s*$/i, '') : raw;
         const root = resolveCheckDir(ctx, agent, arg);
-        if (!root) return { kind: 'error', text: '用法：/chapter-check @数据目录（目录里放 PDF + 【书签】txt + 【目录页码】txt；末尾加 mech 测机械切分）' };
+        if (!root) {
+          return {
+            kind: 'error',
+            text:
+              '用法：/chapter-check @数据目录 [mech]\n' +
+              '数据目录放 PDF；【书签】/【目录页码】txt 可以在同一目录，也可以把环境变量 BOOK_SLIDES_TRUTH_DIR 指到仓库的 test/truth（真值已收进仓库，推荐这样用）。',
+          };
+        }
+        const truthDir = String(process.env.BOOK_SLIDES_TRUTH_DIR || '').trim();
         try {
-          const result = await runBookCheck(root, { mode: mech ? 'mech' : 'toc', signal: signal });
+          const result = await runBookCheck(root, { mode: mech ? 'mech' : 'toc', truthDir: truthDir, signal: signal });
           return { kind: result.summary.serious > 0 ? 'error' : 'success', text: result.text };
         } catch (err) {
           return { kind: 'error', text: '跑不起来：' + String((err && err.message) || err) };

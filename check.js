@@ -1,10 +1,15 @@
 /**
  * 真书「章节切分」核对 —— DSH 命令 /chapter-check 与命令行脚本共用这一份实现。
  *
- * 数据目录里每本书放：
+ * 数据目录（PDF 在哪）里每本书放：
  *   xxx.pdf            书
  *   【书签】xxx.txt     人工真值：每行「标题<TAB>物理页码」
  *   【目录页码】xxx.txt 目录页范围，如「16-22」
+ *
+ * 真值也可以放在另一个目录（truthDir），这时 PDF 目录里只剩 PDF：
+ *   有 books.json 清单 → 按清单点名配对，清单外的 PDF 只报通知；
+ *   没有清单        → 按文件名前缀在 truthDir 里找，找不到再回数据目录找。
+ * 清单是为了挡住「计算机组成与设计.pdf」和「计算机组成与设计(OCR).pdf」这类同名前缀串台。
  *
  * 两条路径：
  *   toc   目录 → 校准 → 落盘（附录 F 主路径）
@@ -96,15 +101,64 @@ export function readTocRange(file) {
   }
 }
 
-/** 按前缀配对：xxx.pdf ↔ 【书签】xxx.txt ↔ 【目录页码】xxx.txt */
+/**
+ * 按前缀配对：xxx.pdf ↔ 【书签】xxx.txt ↔ 【目录页码】xxx.txt。
+ * dir 可以是单个目录，也可以是目录数组（按顺序找，truthDir 排前面）。
+ */
 export function findPair(dir, pdfName, prefix, ext) {
   const base = pdfName.replace(/\.pdf$/i, '');
-  for (const candidate of [prefix + base + ext, prefix + base.trim() + ext]) {
-    if (fs.existsSync(path.join(dir, candidate))) return path.join(dir, candidate);
+  const dirs = Array.isArray(dir) ? dir : [dir];
+  for (const current of dirs) {
+    if (!current) continue;
+    for (const candidate of [prefix + base + ext, prefix + base.trim() + ext]) {
+      const file = path.join(current, candidate);
+      if (fs.existsSync(file)) return file;
+    }
+    const head = prefix + base.trim().slice(0, 20);
+    let hit = null;
+    try {
+      hit = fs.readdirSync(current).find((name) => name.startsWith(head) && name.toLowerCase().endsWith(ext.toLowerCase()));
+    } catch {
+      hit = null;
+    }
+    if (hit) return path.join(current, hit);
   }
-  const head = prefix + base.trim().slice(0, 20);
-  const hit = fs.readdirSync(dir).find((name) => name.startsWith(head) && name.toLowerCase().endsWith(ext.toLowerCase()));
-  return hit ? path.join(dir, hit) : null;
+  return null;
+}
+
+/* ------------------------------ 真值清单 ------------------------------ */
+
+export const MANIFEST_NAME = 'books.json';
+
+/**
+ * 读真值目录里的 books.json；没有清单就返回 null（退回按文件名前缀配对）。
+ *
+ * 清单形状：
+ *   {
+ *     "books": [{ "pdf": "x.pdf", "bookmark": "【书签】x.txt", "toc": "【目录页码】x.txt",
+ *                 "pages": 542, "sha256": "...", "modes": ["toc", "mech"],
+ *                 "expect": { "toc": { "truth": 15, "parsed": 14, "matched": 14, "serious": 0, "warn": 1 } } }],
+ *     "ignored": [{ "pdf": "扫描重本.pdf", "reason": "无文字层" }]
+ *   }
+ *
+ * expect 是当前基线快照，--baseline 用它判回归（见 renderBaseline）。
+ * modes 限定这本书能用哪条路径；不在列表里的路径会被报成「跳过」而不是「严重」。
+ */
+export function readManifest(truthDir) {
+  if (!truthDir) return null;
+  const file = path.join(truthDir, MANIFEST_NAME);
+  if (!fs.existsSync(file)) return null;
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error('真值清单读不了（' + file + '）：' + String((err && err.message) || err));
+  }
+  return {
+    dir: path.resolve(truthDir),
+    books: Array.isArray(data && data.books) ? data.books : [],
+    ignored: Array.isArray(data && data.ignored) ? data.ignored : [],
+  };
 }
 
 /* ------------------------------ 目录条目（测试用） ------------------------------ */
@@ -179,13 +233,25 @@ export function compareTruth(truth, chapters) {
 
 /* ------------------------------ 跑一本书 ------------------------------ */
 
-async function runOne(root, pdf, mode) {
+async function runOne(root, pdf, mode, opts) {
+  const options = opts || {};
+  const truthDir = options.truthDir || '';
+  const entry = options.entry || null;
   const label = pdf.replace(/\.pdf$/i, '').trim();
-  const base = { label: label, mode: mode };
-  const bookmarkFile = findPair(root, pdf, '【书签】', '.txt');
-  if (!bookmarkFile) return Object.assign(base, { skipped: '没有书签文件，无法对照' });
+  const base = { label: label, pdf: pdf, mode: mode };
 
-  const bookmarkToc = findPair(root, pdf, '【目录页码】', '.txt');
+  if (entry && Array.isArray(entry.modes) && !entry.modes.includes(mode)) {
+    return Object.assign(base, { skipped: '清单只登记了 ' + entry.modes.join('/') + ' 路径' + (entry.note ? '：' + entry.note : '') });
+  }
+
+  const bookmarkFile = entry && entry.bookmark
+    ? path.join(truthDir, entry.bookmark)
+    : findPair([truthDir, root], pdf, '【书签】', '.txt');
+  if (!bookmarkFile || !fs.existsSync(bookmarkFile)) return Object.assign(base, { skipped: '没有书签文件，无法对照' });
+
+  const bookmarkToc = entry
+    ? (entry.toc ? path.join(truthDir, entry.toc) : null)
+    : findPair([truthDir, root], pdf, '【目录页码】', '.txt');
   const range = readTocRange(bookmarkToc || '');
   if (mode === 'toc' && !range) return Object.assign(base, { skipped: '没有【目录页码】文件，不知道目录在哪几页' });
 
@@ -222,6 +288,7 @@ async function runOne(root, pdf, mode) {
   const compared = compareTruth(truth, chapters);
   return Object.assign(compared, {
     label: label,
+    pdf: pdf,
     mode: mode,
     pages: extracted.numPages,
     ms: Date.now() - t0,
@@ -296,37 +363,143 @@ export function renderSummary(title, results) {
   return { lines: lines, summary: { serious: serious, warn: all.missingOther.length, notices: all.notices.length, matched: all.matched, truth: all.truth } };
 }
 
+/* ------------------------------ 基线对照 ------------------------------ */
+
+/** 一次运行的数字快照，用于和清单里的 expect 比。 */
+export function baselineOf(result) {
+  return {
+    truth: result.truthCount,
+    parsed: result.parsedCount,
+    matched: result.ok.core + result.ok.other,
+    serious: result.serious.length,
+    warn: result.warn.length,
+  };
+}
+
+/**
+ * 与 books.json 里登记的基线比。
+ * 真值数或切出章数变了算回归（说明真值被改过、或算法结构动了）；一致数变少、严重/警告变多也算回归。
+ * 变好只提示、不算失败；跳过（本地没 PDF、清单没登记）的书不参与，否则换台机器就永远红。
+ */
+export function renderBaseline(results, manifest) {
+  const entries = new Map(((manifest && manifest.books) || []).map((b) => [b.pdf, b]));
+  const lines = [];
+  lines.push('');
+  lines.push('════════ 基线对照（books.json）════════');
+  let failed = 0;
+  let passed = 0;
+  let improved = 0;
+  for (const result of results) {
+    if (result.skipped) continue;
+    const entry = entries.get(result.pdf);
+    const expect = entry && entry.expect && entry.expect[result.mode];
+    if (!expect) {
+      failed += 1;
+      lines.push('    ✗ ' + result.label + '（' + result.mode + '）清单里没有登记基线');
+      continue;
+    }
+    const actual = baselineOf(result);
+    const worse = [];
+    if (actual.truth !== expect.truth) worse.push('真值 ' + expect.truth + ' → ' + actual.truth + ' 章');
+    if (actual.parsed !== expect.parsed) worse.push('切出 ' + expect.parsed + ' → ' + actual.parsed + ' 段');
+    if (actual.matched < expect.matched) worse.push('一致 ' + expect.matched + ' → ' + actual.matched);
+    if (actual.serious > expect.serious) worse.push('严重 ' + expect.serious + ' → ' + actual.serious);
+    if (actual.warn > expect.warn) worse.push('警告 ' + expect.warn + ' → ' + actual.warn);
+    if (worse.length) {
+      failed += 1;
+      lines.push('    ✗ ' + result.label + '（' + result.mode + '）回归：' + worse.join('、'));
+      continue;
+    }
+    passed += 1;
+    if (actual.matched > expect.matched || actual.serious < expect.serious || actual.warn < expect.warn) {
+      improved += 1;
+      lines.push(
+        '    ↑ ' + result.label + '（' + result.mode + '）好于基线：一致 ' + actual.matched + '/' + actual.truth + '，严重 ' + actual.serious +
+          '（基线 ' + expect.matched + '/' + expect.truth + '，严重 ' + expect.serious + '）',
+      );
+    }
+  }
+  lines.push('');
+  lines.push('基线结论：通过 ' + passed + ' 本，回归 ' + failed + ' 本，改善 ' + improved + ' 本（跳过的不参与）');
+  return { lines: lines, summary: { passed: passed, failed: failed, improved: improved } };
+}
+
 /* ------------------------------ 对外入口 ------------------------------ */
 
 /**
  * 跑一整个数据目录。
- * @param {string} root 数据目录的绝对路径
- * @param {{mode?: 'toc'|'mech', signal?: AbortSignal, onBook?: Function}} options
+ * @param {string} root 数据目录的绝对路径（放 PDF）
+ * @param {{mode?: 'toc'|'mech', truthDir?: string, baseline?: boolean, signal?: AbortSignal, onBook?: Function}} options
  */
 export async function runBookCheck(root, options) {
   const opts = options || {};
   const mode = opts.mode === 'mech' ? 'mech' : 'toc';
+  const truthDir = opts.truthDir ? path.resolve(opts.truthDir) : '';
   if (!fs.existsSync(root)) throw new Error('目录不存在：' + root);
+  if (truthDir && !fs.existsSync(truthDir)) throw new Error('真值目录不存在：' + truthDir);
+
   const pdfs = fs.readdirSync(root).filter((name) => /\.pdf$/i.test(name)).sort();
   if (pdfs.length === 0) throw new Error('目录里没有 PDF：' + root);
+  const manifest = readManifest(truthDir);
+  if (opts.baseline && !manifest) throw new Error('没有真值清单（' + (truthDir || '未指定真值目录') + '），--baseline 无从对照');
 
+  const labelOf = (pdf) => String(pdf || '?').replace(/\.pdf$/i, '').trim();
   const title = mode === 'toc' ? '章节切分' : '机械切分';
   const results = [];
-  for (const pdf of pdfs) {
-    if (opts.signal && opts.signal.aborted) throw new Error('已取消');
-    const result = await runOne(root, pdf, mode);
+  const push = (result) => {
     results.push(result);
     if (opts.onBook) opts.onBook(result);
+  };
+
+  if (manifest && manifest.books.length) {
+    const present = new Set(pdfs);
+    const covered = new Set();
+    for (const entry of manifest.books) {
+      if (opts.signal && opts.signal.aborted) throw new Error('已取消');
+      const pdf = entry && entry.pdf;
+      if (pdf && present.has(pdf)) {
+        covered.add(pdf);
+        push(await runOne(root, pdf, mode, { truthDir: manifest.dir, entry: entry }));
+      } else {
+        push({ label: labelOf(pdf), pdf: pdf, mode: mode, skipped: '本地没有这本 PDF（真值已登记，本轮未跑）' });
+      }
+    }
+    const ignored = manifest.ignored || [];
+    for (const item of ignored) {
+      if (covered.has(item && item.pdf)) continue;
+      push({
+        label: labelOf(item && item.pdf),
+        pdf: item && item.pdf,
+        mode: mode,
+        skipped: '清单标记为不参与对照：' + String((item && item.reason) || '未写原因'),
+      });
+    }
+    for (const pdf of pdfs) {
+      if (covered.has(pdf)) continue;
+      if (ignored.some((item) => item && item.pdf === pdf)) continue;
+      push({ label: labelOf(pdf), pdf: pdf, mode: mode, skipped: '真值清单里没有登记，未参与对照' });
+    }
+  } else {
+    for (const pdf of pdfs) {
+      if (opts.signal && opts.signal.aborted) throw new Error('已取消');
+      push(await runOne(root, pdf, mode, { truthDir: truthDir }));
+    }
   }
 
   const lines = [];
   lines.push('《' + title + '》真书对照：' + root);
+  if (truthDir) lines.push('真值目录：' + truthDir + (manifest ? '（books.json 清单）' : '（按文件名配对）'));
 
   const all = results.map(renderBook);
   for (const block of all) for (const line of block) lines.push(line);
 
+  const base = opts.baseline ? renderBaseline(results, manifest) : null;
+  if (base) for (const line of base.lines) lines.push(line);
+
   const sum = renderSummary(title, results);
   for (const line of sum.lines) lines.push(line);
 
-  return { mode: mode, results: results, summary: sum.summary, text: lines.join('\n') };
+  const summary = Object.assign({}, sum.summary);
+  if (base) summary.baseline = base.summary;
+  return { mode: mode, results: results, summary: summary, text: lines.join('\n') };
 }
