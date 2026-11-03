@@ -1,6 +1,6 @@
 {
   "name": "dsh-book-slides",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "DSH 左侧栏「精讲」面板：导入带文字层的 PDF，自动切章，勾选章节生成幻灯片式精讲（配图位只出提示词），分屏对照原文播放。",
