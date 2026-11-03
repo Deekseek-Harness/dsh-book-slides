@@ -271,6 +271,21 @@ test('方法不对返回 405', async () => {
   assert.equal(res.status, 405);
 });
 
+test('生成：没有模型服务时明确报 E_LLM_UNAVAILABLE，不建半截模块', async () => {
+  const shelf = await fetch(base + '/dsh-book-slides/books').then((r) => r.json());
+  const book = shelf.books[0];
+  const detail = await fetch(base + '/dsh-book-slides/book?bookId=' + book.id).then((r) => r.json());
+  const chapter = detail.chapters.filter((item) => !item.front && item.chars >= 50)[0];
+  const before = detail.modules.length;
+
+  const result = await post('/dsh-book-slides/generate', JSON.stringify({ bookId: book.id, chapters: [chapter.n] })).then((r) => r.json());
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'E_LLM_UNAVAILABLE');
+
+  const after = await fetch(base + '/dsh-book-slides/book?bookId=' + book.id).then((r) => r.json());
+  assert.equal(after.modules.length, before);
+});
+
 /* ------------------------------ 目录切章 ------------------------------ */
 
 test('目录接口：建议范围、预览、非法范围都有明确响应', async () => {

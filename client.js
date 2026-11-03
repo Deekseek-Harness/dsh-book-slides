@@ -3,9 +3,10 @@
  *
  * 左侧栏一个「精讲」图标，点开就是书架：
  *   - 拖入 PDF，看得到上传进度与解析等待
- *   - 卡片流看书封、章数、字数
- *   - 点开一本书看章节清单（M2 才给勾选与生成）
- *   - 改名、软删除、打开原始 PDF
+ *   - 卡片流看书封、章数、字数、模块数
+ *   - 点开一本书：目录切章、勾选章节、生成精讲（M3：进度/取消/重试）
+ *   - 生成完进模块预览：逐页文字 + 配音稿 + 配图提示词，本机朗读试听
+ *   - 设置页：语音供应商/音色/语速、试听、存储概况
  *
  * 本文件不碰磁盘：所有数据走 Host 半体的 /dsh-book-slides/* 路由。
  */
@@ -27,6 +28,13 @@ window.__ModuleLoader__.load({
     const TOC_PREVIEW_API = '/dsh-book-slides/toc/preview';
     const TOC_PARSE_API = '/dsh-book-slides/toc/parse';
     const TOC_RANGE_API = '/dsh-book-slides/toc/range';
+    const GENERATE_API = '/dsh-book-slides/generate';
+    const JOB_API = '/dsh-book-slides/job';
+    const CANCEL_API = '/dsh-book-slides/cancel';
+    const MODULE_API = '/dsh-book-slides/module';
+    const AUDIO_API = '/dsh-book-slides/audio';
+    const VOICE_API = '/dsh-book-slides/voice';
+    const VOICE_PROBE_API = '/dsh-book-slides/voice/probe';
     const FILE_API = '/dsh-book-slides/file';
     const COVER_API = '/dsh-book-slides/cover';
     const STORAGE_API = '/dsh-book-slides/storage';
@@ -120,6 +128,47 @@ window.__ModuleLoader__.load({
 .bl-source{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:11.5px;opacity:.68;margin:8px 0 0}
 .bl-source-warn{color:#d9484b;opacity:.95}
 .bl-toc-preview{max-height:180px;overflow:auto;margin:8px 0 0;padding:8px;border-radius:7px;background:color-mix(in oklab,currentColor 5%,transparent);font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.bl-mods{margin:12px 0 4px;border:1px solid var(--bl-line);border-radius:10px;overflow:hidden}
+.bl-mods-head{display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--bl-line);font-size:12.5px;font-weight:600}
+.bl-mod{display:flex;align-items:flex-start;gap:8px;padding:8px 11px;border-bottom:1px solid var(--bl-line);font-size:12px}
+.bl-mod:last-child{border-bottom:none}
+.bl-mod-main{flex:1 1 auto;min-width:0}
+.bl-mod-title{font-size:12.5px;overflow-wrap:anywhere}
+.bl-mod-meta{font-size:11px;opacity:.58;margin-top:1px}
+.bl-mod-err{font-size:11px;color:#d9484b;margin-top:1px;word-break:break-word}
+.bl-mod-actions{display:flex;gap:5px;flex:0 0 auto}
+.bl-mod-actions .bl-btn{padding:2px 7px;font-size:11px}
+.bl-chip{display:inline-block;border:1px solid var(--bl-line);border-radius:20px;padding:0 7px;font-size:10.5px;line-height:1.7;opacity:.8;white-space:nowrap}
+.bl-chip-ok{border-color:#2f9e5566;color:#2f9e55}
+.bl-chip-run{border-color:#b8860b66;color:#b8860b}
+.bl-chip-bad{border-color:#d9484b66;color:#d9484b}
+.bl-job{border:1px solid var(--bl-line);border-radius:9px;padding:9px 11px;margin:10px 0;font-size:12px;background:color-mix(in oklab,currentColor 4%,transparent)}
+.bl-job-head{display:flex;align-items:center;gap:8px}
+.bl-job-stage{font-weight:600}
+.bl-job .bl-progress{margin-top:7px}
+.bl-job-msg{font-size:11.5px;opacity:.7;margin-top:4px}
+.bl-slide{border:1px solid var(--bl-line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.bl-slide-cover{background:color-mix(in oklab,currentColor 5%,transparent)}
+.bl-slide-head{display:flex;align-items:center;gap:8px;font-size:11px;opacity:.6;margin-bottom:4px}
+.bl-slide-title{font-size:14px;font-weight:600;line-height:1.45;font-family:"Noto Serif SC","Songti SC",serif;overflow-wrap:anywhere}
+.bl-slide-sub{font-size:12px;opacity:.65;margin-top:2px}
+.bl-slide ul{margin:6px 0 0;padding-left:18px;font-size:12.5px}
+.bl-slide li{margin:2px 0;overflow-wrap:anywhere}
+.bl-slide-quote{margin-top:6px;padding-left:10px;border-left:2px solid color-mix(in oklab,currentColor 30%,transparent);font-family:"Noto Serif SC","Songti SC",serif;font-size:13.5px;line-height:1.6}
+.bl-slide-quote small{display:block;font-family:system-ui;font-size:11px;opacity:.55;margin-top:2px}
+.bl-slide-script{margin-top:7px;font-size:12px;line-height:1.7;background:color-mix(in oklab,currentColor 4%,transparent);border-radius:7px;padding:7px 9px;white-space:pre-wrap}
+.bl-slide-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:7px;font-size:11px;opacity:.65}
+.bl-slide-foot .bl-btn{padding:1px 7px;font-size:11px;opacity:1}
+.bl-img-hint{margin-top:6px;font-size:11px;opacity:.6;display:flex;gap:6px;align-items:flex-start}
+.bl-img-hint code{font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.bl-voice-note{font-size:11.5px;opacity:.65;margin:6px 0 0;line-height:1.6}
+.bl-voice-row{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:8px 0}
+.bl-select{font:inherit;color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-bg-layer-2,Canvas);border:1px solid var(--bl-line);border-radius:7px;padding:4px 7px;max-width:100%;color-scheme:light}
+body[data-ds-dark-theme] .bl-select{color-scheme:dark}
+.bl-select option{background-color:var(--dsw-alias-bg-layer-2,Canvas);color:var(--dsw-alias-label-primary,CanvasText)}
+.bl-select option:disabled{color:var(--dsw-alias-label-tertiary,GrayText)}
+.bl-select:focus-visible{outline:2px solid color-mix(in oklab,currentColor 45%,transparent);outline-offset:1px}
+.bl-kv{margin-bottom:14px}
 `;
 
     /* ------------------------------ 数据 ------------------------------ */
@@ -146,6 +195,18 @@ window.__ModuleLoader__.load({
       const data = await res.json().catch(() => ({}));
       if (!data || data.ok === false) {
         const err = new Error((data && (data.error || data.code)) || '请求失败');
+        err.code = data && data.code;
+        err.hint = (data && data.hint) || '';
+        throw err;
+      }
+      return data;
+    }
+
+    async function deleteJson(url) {
+      const res = await fetch(url, { method: 'DELETE', headers: { accept: 'application/json' } });
+      const data = await res.json().catch(() => ({}));
+      if (!data || data.ok === false) {
+        const err = new Error((data && (data.error || data.code)) || '删除失败');
         err.code = data && data.code;
         err.hint = (data && data.hint) || '';
         throw err;
@@ -191,6 +252,92 @@ window.__ModuleLoader__.load({
       const n = Number(chars) || 0;
       if (n < 10000) return n + ' 字';
       return (n / 10000).toFixed(1) + ' 万字';
+    }
+
+    /** 作业阶段与模块状态的中文文案，面板与 aria-label 共用。 */
+    const STAGE_LABELS = {
+      queued: '排队中',
+      structuring: '改写文案',
+      validate: '校验结构',
+      anchor: '定位原文',
+      voicing: '准备配音',
+      done: '完成',
+    };
+    const STATUS_LABELS = {
+      queued: '排队中',
+      structuring: '生成中',
+      validate: '生成中',
+      anchor: '生成中',
+      voicing: '生成中',
+      ready: '已就绪',
+      ready_degraded: '部分降级',
+      failed: '失败',
+      cancelled: '已取消',
+      interrupted: '已中断',
+    };
+    function statusLabel(status) {
+      return STATUS_LABELS[status] || String(status || '未知');
+    }
+    function isReady(status) {
+      return status === 'ready' || status === 'ready_degraded';
+    }
+    function isTerminal(status) {
+      return ['ready', 'ready_degraded', 'failed', 'cancelled', 'interrupted'].includes(String(status));
+    }
+
+    /* ------------------------------ 本机朗读（Web Speech） ------------------------------ */
+
+    function speechSupported() {
+      return (
+        typeof window !== 'undefined' &&
+        typeof window.speechSynthesis !== 'undefined' &&
+        typeof window.SpeechSynthesisUtterance !== 'undefined'
+      );
+    }
+
+    function speechVoices() {
+      if (!speechSupported()) return [];
+      try {
+        return window.speechSynthesis.getVoices() || [];
+      } catch {
+        return [];
+      }
+    }
+
+    /**
+     * 用浏览器本机声音念一段稿子。
+     * 先 cancel 再 speak：播放器/试听都只允许一个声音，避免上一页残留（AC-18 的前提）。
+     */
+    function speakText(text, options) {
+      if (!speechSupported()) throw new Error('这个浏览器不支持本机朗读');
+      const synth = window.speechSynthesis;
+      try {
+        synth.cancel();
+      } catch {
+        /* 有些浏览器初次调用会抛，忽略 */
+      }
+      const utterance = new window.SpeechSynthesisUtterance(String(text || ''));
+      utterance.lang = 'zh-CN';
+      const rate = Number(options && options.rate);
+      utterance.rate = Number.isFinite(rate) ? Math.min(2, Math.max(0.5, rate)) : 1;
+      const wanted = String((options && options.voice) || '');
+      if (wanted) {
+        const voice = speechVoices().find((item) => item.name === wanted || item.voiceURI === wanted);
+        if (voice) utterance.voice = voice;
+      }
+      if (options && typeof options.onend === 'function') utterance.onend = options.onend;
+      if (options && typeof options.onerror === 'function') utterance.onerror = options.onerror;
+      synth.speak(utterance);
+      return utterance;
+    }
+
+    function stopSpeech() {
+      if (!speechSupported()) return;
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        /* 忽略 */
+      }
     }
 
     /* ------------------------------ 组件 ------------------------------ */
@@ -546,7 +693,326 @@ window.__ModuleLoader__.load({
         toc.preview ? h('pre', { className: 'bl-toc-preview' }, toc.preview) : null,
       );
     }
-    function Detail({ bookId, onBack, error, setError }) {
+    /** 生成进度条：四阶段名 + 当前批/页 + 取消（AC-13 / AC-14）。 */
+    function JobBox({ job, onCancel }) {
+      const stage = STAGE_LABELS[job.stage] || statusLabel(job.status);
+      const total = Number(job.total) || 0;
+      const current = Number(job.current) || 0;
+      const pct = total > 0 ? Math.max(4, Math.min(100, Math.round((current / total) * 100))) : 6;
+      const cancelling = job.status === 'cancelling';
+      return h(
+        'div',
+        { className: 'bl-job', role: 'status', 'aria-live': 'polite' },
+        h(
+          'div',
+          { className: 'bl-job-head' },
+          h('span', { className: 'bl-job-stage' }, (cancelling ? '正在取消' : '生成中') + ' · ' + stage),
+          h('span', { className: 'bl-grow' }),
+          total > 0 ? h('span', { className: 'bl-hint' }, current + '/' + total) : null,
+          h(
+            'button',
+            { className: 'bl-btn', disabled: cancelling || !onCancel, onClick: onCancel, 'aria-label': '取消生成' },
+            cancelling ? '取消中…' : '取消',
+          ),
+        ),
+        h('div', { className: 'bl-progress' }, h('i', { style: { width: pct + '%' } })),
+        h('div', { className: 'bl-job-msg' }, job.message || '正在排队…'),
+      );
+    }
+
+    /** 详情页的模块列表：打开 / 重试 / 重新生成 / 删除。 */
+    function ModuleList({ modules, busy, onOpen, onRetry, onDelete, onRegenerate }) {
+      const list = Array.isArray(modules) ? modules : [];
+      return h(
+        'div',
+        { className: 'bl-mods' },
+        h(
+          'div',
+          { className: 'bl-mods-head' },
+          h('span', null, '精讲模块'),
+          h('span', { className: 'bl-grow' }),
+          h('span', { className: 'bl-hint' }, list.length ? list.length + ' 个' : '还没有'),
+        ),
+        list.length === 0
+          ? h('div', { className: 'bl-mod' }, h('div', { className: 'bl-mod-main bl-hint' }, '勾选章节后点底部的「生成精讲」，生成完在这里打开。'))
+          : list.map((item) => {
+              const ready = isReady(item.status);
+              const bad = item.status === 'failed' || item.status === 'interrupted' || item.status === 'cancelled';
+              const chip = ready ? 'bl-chip-ok' : bad ? 'bl-chip-bad' : 'bl-chip-run';
+              return h(
+                'div',
+                { className: 'bl-mod', key: item.id },
+                h(
+                  'div',
+                  { className: 'bl-mod-main' },
+                  h('div', { className: 'bl-mod-title' }, item.title || '精讲'),
+                  h(
+                    'div',
+                    { className: 'bl-mod-meta' },
+                    h('span', { className: 'bl-chip ' + chip }, statusLabel(item.status)),
+                    ' · ' + (Number(item.slides) || 0) + ' 页 · 锚定 ' + Math.round((Number(item.anchorHitRate) || 0) * 100) + '% · ' +
+                      (item.chapters || []).length + ' 章' +
+                      (item.status === 'ready_degraded' ? ' · 仅文字' : ''),
+                  ),
+                  item.code && item.error && !ready ? h('div', { className: 'bl-mod-err' }, item.code + '：' + item.error) : null,
+                ),
+                h(
+                  'div',
+                  { className: 'bl-mod-actions' },
+                  ready ? h('button', { className: 'bl-btn', disabled: busy, onClick: () => onOpen(item.id) }, '打开') : null,
+                  bad ? h('button', { className: 'bl-btn', disabled: busy, onClick: () => onRetry(item) }, '重试') : null,
+                  ready ? h('button', { className: 'bl-btn', disabled: busy, title: '重新生成会覆盖这一份', onClick: () => onRegenerate(item) }, '重生成') : null,
+                  h('button', { className: 'bl-btn', disabled: busy, onClick: () => onDelete(item) }, '删除'),
+                ),
+              );
+            }),
+      );
+    }
+
+    /** 一页幻灯片：封面/要点/引文 + 配音稿 + 配图提示词（M3 先做文字预览，M4 接播放器）。 */
+    function SlidePreview({ slide, voice, onSpeak, speaking }) {
+      const [copied, setCopied] = useState(false);
+      const layout = String(slide.layout || 'content_text');
+      const label = layout === 'cover' ? '封面' : layout === 'quote' ? '引文' : '内容';
+      const anchor = slide.source_anchor;
+      const canSpeak = !!onSpeak && speechSupported() && (voice.provider === 'browser');
+      const copy = () => {
+        const text = String(slide.image_prompt || '');
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }
+        } catch {
+          setCopied(false);
+        }
+      };
+      return h(
+        'div',
+        { className: 'bl-slide' + (layout === 'cover' ? ' bl-slide-cover' : '') },
+        h(
+          'div',
+          { className: 'bl-slide-head' },
+          h('span', null, '第 ' + slide.slide_index + ' 页'),
+          h('span', { className: 'bl-chip' }, label),
+          h('span', { className: 'bl-grow' }),
+          anchor
+            ? h('span', null, '锚定 · 第 ' + anchor.page + ' 页第 ' + (Number(anchor.para_index) + 1) + ' 段')
+            : h('span', { className: 'bl-source-warn' }, '未定位到原句'),
+        ),
+        h('div', { className: 'bl-slide-title' }, slide.title || '（无标题）'),
+        slide.subtitle ? h('div', { className: 'bl-slide-sub' }, slide.subtitle) : null,
+        layout === 'content_text' && Array.isArray(slide.bullet_points)
+          ? h('ul', null, slide.bullet_points.map((bullet, index) => h('li', { key: index }, bullet)))
+          : null,
+        layout === 'quote' && slide.quote_text
+          ? h('blockquote', { className: 'bl-slide-quote' }, slide.quote_text, h('small', null, '—— ' + (slide.quote_source || '出处未知')))
+          : null,
+        slide.audio_script ? h('div', { className: 'bl-slide-script' }, slide.audio_script) : null,
+        slide.image_prompt
+          ? h(
+              'div',
+              { className: 'bl-img-hint' },
+              h('span', null, '配图位'),
+              h('code', null, slide.image_prompt),
+              h('button', { className: 'bl-btn', onClick: copy }, copied ? '已复制' : '复制'),
+            )
+          : null,
+        h(
+          'div',
+          { className: 'bl-slide-foot' },
+          h('span', null, '原文第 ' + (slide.source_pages ? slide.source_pages.from : '?') + (slide.source_pages && slide.source_pages.to !== slide.source_pages.from ? '–' + slide.source_pages.to : '') + ' 页'),
+          h(
+            'span',
+            null,
+            voice.provider === 'browser'
+              ? '· 朗读约 ' + Math.max(1, Math.round((Number(slide.audio_ms) || 0) / 1000)) + ' 秒'
+              : voice.provider === 'off'
+                ? '· 仅文字'
+                : '· 语音降级',
+          ),
+          canSpeak
+            ? h('button', { className: 'bl-btn', 'aria-label': '朗读第 ' + slide.slide_index + ' 页', onClick: () => onSpeak(slide) }, speaking ? '停止' : '朗读本页')
+            : null,
+          slide.anchor_status !== 'anchored' ? h('span', { className: 'bl-source-warn' }, '播放时按页定位，不高亮') : null,
+        ),
+      );
+    }
+
+    /** 模块预览：M3 只做到「看文字 + 听本页」，分屏播放器在 M4。 */
+    function ModuleView({ moduleId, onBack, error, setError }) {
+      const [state, setState] = useState({ loading: true, module: null, slides: null, book: null });
+      const [speaking, setSpeaking] = useState(0);
+      const [stopAll, setStopAll] = useState(false);
+
+      useEffect(() => {
+        let alive = true;
+        setState({ loading: true, module: null, slides: null, book: null });
+        getJson(MODULE_API + '?moduleId=' + encodeURIComponent(moduleId))
+          .then((data) => {
+            if (alive) setState({ loading: false, module: data.module, slides: data.slides, book: data.book });
+          })
+          .catch((err) => {
+            if (!alive) return;
+            setState({ loading: false, module: null, slides: null, book: null });
+            setError(err);
+          });
+        return () => {
+          alive = false;
+          stopSpeech();
+        };
+      }, [moduleId, setError]);
+
+      const module = state.module;
+      const voice = (module && module.voice) || { provider: 'browser', rate: 1, voice: '' };
+      const slides = state.slides && Array.isArray(state.slides.slides) ? state.slides.slides : [];
+      const ready = module && isReady(module.status);
+
+      const speakOne = useCallback(
+        (slide) => {
+          if (speaking === slide.slide_index) {
+            stopSpeech();
+            setSpeaking(0);
+            return;
+          }
+          try {
+            setSpeaking(slide.slide_index);
+            speakText(slide.audio_script, {
+              rate: voice.rate,
+              voice: voice.voice,
+              onend: () => setSpeaking(0),
+              onerror: () => setSpeaking(0),
+            });
+          } catch (err) {
+            setSpeaking(0);
+            setError(err);
+          }
+        },
+        [speaking, voice.rate, voice.voice, setError],
+      );
+
+      /** 从第 1 页连着念到最后一页；页与页之间靠 utterance 的 onend 接力。 */
+      const speakAll = useCallback(() => {
+        if (stopAll || speaking) {
+          stopSpeech();
+          setSpeaking(0);
+          setStopAll(false);
+          return;
+        }
+        const scripts = slides.map((slide) => slide.audio_script).filter(Boolean);
+        if (!scripts.length) return;
+        let index = 0;
+        setStopAll(true);
+        setSpeaking(-1);
+        const next = () => {
+          if (index >= scripts.length) {
+            setSpeaking(0);
+            setStopAll(false);
+            return;
+          }
+          const current = index;
+          index += 1;
+          speakText(scripts[current], {
+            rate: voice.rate,
+            voice: voice.voice,
+            onend: next,
+            onerror: () => {
+              setSpeaking(0);
+              setStopAll(false);
+            },
+          });
+        };
+        next();
+      }, [slides, speaking, stopAll, voice.rate, voice.voice]);
+
+      let body = null;
+      if (state.loading) {
+        body = h('div', { style: { padding: '26px 4px', opacity: 0.7 } }, h('span', { className: 'bl-spin' }), ' 正在打开模块…');
+      } else if (!module) {
+        body = h('div', { style: { opacity: 0.7 } }, '这个模块打不开了。');
+      } else if (!ready) {
+        body = h(
+          'div',
+          { className: 'bl-note' },
+          '这个模块还没就绪（' + statusLabel(module.status) + '）。' +
+            (module.code ? '错误码 ' + module.code + '：' + (module.error || '') : '回书籍详情重新生成。'),
+        );
+      } else if (!slides.length) {
+        body = h('div', { className: 'bl-note' }, '模块里没有幻灯片数据。');
+      } else {
+        body = h(
+          'div',
+          null,
+          h(
+            'div',
+            { className: 'bl-note' },
+            '本页文字与配音稿已就绪，语音由浏览器本机朗读。分屏播放器在 M4 接入；这里先逐页核对内容，点「朗读本页」能直接试听。',
+          ),
+          slides.map((slide) =>
+            h(SlidePreview, {
+              key: slide.slide_index,
+              slide: slide,
+              voice: voice,
+              speaking: speaking === slide.slide_index,
+              onSpeak: voice.provider === 'browser' ? speakOne : null,
+            }),
+          ),
+        );
+      }
+
+      return h(
+        'div',
+        { className: 'bl-root bl-line' },
+        h(
+          'div',
+          { className: 'bl-bar' },
+          h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回书籍'),
+          h('div', { className: 'bl-grow' }),
+          module && ready && slides.length
+            ? h('button', { className: 'bl-btn', onClick: speakAll, 'aria-label': '连续朗读整个模块' }, stopAll ? '停止朗读' : '连续朗读')
+            : null,
+          module && state.book
+            ? h(
+                'a',
+                {
+                  className: 'bl-btn',
+                  href: FILE_API + '?bookId=' + encodeURIComponent(state.book.id),
+                  target: '_blank',
+                  rel: 'noreferrer',
+                  style: { textDecoration: 'none' },
+                },
+                '打开 PDF',
+              )
+            : null,
+        ),
+        h(
+          'div',
+          { className: 'bl-body' },
+          h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+          module
+            ? h(
+                'div',
+                { className: 'bl-book-info', style: { marginBottom: 10 } },
+                h('div', { className: 'bl-book-title' }, module.title || '精讲'),
+                h(
+                  'div',
+                  { className: 'bl-book-meta' },
+                  '第 ' + (module.chapters || []).join('、') + ' 章 · ' + slides.length + ' 页 · 锚定 ' +
+                    Math.round((Number(module.anchorHitRate) || 0) * 100) + '% · ' +
+                    (voice.provider === 'browser' ? '浏览器朗读' : voice.provider === 'off' ? '仅文字' : '语音降级'),
+                ),
+                module.status === 'ready_degraded'
+                  ? h('div', { className: 'bl-voice-note bl-source-warn' }, '部分音频不可用：本次只有文字，播放器会按页翻。')
+                  : null,
+              )
+            : null,
+          body,
+        ),
+      );
+    }
+
+    function Detail({ bookId, onBack, error, setError, onOpenModule, onSettings }) {
       const [state, setState] = useState({ loading: true, book: null, chapters: [], modules: [] });
       const [refresh, setRefresh] = useState(0);
       const [busy, setBusy] = useState(false);
@@ -555,6 +1021,9 @@ window.__ModuleLoader__.load({
       const [edit, setEdit] = useState(null);
       const [askReparse, setAskReparse] = useState(false);
       const [toc, setToc] = useState({ from: '', to: '', suggested: null, total: 0, info: null, preview: '', busy: false, message: '' });
+      const [job, setJob] = useState(null);
+      const [jobId, setJobId] = useState('');
+      const [genBusy, setGenBusy] = useState(false);
 
       useEffect(() => {
         let alive = true;
@@ -614,6 +1083,55 @@ window.__ModuleLoader__.load({
         }, 600);
         return () => clearTimeout(timer);
       }, [bookId, toc.from, toc.to]);
+
+      /**
+       * 生成作业轮询：1s 一次。
+       * 进入 ready/ready_degraded 就刷新模块列表并打开模块预览；
+       * failed/cancelled/interrupted 停在详情页，把错误码亮出来。
+       */
+      useEffect(() => {
+        if (!jobId) return undefined;
+        let alive = true;
+        let timer = null;
+        const tick = async () => {
+          try {
+            const data = await getJson(JOB_API + '?moduleId=' + encodeURIComponent(jobId));
+            if (!alive) return;
+            setJob(Object.assign({ moduleId: jobId }, data));
+            if (isReady(data.status)) {
+              setJobId('');
+              setSelected({});
+              setRefresh((value) => value + 1);
+              setError(null);
+              if (onOpenModule) onOpenModule(jobId);
+              return;
+            }
+            if (isTerminal(data.status)) {
+              setJobId('');
+              setJob(null);
+              setRefresh((value) => value + 1);
+              if (data.error && data.error.code) {
+                const err = new Error(data.error.message || data.error.code);
+                err.code = data.error.code;
+                err.hint = data.error.hint || '';
+                setError(err);
+              }
+              return;
+            }
+          } catch (err) {
+            if (!alive) return;
+            setJobId('');
+            setError(err);
+            return;
+          }
+          if (alive) timer = setTimeout(tick, 1000);
+        };
+        tick();
+        return () => {
+          alive = false;
+          if (timer) clearTimeout(timer);
+        };
+      }, [jobId, onOpenModule, setError]);
 
       const book = state.book;
       const chapters = state.chapters || [];
@@ -771,6 +1289,87 @@ window.__ModuleLoader__.load({
         [bookId, toc.from, toc.to, setError],
       );
 
+      /** 生成/重试/重生成共用一个入口：后端按缓存键幂等，重复点不会重复烧钱。 */
+      const startGenerate = useCallback(
+        async (chapters, force) => {
+          setGenBusy(true);
+          setError(null);
+          try {
+            const data = await postJson(GENERATE_API, { bookId: bookId, chapters: chapters, force: !!force });
+            if (data.cached) {
+              setRefresh((value) => value + 1);
+              if (onOpenModule) onOpenModule(data.moduleId);
+              return;
+            }
+            setJob({
+              moduleId: data.moduleId,
+              status: data.status || 'queued',
+              stage: 'queued',
+              current: 0,
+              total: 0,
+              message: data.running ? '已有生成作业在跑，接着看进度' : '已排队',
+            });
+            setJobId(data.moduleId);
+          } catch (err) {
+            setError(err);
+          } finally {
+            setGenBusy(false);
+          }
+        },
+        [bookId, onOpenModule, setError],
+      );
+
+      const generate = useCallback(() => {
+        if (!picked.length) {
+          setError(new Error('先勾选至少一章'));
+          return;
+        }
+        startGenerate(
+          picked.map((chapter) => chapter.n),
+          false,
+        );
+      }, [picked, startGenerate, setError]);
+
+      const retryModule = useCallback(
+        (item) => startGenerate(item.chapters || [], false),
+        [startGenerate],
+      );
+
+      const regenerateModule = useCallback(
+        (item) => {
+          const ok = typeof window === 'undefined' || window.confirm('重新生成会覆盖「' + (item.title || '这个模块') + '」，确定？');
+          if (ok) startGenerate(item.chapters || [], true);
+        },
+        [startGenerate],
+      );
+
+      const removeModule = useCallback(
+        async (item) => {
+          const ok = typeof window === 'undefined' || window.confirm('删除「' + (item.title || '这个模块') + '」？只删模块，不动书。');
+          if (!ok) return;
+          setBusy(true);
+          try {
+            await deleteJson(MODULE_API + '?moduleId=' + encodeURIComponent(item.id));
+            setRefresh((value) => value + 1);
+          } catch (err) {
+            setError(err);
+          } finally {
+            setBusy(false);
+          }
+        },
+        [setError],
+      );
+
+      const cancelGenerate = useCallback(async () => {
+        if (!job || !job.moduleId) return;
+        try {
+          await postJson(CANCEL_API, { moduleId: job.moduleId });
+          setJob((prev) => (prev ? Object.assign({}, prev, { status: 'cancelling', message: '正在取消…' }) : prev));
+        } catch (err) {
+          setError(err);
+        }
+      }, [job, setError]);
+
       const submitEdit = useCallback(async () => {
         if (!edit) return;
         if (edit.mode === 'rename') {
@@ -922,6 +1521,9 @@ window.__ModuleLoader__.load({
           { className: 'bl-bar' },
           h('button', { className: 'bl-back', onClick: onBack }, '\u2039 书架'),
           h('div', { className: 'bl-grow' }),
+          onSettings
+            ? h('button', { className: 'bl-btn', title: '语音与存储设置', onClick: onSettings }, '\u2699 设置')
+            : null,
           book
             ? h(
                 'button',
@@ -989,10 +1591,19 @@ window.__ModuleLoader__.load({
                       h(
                         'div',
                         { className: 'bl-book-meta' },
-                        book.modules && book.modules.length ? book.modules.length + ' 个精讲模块' : '还没有精讲模块',
+                        state.modules.length ? state.modules.length + ' 个精讲模块' : '还没有精讲模块',
                       ),
                     ),
                   ),
+                  job ? h(JobBox, { job: job, onCancel: cancelGenerate }) : null,
+                  h(ModuleList, {
+                    modules: state.modules,
+                    busy: busy || genBusy,
+                    onOpen: (id) => onOpenModule && onOpenModule(id),
+                    onRetry: retryModule,
+                    onDelete: removeModule,
+                    onRegenerate: regenerateModule,
+                  }),
                   h(TocBox, {
                     toc: toc,
                     onFrom: (value) => setToc((prev) => Object.assign({}, prev, { from: value, preview: '' })),
@@ -1037,11 +1648,13 @@ window.__ModuleLoader__.load({
             'button',
             {
               className: 'bl-btn bl-btn-primary',
-              disabled: true,
-              title: '生成流水线在 M3 接入',
-              onClick: () => {},
+              disabled: genBusy || !!jobId || picked.length === 0 || overLimit,
+              title: overLimit
+                ? '最多 ' + MAX_MODULE_CHAPTERS + ' 章、' + MAX_MODULE_CHARS / 10000 + ' 万字'
+                : '把这 ' + picked.length + ' 章合成一个精讲模块',
+              onClick: generate,
             },
-            '生成精讲',
+            genBusy || jobId ? '生成中…' : '生成精讲',
           ),
         ),
       );
@@ -1049,13 +1662,25 @@ window.__ModuleLoader__.load({
 
     function Settings({ onBack }) {
       const [data, setData] = useState(null);
+      const [voice, setVoice] = useState(null);
+      const [providers, setProviders] = useState([]);
+      const [form, setForm] = useState({ provider: 'browser', voice: '', rate: 1 });
+      const [voices, setVoices] = useState([]);
+      const [message, setMessage] = useState('');
+      const [saving, setSaving] = useState(false);
       const [error, setError] = useState(null);
 
       useEffect(() => {
         let alive = true;
-        getJson(STORAGE_API)
-          .then((value) => {
-            if (alive) setData(value);
+        Promise.all([getJson(STORAGE_API), getJson(VOICE_API)])
+          .then(([storage, config]) => {
+            if (!alive) return;
+            setData(storage);
+            setVoice(config.voice || null);
+            setProviders(config.providers || []);
+            if (config.voice) {
+              setForm({ provider: config.voice.provider || 'browser', voice: config.voice.voice || '', rate: Number(config.voice.rate) || 1 });
+            }
           })
           .catch((err) => {
             if (alive) setError(err);
@@ -1064,6 +1689,73 @@ window.__ModuleLoader__.load({
           alive = false;
         };
       }, []);
+
+      // 浏览器音色列表是异步加载的（Chrome 首次是空数组）
+      useEffect(() => {
+        if (!speechSupported()) return undefined;
+        const refresh = () => setVoices(speechVoices());
+        refresh();
+        const synth = window.speechSynthesis;
+        const handler = () => refresh();
+        try {
+          synth.addEventListener('voiceschanged', handler);
+        } catch {
+          synth.onvoiceschanged = handler;
+        }
+        return () => {
+          try {
+            synth.removeEventListener('voiceschanged', handler);
+          } catch {
+            if (synth.onvoiceschanged === handler) synth.onvoiceschanged = null;
+          }
+          stopSpeech();
+        };
+      }, []);
+
+      const save = useCallback(
+        async (patch) => {
+          const next = Object.assign({}, form, patch || {});
+          setForm(next);
+          setSaving(true);
+          setMessage('');
+          try {
+            const result = await postJson(VOICE_API, next);
+            setVoice(result.voice || null);
+            if (result.providers) setProviders(result.providers);
+            setMessage('已保存');
+            setError(null);
+          } catch (err) {
+            setError(err);
+          } finally {
+            setSaving(false);
+          }
+        },
+        [form],
+      );
+
+      /** 试听：浏览器朗读返回合成参数，面板自己出声；关闭/未接入时明确提示去改设置。 */
+      const probe = useCallback(async () => {
+        setMessage('');
+        setError(null);
+        try {
+          const result = await postJson(VOICE_PROBE_API, { text: '这是一段试听，用来确认本机朗读能出声。' });
+          if (result.mode === 'browser') {
+            speakText(result.text, { rate: result.rate, voice: result.voice });
+            setMessage('正在用本机声音试听…');
+          } else {
+            setMessage('试听已交给语音服务。');
+          }
+        } catch (err) {
+          if (err && err.code === 'E_TTS_UNCONFIGURED') {
+            setMessage('语音没开：把供应商改成「浏览器朗读」，保存后再试听。');
+          } else {
+            setMessage(String((err && err.message) || err));
+          }
+        }
+      }, []);
+
+      const speechOk = speechSupported();
+      const providerNote = (providers.find((item) => item.id === form.provider) || {}).note || (voice && voice.note) || '';
 
       return h(
         'div',
@@ -1095,10 +1787,74 @@ window.__ModuleLoader__.load({
                 h('dd', null, (data.trashCount || 0) + ' 本'),
                 h('dt', null, '插件版本'),
                 h('dd', null, data.pluginVersion || '—'),
-                h('dt', null, '语音'),
-                h('dd', null, 'M3 接入'),
               )
             : h('div', { style: { opacity: 0.7 } }, h('span', { className: 'bl-spin' }), ' 正在读…'),
+          h('div', { className: 'bl-mods', style: { marginTop: 4 } }, h('div', { className: 'bl-mods-head' }, '语音')),
+          h(
+            'div',
+            { style: { padding: '0 2px' } },
+            h(
+              'div',
+              { className: 'bl-voice-row' },
+              h('span', { className: 'bl-hint' }, '供应商'),
+              h(
+                'select',
+                {
+                  className: 'bl-select',
+                  value: form.provider,
+                  disabled: saving,
+                  'aria-label': '语音供应商',
+                  onChange: (event) => save({ provider: event.target.value }),
+                },
+                (providers.length ? providers : [{ id: 'browser', label: '浏览器朗读（本机合成）', ready: true }]).map((item) =>
+                  h(
+                    'option',
+                    { key: item.id, value: item.id, disabled: !item.ready },
+                    item.label + (item.ready ? '' : '（未接入）'),
+                  ),
+                ),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'bl-voice-row' },
+              h('span', { className: 'bl-hint' }, '音色'),
+              h(
+                'select',
+                {
+                  className: 'bl-select',
+                  value: form.voice,
+                  disabled: saving || form.provider !== 'browser',
+                  'aria-label': '朗读音色',
+                  onChange: (event) => save({ voice: event.target.value }),
+                },
+                h('option', { value: '' }, '系统默认'),
+                voices.map((item) => h('option', { key: item.voiceURI || item.name, value: item.name }, item.name + ' · ' + item.lang)),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'bl-voice-row' },
+              h('span', { className: 'bl-hint' }, '语速'),
+              h(
+                'select',
+                {
+                  className: 'bl-select',
+                  value: String(form.rate),
+                  disabled: saving,
+                  'aria-label': '朗读语速',
+                  onChange: (event) => save({ rate: Number(event.target.value) }),
+                },
+                [0.8, 1, 1.2].map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
+              ),
+              h('button', { className: 'bl-btn', disabled: saving, onClick: probe }, '试听'),
+              h('button', { className: 'bl-btn', disabled: saving, onClick: () => save({}) }, saving ? '保存中…' : '保存'),
+            ),
+            message ? h('div', { className: 'bl-voice-note bl-toc-msg' }, message) : null,
+            providerNote ? h('div', { className: 'bl-voice-note' }, providerNote) : null,
+            !speechOk ? h('div', { className: 'bl-voice-note bl-source-warn' }, '当前浏览器不支持本机朗读；换 Chrome / Edge 最新版。') : null,
+            h('div', { className: 'bl-voice-note' }, '本版只接浏览器本机朗读：不联网、不产生音频文件；豆包字段先预留，未接入合成。'),
+          ),
         ),
       );
     }
@@ -1111,6 +1867,7 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [bookId, setBookId] = useState('');
+      const [moduleId, setModuleId] = useState('');
       const [upload, setUpload] = useState(null);
       const fileInputRef = useRef(null);
 
@@ -1214,33 +1971,48 @@ window.__ModuleLoader__.load({
         setNav('detail');
       }, []);
 
+      const openModule = useCallback((id) => {
+        setModuleId(id);
+        setError(null);
+        setNav('module');
+      }, []);
+
       const body =
-        nav === 'detail' && bookId
-          ? h(Detail, {
-              bookId: bookId,
-              onBack: () => {
-                setNav('shelf');
-                load();
-              },
-              onDeleted: () => {
-                setNav('shelf');
-                load();
-              },
+        nav === 'module' && moduleId
+          ? h(ModuleView, {
+              moduleId: moduleId,
+              onBack: () => setNav(bookId ? 'detail' : 'shelf'),
               error: error,
               setError: setError,
             })
-          : nav === 'settings'
-            ? h(Settings, { onBack: () => setNav('shelf') })
-            : h(Shelf, {
-                books: books,
-                loading: loading,
-                onOpen: openBook,
-                onRename: handleRename,
-                onDelete: handleDelete,
-                onImport: doImport,
+          : nav === 'detail' && bookId
+            ? h(Detail, {
+                bookId: bookId,
+                onBack: () => {
+                  setNav('shelf');
+                  load();
+                },
+                onDeleted: () => {
+                  setNav('shelf');
+                  load();
+                },
+                onOpenModule: openModule,
+                onSettings: () => setNav('settings'),
                 error: error,
-                onDismissError: () => setError(null),
-              });
+                setError: setError,
+              })
+            : nav === 'settings'
+              ? h(Settings, { onBack: () => setNav(bookId ? 'detail' : 'shelf') })
+              : h(Shelf, {
+                  books: books,
+                  loading: loading,
+                  onOpen: openBook,
+                  onRename: handleRename,
+                  onDelete: handleDelete,
+                  onImport: doImport,
+                  error: error,
+                  onDismissError: () => setError(null),
+                });
 
       return h(
         'div',
@@ -1347,7 +2119,19 @@ window.__ModuleLoader__.load({
       },
 
       /** 测试用：SSR 里直接渲染内部组件，生产代码不会碰它。 */
-      __components: { BookSlidesPanel: BookSlidesPanel, Shelf: Shelf, Detail: Detail, Settings: Settings, BookCard: BookCard, TocBox: TocBox, SourceNote: SourceNote },
+      __components: {
+        BookSlidesPanel: BookSlidesPanel,
+        Shelf: Shelf,
+        Detail: Detail,
+        Settings: Settings,
+        BookCard: BookCard,
+        TocBox: TocBox,
+        SourceNote: SourceNote,
+        JobBox: JobBox,
+        ModuleList: ModuleList,
+        SlidePreview: SlidePreview,
+        ModuleView: ModuleView,
+      },
     };
   },
 });

@@ -21,10 +21,10 @@ import {
   dirSize,
   ensureDirs,
   existingBookDir,
+  isValidId,
   listBooks,
   loadBook,
   markOpened,
-  moduleIds,
   newId,
   readJson,
   renameBook,
@@ -49,6 +49,21 @@ import {
 } from './tocparse.js';
 import { coverSvg } from './cover.js';
 import { runBookCheck } from './check.js';
+import {
+  cancelJob,
+  deleteModuleById,
+  findModuleByKey,
+  findRunningByKey,
+  getJobState,
+  listModules,
+  loadModuleById,
+  moduleCacheKey,
+  reconcileAllModules,
+  startGeneration,
+  validateSelection,
+} from './generate.js';
+import { VOICE_PROVIDERS, probeVoice, publicVoiceConfig, readVoiceConfig, writeVoiceConfig } from './tts.js';
+import { SLIDES_PROMPT_VERSION } from './slides.js';
 
 const require = createRequire(import.meta.url);
 const PKG = require('./package.json');
@@ -68,6 +83,13 @@ export const ROUTE_TOC = ROUTE_PREFIX + '/toc';
 export const ROUTE_TOC_PREVIEW = ROUTE_PREFIX + '/toc/preview';
 export const ROUTE_TOC_PARSE = ROUTE_PREFIX + '/toc/parse';
 export const ROUTE_TOC_RANGE = ROUTE_PREFIX + '/toc/range';
+export const ROUTE_GENERATE = ROUTE_PREFIX + '/generate';
+export const ROUTE_JOB = ROUTE_PREFIX + '/job';
+export const ROUTE_CANCEL = ROUTE_PREFIX + '/cancel';
+export const ROUTE_MODULE = ROUTE_PREFIX + '/module';
+export const ROUTE_AUDIO = ROUTE_PREFIX + '/audio';
+export const ROUTE_VOICE = ROUTE_PREFIX + '/voice';
+export const ROUTE_VOICE_PROBE = ROUTE_PREFIX + '/voice/probe';
 
 /** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -292,7 +314,7 @@ function handleBook(req, res) {
     return;
   }
   markOpened(bookId);
-  const modules = moduleIds(bookId);
+  const modules = listModules(bookId);
   sendJson(res, 200, {
     ok: true,
     book: loaded.book,
@@ -488,7 +510,24 @@ async function handleChapters(req, res) {
 /* ------------------------------ 目录驱动切章 ------------------------------ */
 
 const PROMPT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompts');
-let promptCache = null;
+/** 提示词按文件名缓存；开头那段版本说明对模型没用，从「## 角色」切起。 */
+const promptCache = new Map();
+
+function loadPromptFile(name) {
+  const file = String(name || '');
+  if (!file) return '';
+  if (promptCache.has(file)) return promptCache.get(file);
+  let text = '';
+  try {
+    const raw = fs.readFileSync(path.join(PROMPT_DIR, file), 'utf8');
+    const cut = raw.indexOf('## 角色');
+    text = cut >= 0 ? raw.slice(cut) : raw;
+  } catch {
+    text = '';
+  }
+  promptCache.set(file, text);
+  return text;
+}
 
 /**
  * 目录抽取的 token 预算。
@@ -503,19 +542,9 @@ const TOC_MAX_TOKENS = 16000;
 const TOC_RETRY_MAX_TOKENS = 32000;
 /** 思考模型的单次调用可能接近一分钟；120s 对 32k 的重试太紧。 */
 const TOC_CALL_TIMEOUT_MS = 180000;
-
-/** 提示词文件读一次就记住；开头那段「版本说明」对模型没用，切掉。 */
-function loadPrompt() {
-  if (promptCache !== null) return promptCache;
-  try {
-    const raw = fs.readFileSync(path.join(PROMPT_DIR, 'toc-extract-v1.md'), 'utf8');
-    const cut = raw.indexOf('## 角色');
-    promptCache = cut >= 0 ? raw.slice(cut) : raw;
-  } catch {
-    promptCache = '';
-  }
-  return promptCache;
-}
+/** 生成一批（≤1.2 万字）最多等 180s；超时由作业层翻成 E_LLM_TIMEOUT。测试可用环境变量缩短。 */
+const GENERATE_CALL_TIMEOUT_MS =
+  Number(process.env.DSH_BOOK_SLIDES_LLM_TIMEOUT_MS) > 0 ? Number(process.env.DSH_BOOK_SLIDES_LLM_TIMEOUT_MS) : 180000;
 
 /** 当前 DSH 默认模型。 */
 function resolveModel(ctx) {
@@ -533,13 +562,23 @@ function resolveModel(ctx) {
   return { provider: provider, model: model };
 }
 
-/** 调一次模型，把增量拼成整段文本；顺带记下结束原因，供「为什么没 JSON」用。 */
-async function callModel(ctx, system, user, maxTokens) {
+/**
+ * 调一次模型，把增量拼成整段文本；顺带记下结束原因，供「为什么没 JSON」用。
+ *
+ * @param {{maxTokens?:number, timeoutMs?:number, signal?:AbortSignal}|number} options
+ *   传数字时按 maxTokens 解释，兼容目录解析的老调用。
+ */
+async function callModel(ctx, system, user, options) {
+  const opts = typeof options === 'number' ? { maxTokens: options } : options || {};
   const llm = ctx.get ? ctx.get('llm') : null;
   if (!llm || typeof llm.prepareCall !== 'function') throw new Error('这个 DSH 里没有可用的模型服务');
   const target = resolveModel(ctx);
-  const budget = Number(maxTokens) > 0 ? Number(maxTokens) : TOC_MAX_TOKENS;
-  const signal = AbortSignal.timeout(TOC_CALL_TIMEOUT_MS);
+  const budget = Number(opts.maxTokens) > 0 ? Number(opts.maxTokens) : TOC_MAX_TOKENS;
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : TOC_CALL_TIMEOUT_MS;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  // 作业取消与单次超时都要能中断 stream：有调用方信号时合成一个
+  const signal =
+    opts.signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([opts.signal, timeoutSignal]) : opts.signal || timeoutSignal;
   const prepared = await llm.prepareCall({ provider: target.provider, model: target.model, maxTokens: budget }, signal);
   const messages = [{ role: 'user', content: [{ type: 'text', text: user }] }];
   let text = '';
@@ -714,7 +753,7 @@ async function handleTocParse(req, res, ctx) {
     }
   }
 
-  const prompt = loadPrompt();
+  const prompt = loadPromptFile('toc-extract-v1.md');
   if (!prompt) {
     const toc = fallbackToMechanical(loaded, pages, { code: 'E_NO_PROMPT', stage: 'prompt', message: '提示词文件缺失', range: { from, to } });
     sendJson(res, 200, { ok: true, fallback: true, code: toc.code, message: toc.message, chapterCount: loaded.book.chapterCount });
@@ -804,6 +843,299 @@ async function handleTocParse(req, res, ctx) {
     chapterCount: chapters.filter((c) => !c.front).length,
     chapters: chapters,
   });
+}
+
+/* ------------------------------ 生成流水线 ------------------------------ */
+
+/**
+ * POST /generate：立即返回 {moduleId, jobId}，真正生成走后台作业（D12）。
+ * 幂等（D13）：同一缓存键已有成品 → 秒开；正在跑 → 返回当前作业；
+ * 失败/取消/中断的旧模块 → 原地重跑，不堆一地残骸。
+ */
+async function handleGenerate(req, res, ctx) {
+  const body = await readJsonBody(req, 256 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '书架里可能已经删掉了。');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  if (!Array.isArray(pages) || pages.length === 0) {
+    sendError(res, 'E_NO_PAGES', '这本书没有存下逐页文本', '删掉重新导入一次。');
+    return;
+  }
+  let selection;
+  try {
+    selection = validateSelection(loaded.chapters, body.chapters);
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_SELECTION_EMPTY', String((err && err.message) || err), (err && err.hint) || '');
+    return;
+  }
+
+  let model;
+  try {
+    model = resolveModel(ctx);
+  } catch (err) {
+    sendError(res, 'E_LLM_UNAVAILABLE', '模型不可用', String((err && err.message) || err).slice(0, 200));
+    return;
+  }
+  const voice = readVoiceConfig();
+  const cacheKey = moduleCacheKey(bookId, selection.chapters, model.model);
+  const running = findRunningByKey(cacheKey);
+  if (running) {
+    sendJson(res, 200, {
+      ok: true,
+      moduleId: running.moduleId,
+      jobId: running.moduleId,
+      status: running.status,
+      running: true,
+    });
+    return;
+  }
+
+  const existing = findModuleByKey(loaded.dir, cacheKey);
+  const force = !!body.force;
+  if (existing && !force && (existing.record.status === 'ready' || existing.record.status === 'ready_degraded')) {
+    sendJson(res, 200, {
+      ok: true,
+      moduleId: existing.id,
+      jobId: existing.id,
+      status: existing.record.status,
+      cached: true,
+    });
+    return;
+  }
+  if (force && existing) {
+    try {
+      deleteModuleById(bookId, existing.id);
+    } catch {
+      /* 删不掉就让新模块另起一个目录 */
+    }
+  }
+  const reuse =
+    existing && !force && ['failed', 'interrupted', 'cancelled'].includes(String(existing.record.status)) ? existing : null;
+
+  const prompt = loadPromptFile('slides-b2p-v1.md');
+  if (!prompt) {
+    sendError(res, 'E_NO_PROMPT', '生成提示词缺失', '插件安装可能不完整，重新装一次。');
+    return;
+  }
+
+  let job;
+  try {
+    job = startGeneration({
+      book: loaded.book,
+      selected: selection.chapters,
+      pages: pages,
+      cleanedPages: cleanPages(pages),
+      voice: voice,
+      cacheKey: cacheKey,
+      model: model,
+      prompt: prompt,
+      existing: reuse,
+      callModel: (system, user, options) =>
+        callModel(ctx, system, user, Object.assign({ maxTokens: 16000, timeoutMs: GENERATE_CALL_TIMEOUT_MS }, options || {})),
+    });
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_GENERATE', String((err && err.message) || err), (err && err.hint) || '');
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    moduleId: job.moduleId,
+    jobId: job.moduleId,
+    status: job.status,
+    model: model.model,
+  });
+}
+
+/** GET /job：1s 轮询用。内存里有活作业就读内存，否则读 module.json 的终态。 */
+function handleJob(req, res) {
+  const moduleId = String(query(req).get('moduleId') || '').trim();
+  if (!isValidId(moduleId)) {
+    sendError(res, 'E_BAD_ID', '参数不合法', 'moduleId 只能是 8–16 位小写字母数字。');
+    return;
+  }
+  const job = getJobState(moduleId);
+  if (job) {
+    sendJson(res, 200, Object.assign({ ok: true }, job));
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
+    return;
+  }
+  const record = found.module;
+  sendJson(res, 200, {
+    ok: true,
+    moduleId: moduleId,
+    bookId: found.bookId,
+    status: record.status,
+    stage: record.stage || 'done',
+    current: Number(record.total) || Number(record.slides) || 0,
+    total: Number(record.total) || Number(record.slides) || 0,
+    message: record.message || '',
+    slides: Number(record.slides) || 0,
+    error: record.code ? { code: record.code, message: record.error || '', hint: '' } : null,
+    startedAt: record.updatedAt || '',
+    finishedAt: record.finishedAt || '',
+  });
+}
+
+/** POST /cancel：只能取消正在跑的作业；已结束返回当前状态而不是报错。 */
+async function handleCancel(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const moduleId = String(body.moduleId || query(req).get('moduleId') || '').trim();
+  if (!isValidId(moduleId)) {
+    sendError(res, 'E_BAD_ID', '参数不合法', '');
+    return;
+  }
+  if (cancelJob(moduleId)) {
+    sendJson(res, 200, { ok: true, status: 'cancelling' });
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
+    return;
+  }
+  sendJson(res, 200, { ok: true, status: found.module.status, message: '作业已经结束' });
+}
+
+/** GET /module：模块记录 + slides.json。M3 的面板「模块预览」与 M4 播放器共用。 */
+function handleModuleGet(req, res) {
+  const moduleId = String(query(req).get('moduleId') || '').trim();
+  if (!isValidId(moduleId)) {
+    sendError(res, 'E_BAD_ID', '参数不合法', '');
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个模块', '可能已经在书架里删掉了。');
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    module: found.module,
+    slides: found.slides,
+    book: found.book ? { id: found.bookId, title: String(found.book.title || '') } : { id: found.bookId, title: '' },
+  });
+}
+
+/** DELETE /module：删模块目录（不含书）。 */
+async function handleModuleDelete(req, res) {
+  let body = {};
+  try {
+    body = await readJsonBody(req, 64 * 1024);
+  } catch {
+    body = {};
+  }
+  const moduleId = String(body.moduleId || query(req).get('moduleId') || '').trim();
+  if (!isValidId(moduleId)) {
+    sendError(res, 'E_BAD_ID', '参数不合法', '');
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
+    return;
+  }
+  if (!deleteModuleById(found.bookId, moduleId)) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个模块', '');
+    return;
+  }
+  sendJson(res, 200, { ok: true });
+}
+
+/** GET /audio：目前浏览器朗读不落盘，这里为后续云端合成（M5）留好 Range 通道。 */
+function handleAudio(req, res) {
+  const params = query(req);
+  const moduleId = String(params.get('moduleId') || '').trim();
+  const index = Math.round(Number(params.get('i')) || 0);
+  if (!isValidId(moduleId) || index < 1 || index > 999) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const found = loadModuleById(moduleId);
+  if (!found) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const file = path.join(found.moduleDir, 'audio', String(index).padStart(3, '0') + '.mp3');
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  const total = stat.size;
+  const range = String((req.headers && req.headers.range) || '');
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  res.setHeader('content-type', 'audio/mpeg');
+  res.setHeader('accept-ranges', 'bytes');
+  res.setHeader('cache-control', 'no-store');
+  if (match) {
+    let start = match[1] === '' ? null : Number(match[1]);
+    let end = match[2] === '' ? null : Number(match[2]);
+    if (start === null && end !== null) {
+      start = Math.max(0, total - end);
+      end = total - 1;
+    }
+    if (start === null) start = 0;
+    if (end === null || end >= total) end = total - 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= total) {
+      res.statusCode = 416;
+      res.setHeader('content-range', 'bytes */' + total);
+      res.end();
+      return;
+    }
+    res.statusCode = 206;
+    res.setHeader('content-range', 'bytes ' + start + '-' + end + '/' + total);
+    res.setHeader('content-length', String(end - start + 1));
+    fs.createReadStream(file, { start: start, end: end }).pipe(res);
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('content-length', String(total));
+  fs.createReadStream(file).pipe(res);
+}
+
+/* ------------------------------ 语音设置 ------------------------------ */
+
+function handleVoiceGet(req, res) {
+  const config = readVoiceConfig();
+  sendJson(res, 200, {
+    ok: true,
+    voice: publicVoiceConfig(config),
+    providers: VOICE_PROVIDERS,
+    note: '本版只接浏览器本机朗读：不联网、不产生音频文件。',
+  });
+}
+
+async function handleVoicePost(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const next = writeVoiceConfig(body && body.voice ? body.voice : body);
+    sendJson(res, 200, { ok: true, voice: publicVoiceConfig(next), providers: VOICE_PROVIDERS });
+  } catch (err) {
+    sendError(res, 'E_VOICE_SAVE', '语音配置没存下来', String((err && err.message) || err).slice(0, 200));
+  }
+}
+
+async function handleVoiceProbe(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const result = probeVoice(readVoiceConfig(), body && body.text);
+  if (!result.ok) {
+    sendError(res, result.code || 'E_TTS_UNCONFIGURED', result.error || '语音不可用', result.hint || '');
+    return;
+  }
+  sendJson(res, 200, Object.assign({ ok: true }, result));
 }
 
 /* ------------------------------ 文件 ------------------------------ */
@@ -950,6 +1282,12 @@ function resolveCheckDir(ctx, agent, rawInput) {
 
 export function apply(ctx) {
   ensureDirs();
+  // 上次 DSH 退出时还在跑的作业，重新打开面板要能看到「已中断」而不是永远转圈
+  try {
+    reconcileAllModules();
+  } catch {
+    /* 坏模块不能挡插件启动 */
+  }
   // 真书对照命令：跑「目录 → 校准」这条路，按严重程度分类报告
   ctx.inject(['commands'], (scoped) => {
     scoped.commands.register({
@@ -1083,6 +1421,71 @@ export function apply(ctx) {
         return;
       }
       return handleTocRange(req, res);
+    });
+
+    route(ROUTE_GENERATE, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleGenerate(req, res, ctx);
+    });
+
+    route(ROUTE_JOB, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handleJob(req, res);
+    });
+
+    route(ROUTE_CANCEL, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleCancel(req, res);
+    });
+
+    route(ROUTE_MODULE, (req, res) => {
+      const method = String((req && req.method) || 'GET').toUpperCase();
+      if (method === 'GET') {
+        handleModuleGet(req, res);
+        return;
+      }
+      if (method === 'DELETE' || method === 'POST') {
+        return handleModuleDelete(req, res);
+      }
+      res.statusCode = 405;
+      res.end();
+    });
+
+    route(ROUTE_AUDIO, (req, res) => {
+      handleAudio(req, res);
+    });
+
+    route(ROUTE_VOICE, (req, res) => {
+      if (methodIs(req, 'GET')) {
+        handleVoiceGet(req, res);
+        return;
+      }
+      if (methodIs(req, 'POST')) {
+        return handleVoicePost(req, res);
+      }
+      res.statusCode = 405;
+      res.end();
+    });
+
+    route(ROUTE_VOICE_PROBE, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handleVoiceProbe(req, res);
     });
 
     route(ROUTE_PREFIX + '/storage', (req, res) => {

@@ -138,6 +138,118 @@ test('设置页能渲染', () => {
   const { mod } = bootPlugin();
   const html = renderToString(React.createElement(mod.__components.Settings, { onBack: () => {} }));
   assert.match(html, /正在读/);
+  assert.match(html, /语音/);
+  assert.match(html, /浏览器朗读/);
+  assert.match(html, /试听/);
+});
+
+test('生成进度条：阶段名、进度、取消按钮都能渲染', () => {
+  const { mod } = bootPlugin();
+  const html = renderToString(
+    React.createElement(mod.__components.JobBox, {
+      job: { moduleId: 'aaaaaaaaaaaa', status: 'structuring', stage: 'structuring', current: 2, total: 3, message: '正在改写第 2/3 批原文' },
+      onCancel: () => {},
+    }),
+  );
+  assert.match(html, /生成中/);
+  assert.match(html, /改写文案/);
+  assert.match(html, /2\/3/);
+  assert.match(html, /正在改写第 2\/3 批/);
+  assert.match(html, /取消/);
+
+  const cancelling = renderToString(
+    React.createElement(mod.__components.JobBox, {
+      job: { moduleId: 'aaaaaaaaaaaa', status: 'cancelling', stage: 'structuring', current: 2, total: 3, message: '正在取消…' },
+      onCancel: () => {},
+    }),
+  );
+  assert.match(cancelling, /正在取消/);
+});
+
+test('模块列表：就绪、失败、删除/重试按钮都能渲染', () => {
+  const { mod } = bootPlugin();
+  const modules = [
+    { id: 'aaaaaaaaaaaa', title: '精讲：第 1–3 章', status: 'ready', slides: 8, anchorHitRate: 0.95, chapters: [1, 2, 3] },
+    { id: 'bbbbbbbbbbbb', title: '精讲：第 4 章', status: 'failed', code: 'E_LLM_JSON', error: '模型输出格式异常，已重试', slides: 0, chapters: [4] },
+  ];
+  const html = renderToString(
+    React.createElement(mod.__components.ModuleList, {
+      modules: modules,
+      busy: false,
+      onOpen: () => {},
+      onRetry: () => {},
+      onDelete: () => {},
+      onRegenerate: () => {},
+    }),
+  );
+  assert.match(html, /精讲：第 1–3 章/);
+  assert.match(html, /已就绪/);
+  assert.match(html, /锚定 95%/);
+  assert.match(html, /打开/);
+  assert.match(html, /失败/);
+  assert.match(html, /E_LLM_JSON/);
+  assert.match(html, /重试/);
+  assert.match(html, /删除/);
+  assert.match(html, /重生成/);
+});
+
+test('模块预览：一页的文字、配音稿、配图提示词与锚点状态都渲染', () => {
+  const { mod } = bootPlugin();
+  const slide = {
+    slide_index: 2,
+    layout: 'content_text',
+    title: '一页讲一个意思',
+    subtitle: '',
+    bullet_points: ['要点一', '要点二'],
+    quote_text: null,
+    quote_source: null,
+    image_prompt: '书桌上摊开的书，暖色晨光',
+    audio_script: '大家好，这一页我们讲一个很短的意思，尽量说得像聊天一样。',
+    source_quote: '导演的工作，远不止喊一声「开机」。',
+    source_pages: { from: 2, to: 4 },
+    source_anchor: { page: 3, para_index: 1 },
+    anchor_status: 'anchored',
+    audio_ms: 8000,
+    audio_provider: 'browser',
+  };
+  const html = renderToString(
+    React.createElement(mod.__components.SlidePreview, {
+      slide: slide,
+      voice: { provider: 'browser', rate: 1 },
+      onSpeak: null,
+      speaking: false,
+    }),
+  );
+  assert.match(html, /一页讲一个意思/);
+  assert.match(html, /要点一/);
+  assert.match(html, /配音|大家好/);
+  assert.match(html, /书桌上摊开的书/);
+  assert.match(html, /锚定 · 第 3 页第 2 段/);
+  assert.match(html, /朗读约 8 秒/);
+
+  const unanchored = renderToString(
+    React.createElement(mod.__components.SlidePreview, {
+      slide: Object.assign({}, slide, { source_anchor: null, anchor_status: 'unanchored' }),
+      voice: { provider: 'off', rate: 1 },
+      onSpeak: null,
+      speaking: false,
+    }),
+  );
+  assert.match(unanchored, /未定位到原句/);
+  assert.match(unanchored, /按页定位/);
+});
+
+test('模块预览页：加载态能渲染', () => {
+  const { mod } = bootPlugin();
+  const html = renderToString(
+    React.createElement(mod.__components.ModuleView, {
+      moduleId: 'aaaaaaaaaaaa',
+      onBack: () => {},
+      error: null,
+      setError: () => {},
+    }),
+  );
+  assert.match(html, /正在打开模块/);
 });
 
 test('目录切章面板：建议范围、预览、状态文案都能渲染', () => {
