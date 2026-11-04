@@ -51,12 +51,20 @@ window.__ModuleLoader__.load({
     const IMAGE_TEST_API = '/dsh-book-slides/image/test';
     const IMAGE_STATUS_API = '/dsh-book-slides/image/status';
     const IMAGE_REGEN_API = '/dsh-book-slides/image/regen';
-    const PDFJS_BASE = '/dsh-book-slides/vendor/pdfjs/';
-    const PDFJS_MODULE = PDFJS_BASE + 'build/pdf.min.mjs';
+    const PDFJS_BASE = '/dsh-book-slides/vendor/pdfjs/';    const PDFJS_MODULE = PDFJS_BASE + 'build/pdf.min.mjs';
     const PDFJS_WORKER = PDFJS_BASE + 'build/pdf.worker.min.mjs';
     const FILE_API = '/dsh-book-slides/file';
     const COVER_API = '/dsh-book-slides/cover';
     const STORAGE_API = '/dsh-book-slides/storage';
+    const PRACTICE_SUMMARY_API = '/dsh-book-slides/practice/summary';
+    const PRACTICE_GENERATE_API = '/dsh-book-slides/practice/generate';
+    const PRACTICE_JOB_API = '/dsh-book-slides/practice/job';
+    const PRACTICE_SESSION_API = '/dsh-book-slides/practice/session';
+    const PRACTICE_ANSWER_API = '/dsh-book-slides/practice/answer';
+    const PRACTICE_EXPLAIN_API = '/dsh-book-slides/practice/explain';
+    const PRACTICE_FINISH_API = '/dsh-book-slides/practice/finish';
+    const PRACTICE_FLAG_API = '/dsh-book-slides/practice/flag';
+    const PRACTICE_REVIEW_API = '/dsh-book-slides/practice/review';
     const PANEL_ID = 'book-slides';
 
     /** 选章上限，和服务端 index.js 里那组数字保持一致。 */
@@ -279,6 +287,40 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
 .bl-pkg-item .bl-pkg-status{flex:0 0 auto;opacity:.75}
 .bl-pkg-item.bad .bl-pkg-status{color:#d9484b}
 .bl-pkg-sum{font-size:12px;opacity:.8;margin-bottom:6px}
+/* ------------------------------ 练习与复习 ------------------------------ */
+.bl-pq{display:flex;flex-direction:column;gap:12px;max-width:720px}
+.bl-pq-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.bl-pq-stat{border:1px solid var(--bl-line);border-radius:9px;padding:8px 10px;background:color-mix(in oklab,currentColor 3%,transparent)}
+.bl-pq-stat b{display:block;font-size:18px;line-height:1.3}
+.bl-pq-stat span{font-size:11px;opacity:.6}
+.bl-pq-row{display:flex;align-items:center;gap:10px;font-size:12px}
+.bl-pq-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.bl-pq-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.bl-pq-stem{font-size:15px;font-weight:600;line-height:1.65;margin-bottom:12px;overflow-wrap:anywhere}
+.bl-pq-opts{display:flex;flex-direction:column;gap:8px}
+.bl-pq-opt{display:flex;gap:9px;align-items:flex-start;text-align:left;border:1px solid var(--bl-line);background:transparent;color:inherit;font:inherit;padding:9px 11px;border-radius:9px;cursor:pointer;line-height:1.55}
+.bl-pq-opt:hover:not([disabled]){background:color-mix(in oklab,currentColor 7%,transparent)}
+.bl-pq-opt[disabled]{cursor:default}
+.bl-pq-opt b{flex:0 0 auto;width:20px;height:20px;border-radius:50%;border:1px solid var(--bl-line);display:flex;align-items:center;justify-content:center;font-size:11px}
+.bl-pq-opt.on{border-color:currentColor;box-shadow:0 0 0 1px currentColor}
+.bl-pq-opt.ok{border-color:#2f8f4e;background:rgba(47,143,78,.12)}
+.bl-pq-opt.ok b{border-color:#2f8f4e;background:#2f8f4e;color:#fff}
+.bl-pq-opt.bad{border-color:#d9484b;background:rgba(217,72,75,.12)}
+.bl-pq-opt.bad b{border-color:#d9484b;background:#d9484b;color:#fff}
+.bl-pq-fb{border:1px solid var(--bl-line);border-radius:10px;padding:10px 12px;margin-top:12px}
+.bl-pq-fb.ok{border-color:rgba(47,143,78,.55)}
+.bl-pq-fb.bad{border-color:rgba(217,72,75,.55)}
+.bl-pq-verdict{font-weight:600;margin-bottom:6px}
+.bl-pq-verdict.ok{color:#2f8f4e}
+.bl-pq-verdict.bad{color:#d9484b}
+.bl-pq-exp{font-size:12.5px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}
+.bl-pq-src{font-size:12px;opacity:.85;border-left:2px solid var(--bl-line);padding-left:9px;margin-top:9px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.bl-pq-src .bl-btn{padding:1px 7px;font-size:11px}
+.bl-pq-score{font-size:42px;font-weight:700;line-height:1.1}
+.bl-pq-result{max-width:720px;display:flex;flex-direction:column;gap:8px}
+.bl-pq-wrong{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.bl-pq-wrongitem{border:1px solid var(--bl-line);border-radius:9px;padding:10px 12px}
+.bl-pq-running{max-width:760px}
 `;
 
     /* ------------------------------ 数据 ------------------------------ */
@@ -1308,7 +1350,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     }
 
     /** 详情页的模块列表：打开 / 重试 / 重新生成 / 删除；生成中的模块就地显示进度与取消。 */
-    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate, onRevoice, onImages, onPptx, imageEnabled }) {
+    function ModuleList({ modules, busy, job, onCancel, onOpen, onRetry, onDelete, onRegenerate, onRevoice, onImages, onPptx, onPractice, practiceByChapter, imageEnabled }) {
       const list = Array.isArray(modules) ? modules : [];
       const active = job && job.moduleId ? job : null;
       const runningId = active ? active.moduleId : '';
@@ -1346,6 +1388,10 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                 imageEnabled &&
                 !imageBusy &&
                 (imageMissing || !images || images.provider !== 'comfyui' || String(images.status) === 'interrupted');
+              const practiceCount = (item.chapters || []).reduce(
+                (sum, n) => sum + (Number((practiceByChapter || {})[n]) || 0),
+                0,
+              );
               return h(
                 'div',
                 { className: 'bl-mod', key: item.id, 'data-module-id': item.id },
@@ -1368,6 +1414,18 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   'div',
                   { className: 'bl-mod-actions' },
                   ready ? h('button', { className: 'bl-btn', disabled: busy, onClick: () => onOpen(item.id) }, '打开') : null,
+                  ready && onPractice
+                    ? h(
+                        'button',
+                        {
+                          className: 'bl-btn',
+                          disabled: busy,
+                          title: '就这几章练几道题',
+                          onClick: () => onPractice(item),
+                        },
+                        '练习' + (practiceCount ? ' · ' + practiceCount : ''),
+                      )
+                    : null,
                   ready && onPptx
                     ? h('button', { className: 'bl-btn', disabled: busy, title: '导出为 PPT（画面 + 配音 + 备注）', onClick: () => onPptx(item) }, '导出 PPT')
                     : null,
@@ -1781,13 +1839,21 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
      * 翻页统一走「停当前 → 改 index → effect 起新页」，旧回调用 token 作废，
      * 避免 AC-18 里上一页的 onend 把播放器又推回下一页。
      */
-    function Player({ book, module, slides: incomingSlides, initialSlide, onBack }) {
+    function Player({ book, module, slides: incomingSlides, initialSlide, initialPage, onBack, onPractice }) {
       const [slides, setSlides] = useState(incomingSlides);
       const total = slides.length;
       const startIndex = Math.min(Math.max(1, Math.round(Number(initialSlide) || 1)), total || 1) - 1;
+      const pageIndex = Number(initialPage)
+        ? slides.findIndex((slide) => {
+            const range = (slide && slide.source_pages) || {};
+            const from = Number(range.from) || 0;
+            const to = Number(range.to) || from;
+            return Number(initialPage) >= from && Number(initialPage) <= to;
+          })
+        : -1;
       const moduleVoice = (module && module.voice) || {};
       const voiceName = String(moduleVoice.voice || '');
-      const [index, setIndex] = useState(startIndex);
+      const [index, setIndex] = useState(pageIndex >= 0 ? pageIndex : startIndex);
       const [playing, setPlaying] = useState(false);
       const [imageNote, setImageNote] = useState('');
       const imagePollRef = useRef(0);
@@ -2413,6 +2479,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
               pref.muted ? '取消静音' : '静音',
             ),
             h('button', { className: 'bl-btn', onClick: () => setPptxOpen(true), title: '导出为 PPT（画面 + 配音 + 备注）' }, '导出 PPT'),
+            onPractice ? h('button', { className: 'bl-btn', onClick: () => onPractice(module), title: '就这个模块练几道题' }, '练一练') : null,
           ),
           h(
             'div',
@@ -2461,7 +2528,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
     }
 
     /** 模块入口：取模块数据，就绪就交给分屏播放器。 */
-    function ModuleView({ moduleId, initialSlide, onBack, error, setError }) {
+    function ModuleView({ moduleId, initialSlide, initialPage, onBack, onPractice, error, setError }) {
       const [state, setState] = useState({ loading: true, module: null, slides: null, book: null });
 
       useEffect(() => {
@@ -2566,11 +2633,643 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         module: module,
         slides: slides,
         initialSlide: initialSlide,
+        initialPage: initialPage,
         onBack: onBack,
+        onPractice: onPractice,
       });
     }
 
-    function Detail({ bookId, onBack, error, setError, onOpenModule, onSettings }) {
+    /** 练习视图：准备 → 作答 → 结果（FR-11 / 附录 P.7）。 */
+    function PracticeView({ bookId, moduleId, chapters, initialMode, onBack, onOpenSource, error, setError }) {
+      const chapterKeyProp = (Array.isArray(chapters) ? chapters : []).join(',');
+      const [summary, setSummary] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [phase, setPhase] = useState('prepare');
+      const [mode, setMode] = useState(initialMode === 'review' ? 'review' : 'mixed');
+      const [count, setCount] = useState(8);
+      const [busy, setBusy] = useState(false);
+      const [job, setJob] = useState(null);
+      const [note, setNote] = useState('');
+      const [confirm, setConfirm] = useState(null);
+      const [sessionId, setSessionId] = useState('');
+      const [questions, setQuestions] = useState([]);
+      const [index, setIndex] = useState(0);
+      const [picked, setPicked] = useState([]);
+      const [feedback, setFeedback] = useState(null);
+      const [result, setResult] = useState(null);
+      const startedAt = useRef(0);
+      const resumeTried = useRef(false);
+      const mountedRef = useRef(true);
+      useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+          mountedRef.current = false;
+        };
+      }, []);
+
+      const loadSummary = useCallback(() => {
+        const params = new URLSearchParams({ bookId: bookId, mode: mode, count: String(count) });
+        if (chapterKeyProp) params.set('chapters', chapterKeyProp);
+        return getJson(PRACTICE_SUMMARY_API + '?' + params.toString()).then((data) => {
+          setSummary(data);
+          return data;
+        });
+      }, [bookId, chapterKeyProp, mode, count]);
+
+      useEffect(() => {
+        let alive = true;
+        setLoading(true);
+        const params = new URLSearchParams({ bookId: bookId, mode: mode, count: String(count) });
+        if (chapterKeyProp) params.set('chapters', chapterKeyProp);
+        getJson(PRACTICE_SUMMARY_API + '?' + params.toString())
+          .then((data) => {
+            if (alive) setSummary(data);
+          })
+          .catch((err) => {
+            if (alive) setError(err);
+          })
+          .finally(() => {
+            if (alive) setLoading(false);
+          });
+        return () => {
+          alive = false;
+        };
+      }, [bookId, chapterKeyProp, mode, count, setError]);
+
+      // 断点续练：最近一场没结束的场次直接接着答（AC-81）
+      useEffect(() => {
+        if (!summary || resumeTried.current) return;
+        resumeTried.current = true;
+        let alive = true;
+        getJson(PRACTICE_SESSION_API + '?bookId=' + encodeURIComponent(bookId))
+          .then((data) => {
+            if (!alive || !data || !data.session || data.session.status !== 'running') return;
+            if (moduleId && data.session.module_id && data.session.module_id !== moduleId) return;
+            if (!Array.isArray(data.questions) || !data.questions.length) return;
+            const nextIndex = Math.max(0, Number(data.nextIndex) || 0);
+            setSessionId(data.session.session_id);
+            setQuestions(data.questions);
+            setIndex(nextIndex);
+            setPicked([]);
+            setFeedback(null);
+            setPhase('running');
+            startedAt.current = Date.now();
+            if (nextIndex >= data.questions.length) {
+              postJson(PRACTICE_FINISH_API, { bookId: bookId, sessionId: data.session.session_id })
+                .then((finished) => {
+                  if (!alive) return;
+                  setResult(finished);
+                  setPhase('summary');
+                })
+                .catch(() => {});
+            }
+          })
+          .catch(() => {});
+        return () => {
+          alive = false;
+        };
+      }, [summary, bookId, moduleId]);
+
+      const scope = useMemo(() => {
+        if (moduleId && summary) {
+          const mod = (summary.modules || []).find((item) => item.moduleId === moduleId);
+          if (mod && Array.isArray(mod.chapters) && mod.chapters.length) return mod.chapters.map(Number);
+        }
+        if (chapterKeyProp) return chapterKeyProp.split(',').map(Number).filter((n) => n > 0);
+        return summary ? (summary.chapters || []).map((item) => Number(item.n)) : [];
+      }, [moduleId, chapterKeyProp, summary]);
+
+      const stats = useMemo(() => {
+        const bank = (summary && summary.bank) || { total: 0, unseen: 0, due: 0, wrong: 0, byChapter: {} };
+        if (!scope.length) return bank;
+        const by = bank.byChapter || {};
+        const total = scope.reduce((sum, n) => sum + (Number(by[n]) || 0), 0);
+        return { total: total, unseen: bank.unseen || 0, due: bank.due || 0, wrong: bank.wrong || 0 };
+      }, [summary, scope.join(',')]);
+
+      const startSession = useCallback(
+        async (overrideMode) => {
+          const nextMode = overrideMode || mode;
+          const data = await postJson(PRACTICE_SESSION_API, {
+            bookId: bookId,
+            moduleId: moduleId,
+            chapters: scope,
+            mode: nextMode,
+            count: count,
+          });
+          setMode(nextMode);
+          setSessionId(data.sessionId);
+          setQuestions(Array.isArray(data.questions) ? data.questions : []);
+          setIndex(0);
+          setPicked([]);
+          setFeedback(null);
+          setResult(null);
+          setPhase('running');
+          setBusy(false);
+          setNote('');
+          setJob(null);
+          startedAt.current = Date.now();
+        },
+        [bookId, moduleId, scope.join(','), mode, count],
+      );
+
+      const topup = (summary && summary.topup) || null;
+
+      const runTopUp = useCallback(
+        async (rounds) => {
+          setConfirm(null);
+          setBusy(true);
+          setError(null);
+          let added = 0;
+          try {
+            for (let round = 1; round <= rounds; round += 1) {
+              if (!mountedRef.current) return;
+              setNote('正在补题 ' + round + '/' + rounds + '…');
+              const data = await postJson(PRACTICE_GENERATE_API, {
+                bookId: bookId,
+                moduleId: moduleId,
+                chapters: scope.slice(0, 5),
+                append: true,
+              });
+              if (data.full || data.cached) break;
+              let current = null;
+              for (let i = 0; i < 180; i += 1) {
+                await new Promise((resolve) => setTimeout(resolve, 700));
+                if (!mountedRef.current) return;
+                current = await getJson(PRACTICE_JOB_API + '?jobId=' + encodeURIComponent(data.jobId));
+                setJob(current);
+                if (current.status === 'ready') break;
+                if (current.status === 'failed' || current.status === 'cancelled') {
+                  throw new Error(current.error || current.message || '出题失败');
+                }
+              }
+              if (!current || current.status !== 'ready') throw new Error('出题超时，请重试');
+              const got = Number(current.added) || 0;
+              added += got;
+              if (!got) break;
+            }
+            if (!mountedRef.current) return;
+            const fresh = await loadSummary();
+            if (!mountedRef.current) return;
+            setNote(added === 0 ? ((fresh.topup && fresh.topup.reason) || '没有新增题目（重复或已满）') : '已新增 ' + added + ' 题');
+            if (fresh.topup && fresh.topup.blocked) {
+              setBusy(false);
+              setError(new Error(fresh.topup.reason || '无法开始练习'));
+              return;
+            }
+            await startSession();
+          } catch (err) {
+            setBusy(false);
+            setNote('');
+            setError(err);
+          }
+        },
+        [bookId, moduleId, scope.join(','), loadSummary, startSession, setError],
+      );
+
+      const begin = useCallback(async () => {
+        setError(null);
+        setNote('');
+        if (!topup) return;
+        if (topup.blocked) {
+          setNote(topup.reason || '无法开始练习');
+          return;
+        }
+        if (topup.rounds > 0) {
+          setConfirm(topup);
+          return;
+        }
+        setBusy(true);
+        try {
+          await startSession();
+        } catch (err) {
+          setBusy(false);
+          setError(err);
+        }
+      }, [topup, startSession, setError]);
+
+      const requestExplain = useCallback(
+        async (question, pickedKeys) => {
+          setFeedback((prev) => (prev ? Object.assign({}, prev, { loadingExplain: true, explainError: '' }) : prev));
+          try {
+            const data = await postJson(PRACTICE_EXPLAIN_API, {
+              bookId: bookId,
+              sessionId: sessionId,
+              qid: question.qid,
+              picked: pickedKeys,
+            });
+            setFeedback((prev) =>
+              prev ? Object.assign({}, prev, { explanation: data.explanation, loadingExplain: false }) : prev,
+            );
+          } catch (err) {
+            setFeedback((prev) =>
+              prev
+                ? Object.assign({}, prev, {
+                    loadingExplain: false,
+                    explainError: err && err.code === 'E_QZ_EXPLAIN_TIMEOUT' ? '讲解生成超时，可以重试' : '讲解暂时不可用，可以重试',
+                  })
+                : prev,
+            );
+          }
+        },
+        [bookId, sessionId],
+      );
+
+      const submit = useCallback(async () => {
+        const question = questions[index];
+        if (!question || !picked.length || feedback) return;
+        setBusy(true);
+        setError(null);
+        try {
+          const elapsed = Date.now() - startedAt.current;
+          const data = await postJson(PRACTICE_ANSWER_API, {
+            bookId: bookId,
+            sessionId: sessionId,
+            qid: question.qid,
+            picked: picked,
+            elapsedMs: elapsed,
+          });
+          setFeedback({
+            correct: !!data.correct,
+            answer: data.answer || [],
+            sourceQuote: data.sourceQuote || '',
+            anchor: data.anchor || null,
+            explanation: data.explanation || '',
+            loadingExplain: false,
+            explainError: '',
+          });
+          if (!data.correct && !data.explanation) requestExplain(question, picked);
+        } catch (err) {
+          setError(err);
+        } finally {
+          setBusy(false);
+        }
+      }, [questions, index, picked, feedback, bookId, sessionId, requestExplain, setError]);
+
+      const finish = useCallback(async () => {
+        if (!sessionId) return;
+        setBusy(true);
+        try {
+          const data = await postJson(PRACTICE_FINISH_API, { bookId: bookId, sessionId: sessionId });
+          setResult(data);
+          setPhase('summary');
+          setFeedback(null);
+          await loadSummary();
+        } catch (err) {
+          setError(err);
+        } finally {
+          setBusy(false);
+        }
+      }, [bookId, sessionId, loadSummary, setError]);
+
+      const next = useCallback(async () => {
+        if (index + 1 < questions.length) {
+          setIndex(index + 1);
+          setPicked([]);
+          setFeedback(null);
+          startedAt.current = Date.now();
+          return;
+        }
+        await finish();
+      }, [index, questions.length, finish]);
+
+      const toggleOption = useCallback(
+        (key) => {
+          if (feedback) return;
+          const question = questions[index];
+          if (!question) return;
+          if (question.type === 'multi') {
+            setPicked((prev) => (prev.includes(key) ? prev.filter((value) => value !== key) : prev.concat(key).sort()));
+          } else {
+            setPicked([key]);
+          }
+        },
+        [questions, index, feedback],
+      );
+
+      const flag = useCallback(async () => {
+        const question = questions[index];
+        if (!question) return;
+        try {
+          await postJson(PRACTICE_FLAG_API, { bookId: bookId, qid: question.qid });
+          setNote('已标记，这道题以后不会再出现');
+        } catch (err) {
+          setError(err);
+        }
+      }, [questions, index, bookId, setError]);
+
+      const modeLabel = mode === 'new' ? '只练新题' : mode === 'review' ? '只复习' : '混合';
+      const topupBlocked = !!(topup && topup.blocked);
+      const topupNeeded = !!(topup && Number(topup.rounds) > 0);
+      const typeLabel = (type) => (type === 'multi' ? '多选' : type === 'judge' ? '判断' : '单选');
+      const stat = (label, value) =>
+        h('div', { className: 'bl-pq-stat', key: label }, h('b', null, String(value)), h('span', null, label));
+
+      if (phase === 'prepare') {
+        return h(
+          'div',
+          { className: 'bl-root bl-line' },
+          h(
+            'div',
+            { className: 'bl-bar' },
+            h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回'),
+            h('h1', null, '练习'),
+            h('div', { className: 'bl-grow' }),
+            moduleId ? h('span', { className: 'bl-hint' }, '本模块') : null,
+          ),
+          h(
+            'div',
+            { className: 'bl-body' },
+            h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+            loading
+              ? h('div', { className: 'bl-hint' }, '正在读取题库…')
+              : h(
+                  'div',
+                  { className: 'bl-pq' },
+                  h('div', { className: 'bl-note' }, '范围：第 ' + (scope.join('、') || '—') + ' 章 · 题库 ' + stats.total + ' 题'),
+                  h('div', { className: 'bl-pq-stats' }, stat('可练', stats.total), stat('未答', stats.unseen), stat('到期', stats.due), stat('错题', stats.wrong)),
+                  h(
+                    'div',
+                    { className: 'bl-pq-row' },
+                    h('span', null, '模式'),
+                    h(
+                      'select',
+                      { className: 'bl-select', value: mode, onChange: (event) => setMode(event.target.value) },
+                      h('option', { value: 'mixed' }, '混合（新题为主）'),
+                      h('option', { value: 'new' }, '只练新题'),
+                      h('option', { value: 'review' }, '只复习到期/错题'),
+                    ),
+                    h('span', { style: { marginLeft: 10 } }, '题量'),
+                    h(
+                      'select',
+                      { className: 'bl-select', value: count, onChange: (event) => setCount(Number(event.target.value)) },
+                      [5, 8, 10, 15].map((value) => h('option', { key: value, value: value }, value + ' 题')),
+                    ),
+                  ),
+                  note ? h('div', { className: 'bl-hint' }, note) : null,
+                  job ? h('div', { className: 'bl-hint' }, '出题中 ' + (Number(job.current) || 0) + '/' + (Number(job.total) || 0) + ' · ' + (job.message || '')) : null,
+                  h(
+                    'div',
+                    { className: 'bl-pq-actions' },
+                    h(
+                      'button',
+                      {
+                        className: 'bl-btn bl-btn-primary',
+                        disabled: busy || topupBlocked,
+                        onClick: begin,
+                      },
+                      busy
+                        ? topupNeeded
+                          ? '补题中…'
+                          : '准备中…'
+                        : topupBlocked
+                          ? topup.reason || '无法开始'
+                          : topupNeeded
+                            ? stats.total
+                              ? '补新题并开始'
+                              : '出题并开始'
+                            : '开始练习',
+                    ),
+                  ),
+                  topupBlocked
+                    ? h('div', { className: 'bl-hint' }, topup.reason || '无法开始')
+                    : null,
+                  topupNeeded
+                    ? h(
+                        'div',
+                        { className: 'bl-hint' },
+                        '需补 ' +
+                          topup.need +
+                          ' 道新题：' +
+                          topup.rounds +
+                          ' 轮 × 每轮每章 +5（最多 6 轮 / 30 题；单书上限 300）',
+                      )
+                    : null,
+                  !topupBlocked && topup && Number(topup.feasibleN) < count
+                    ? h('div', { className: 'bl-hint' }, '补后仍不足，本场预计 ' + topup.feasibleN + ' 题（新题不足）')
+                    : null,
+                  h('div', { className: 'bl-hint' }, '判题在本地即时完成；讲解只在答错时生成，生成一次会保存，下次秒出。'),
+                ),
+          ),
+          confirm
+            ? h(
+                'div',
+                { className: 'bl-overlay' },
+                h(
+                  'div',
+                  { className: 'bl-dialog', role: 'dialog', 'aria-label': '补题确认' },
+                  h('h2', null, '先补新题，再开始'),
+                  h('p', null, '模式：' + modeLabel + ' · 范围：第 ' + (scope.join('、') || '—') + ' 章'),
+                  h('p', null, '现有新题 ' + confirm.unseen + ' 道，本场需要 ' + confirm.targetNew + ' 道'),
+                  h(
+                    'p',
+                    null,
+                    '将补 ' +
+                      confirm.rounds +
+                      ' 轮，每轮每章 +5，预计新增 ' +
+                      confirm.added +
+                      ' 题，约 ' +
+                      Math.max(20, Number(confirm.rounds) * 30) +
+                      ' 秒',
+                  ),
+                  h('p', null, '单书上限 300 题；补不到时按实际题量开始。'),
+                  h(
+                    'div',
+                    { className: 'bl-dialog-foot' },
+                    h('button', { className: 'bl-btn', onClick: () => setConfirm(null) }, '取消'),
+                    h(
+                      'button',
+                      { className: 'bl-btn bl-btn-primary', disabled: busy, onClick: () => runTopUp(Number(confirm.rounds)) },
+                      '确认并开始',
+                    ),
+                  ),
+                ),
+              )
+            : null,
+        );
+      }
+
+      if (phase === 'running') {
+        const question = questions[index];
+        if (!question) {
+          return h(
+            'div',
+            { className: 'bl-root bl-line' },
+            h('div', { className: 'bl-body' }, h(ErrorBanner, { error: error, onClose: () => setError(null) }), h('div', { className: 'bl-note' }, '这一场没有题目。')),
+          );
+        }
+        return h(
+          'div',
+          { className: 'bl-root bl-line' },
+          h(
+            'div',
+            { className: 'bl-bar' },
+            h('button', { className: 'bl-back', onClick: finish }, '\u2039 结束本场'),
+            h('h1', null, '练习 ' + (index + 1) + ' / ' + questions.length),
+            h('div', { className: 'bl-grow' }),
+            h('span', { className: 'bl-hint' }, modeLabel),
+          ),
+          h(
+            'div',
+            { className: 'bl-body' },
+            h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+            h(
+              'div',
+              { className: 'bl-pq bl-pq-running' },
+              h(
+                'div',
+                { className: 'bl-pq-meta' },
+                h('span', { className: 'bl-chip' }, question.point || '考点'),
+                h('span', { className: 'bl-chip' }, typeLabel(question.type)),
+                h('span', { className: 'bl-chip' }, '难度 ' + (Number(question.difficulty) || 2)),
+                h('span', { className: 'bl-chip' }, '第 ' + question.chapter + ' 章'),
+              ),
+              h('div', { className: 'bl-pq-stem' }, question.stem),
+              h(
+                'div',
+                { className: 'bl-pq-opts' },
+                (question.options || []).map((option) => {
+                  const on = picked.includes(option.key);
+                  let className = 'bl-pq-opt' + (on ? ' on' : '');
+                  if (feedback) {
+                    if ((feedback.answer || []).includes(option.key)) className += ' ok';
+                    else if (on) className += ' bad';
+                  }
+                  return h(
+                    'button',
+                    { key: option.key, className: className, disabled: !!feedback, onClick: () => toggleOption(option.key) },
+                    h('b', null, option.key),
+                    h('span', null, option.text),
+                  );
+                }),
+              ),
+              feedback
+                ? h(
+                    'div',
+                    { className: 'bl-pq-fb ' + (feedback.correct ? 'ok' : 'bad') },
+                    h(
+                      'div',
+                      { className: 'bl-pq-verdict ' + (feedback.correct ? 'ok' : 'bad') },
+                      feedback.correct
+                        ? '✓ 正确'
+                        : '✗ 错误' + ((feedback.answer || []).length ? '（正确答案 ' + (feedback.answer || []).join('、') + '）' : ''),
+                    ),
+                    feedback.explanation
+                      ? h('div', { className: 'bl-pq-exp' }, feedback.explanation)
+                      : feedback.loadingExplain
+                        ? h('div', { className: 'bl-hint' }, '正在讲解…')
+                        : feedback.explainError
+                          ? h('div', { className: 'bl-hint' }, feedback.explainError)
+                          : h('div', { className: 'bl-hint' }, '这道题暂无讲解'),
+                    feedback.sourceQuote
+                      ? h(
+                          'div',
+                          { className: 'bl-pq-src' },
+                          h('span', null, '「' + feedback.sourceQuote + '」'),
+                          feedback.anchor && onOpenSource
+                            ? h(
+                                'button',
+                                { className: 'bl-btn', onClick: () => onOpenSource(feedback.anchor.page, question.moduleId || null) },
+                                '第 ' + feedback.anchor.page + ' 页 · 看原文',
+                              )
+                            : feedback.anchor
+                              ? h('span', { className: 'bl-hint' }, '第 ' + feedback.anchor.page + ' 页')
+                              : null,
+                        )
+                      : null,
+                    feedback.explainError
+                      ? h(
+                          'button',
+                          { className: 'bl-btn', onClick: () => requestExplain(question, picked) },
+                          '重试讲解',
+                        )
+                      : null,
+                  )
+                : null,
+              h(
+                'div',
+                { className: 'bl-pq-actions' },
+                feedback
+                  ? h(
+                      'button',
+                      { className: 'bl-btn bl-btn-primary', disabled: busy, onClick: next },
+                      index + 1 >= questions.length ? '看结果' : '下一题',
+                    )
+                  : h(
+                      'button',
+                      { className: 'bl-btn bl-btn-primary', disabled: busy || !picked.length, onClick: submit },
+                      busy ? '判题中…' : '提交',
+                    ),
+                feedback ? h('button', { className: 'bl-btn', onClick: flag }, '这题有问题') : null,
+                feedback && feedback.correct && !feedback.explanation && !feedback.loadingExplain && !feedback.explainError
+                  ? h('button', { className: 'bl-btn', onClick: () => requestExplain(question, picked) }, '看讲解')
+                  : null,
+                feedback && !feedback.correct && feedback.explanation
+                  ? h('button', { className: 'bl-btn', onClick: () => requestExplain(question, picked) }, '再讲讲')
+                  : null,
+              ),
+            ),
+          ),
+        );
+      }
+
+      const sum = (result && result.summary) || {};
+      const details = (result && result.details) || [];
+      const wrong = details.filter((item) => !item.correct);
+      return h(
+        'div',
+        { className: 'bl-root bl-line' },
+        h(
+          'div',
+          { className: 'bl-bar' },
+          h('button', { className: 'bl-back', onClick: onBack }, '\u2039 返回'),
+          h('h1', null, '本场结果'),
+          h('div', { className: 'bl-grow' }),
+        ),
+        h(
+          'div',
+          { className: 'bl-body' },
+          h(ErrorBanner, { error: error, onClose: () => setError(null) }),
+          h(
+            'div',
+            { className: 'bl-pq-result' },
+            h('div', { className: 'bl-pq-score' }, Math.round((Number(sum.accuracy) || 0) * 100) + '%'),
+            h('div', { className: 'bl-hint' }, '答对 ' + (Number(sum.correct) || 0) + ' / 已答 ' + (Number(sum.answered) || 0) + ' 题 · 本场 ' + (Number(sum.total) || 0) + ' 题'),
+            h(
+              'div',
+              { className: 'bl-pq-actions' },
+              wrong.length
+                ? h('button', { className: 'bl-btn bl-btn-primary', onClick: () => startSession('review') }, '再练本场错题')
+                : null,
+              h('button', { className: 'bl-btn', onClick: () => setPhase('prepare') }, '再来一场'),
+              h('button', { className: 'bl-btn', onClick: onBack }, '返回'),
+            ),
+            wrong.length
+              ? h(
+                  'div',
+                  { className: 'bl-pq-wrong' },
+                  wrong.map((item) =>
+                    h(
+                      'div',
+                      { className: 'bl-pq-wrongitem', key: item.qid },
+                      h('div', { className: 'bl-pq-stem' }, item.stem),
+                      h(
+                        'div',
+                        { className: 'bl-hint' },
+                        '你选了 ' + ((item.picked || []).join('、') || '（未选）') + ' · 正确 ' + (item.answer || []).join('、'),
+                      ),
+                      item.explanation ? h('div', { className: 'bl-pq-exp' }, item.explanation) : h('div', { className: 'bl-hint' }, '讲解未生成'),
+                      item.sourceQuote ? h('div', { className: 'bl-pq-src' }, '「' + item.sourceQuote + '」') : null,
+                    ),
+                  ),
+                )
+              : h('div', { className: 'bl-note' }, '全对。可以回书架继续听下一段。'),
+          ),
+        ),
+      );
+    }
+
+    function Detail({ bookId, onBack, error, setError, onOpenModule, onPractice, onReview, onSettings }) {
       const [state, setState] = useState({ loading: true, book: null, chapters: [], modules: [] });
       const [refresh, setRefresh] = useState(0);
       const [busy, setBusy] = useState(false);
@@ -2584,6 +3283,7 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [jobFocus, setJobFocus] = useState(0);
       const [genBusy, setGenBusy] = useState(false);
       const [pptxModule, setPptxModule] = useState(null);
+      const [practiceInfo, setPracticeInfo] = useState(null);
 
       /** 详情页滚动容器：生成开始后用它找到对应条目。 */
       const bodyRef = useRef(null);
@@ -2631,6 +3331,19 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           alive = false;
         };
       }, [bookId, setError, refresh]);
+
+      // 练习角标：题库量按章取，待复习数取全书（没有题库时静默）
+      useEffect(() => {
+        let alive = true;
+        getJson(PRACTICE_SUMMARY_API + '?bookId=' + encodeURIComponent(bookId))
+          .then((data) => {
+            if (alive) setPracticeInfo(data);
+          })
+          .catch(() => {});
+        return () => {
+          alive = false;
+        };
+      }, [bookId, refresh]);
 
       /**
        * 范围改了（含首次带出建议值）：防抖存盘 + 重新拉预览。
@@ -3159,6 +3872,27 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           onSettings
             ? h('button', { className: 'bl-btn', title: '语音与存储设置', onClick: onSettings }, '\u2699 设置')
             : null,
+          onReview && (state.modules || []).some((item) => isReady(item.status))
+            ? h(
+                'button',
+                {
+                  className: 'bl-btn',
+                  title: '按遗忘节奏复习已到期的题',
+                  onClick: () =>
+                    onReview(
+                      Array.from(
+                        new Set(
+                          (state.modules || [])
+                            .filter((item) => isReady(item.status))
+                            .flatMap((item) => (Array.isArray(item.chapters) ? item.chapters : [])),
+                        ),
+                      ).sort((a, b) => a - b),
+                    ),
+                },
+                '复习' +
+                  (practiceInfo && practiceInfo.bank && Number(practiceInfo.bank.due) > 0 ? ' · ' + practiceInfo.bank.due : ''),
+              )
+            : null,
           book
             ? h(
                 'button',
@@ -3242,6 +3976,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                     onRevoice: revoiceModule,
                     onImages: imagesModule,
                     onPptx: setPptxModule,
+                    onPractice: onPractice ? (item) => onPractice(item) : null,
+                    practiceByChapter: practiceInfo && practiceInfo.bank ? practiceInfo.bank.byChapter : null,
                     imageEnabled: state.imageProvider === 'comfyui',
                   }),
                   h(TocBox, {
@@ -4390,6 +5126,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       const [bookId, setBookId] = useState('');
       const [moduleId, setModuleId] = useState('');
       const [initialSlide, setInitialSlide] = useState(1);
+      const [initialPage, setInitialPage] = useState(0);
+      const [practice, setPractice] = useState(null);
       const [progress, setProgress] = useState(null);
       const [upload, setUpload] = useState(null);
       const [selecting, setSelecting] = useState(false);
@@ -4523,10 +5261,11 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
       }, []);
 
       const openModule = useCallback(
-        (id, slide) => {
+        (id, slide, page) => {
           const remembered = progress && progress.lastModuleId === id ? Number(progress.lastSlide) || 1 : 1;
           setModuleId(id);
           setInitialSlide(Math.max(1, Math.round(Number(slide) || remembered)));
+          setInitialPage(Math.max(0, Math.round(Number(page) || 0)));
           setError(null);
           setNav('module');
         },
@@ -4540,6 +5279,28 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
         },
         [openModule],
       );
+
+      const openPractice = useCallback(
+        (options) => {
+          const opts = options || {};
+          setPractice({
+            bookId: opts.bookId || bookId || '',
+            moduleId: opts.moduleId || '',
+            chapters: Array.isArray(opts.chapters) ? opts.chapters.map(Number).filter((n) => n > 0) : [],
+            mode: opts.mode === 'review' ? 'review' : 'mixed',
+            from: nav,
+          });
+          setError(null);
+          setNav('practice');
+        },
+        [bookId, nav],
+      );
+
+      const closePractice = useCallback(() => {
+        const from = practice && practice.from;
+        setPractice(null);
+        setNav(from === 'module' && moduleId ? 'module' : bookId ? 'detail' : 'shelf');
+      }, [practice, moduleId, bookId]);
 
       const toggleSelect = useCallback((id) => {
         setSelected((prev) => (prev.indexOf(id) >= 0 ? prev.filter((value) => value !== id) : prev.concat(id)));
@@ -4593,14 +5354,30 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
           ? h(ModuleView, {
               moduleId: moduleId,
               initialSlide: initialSlide,
+              initialPage: initialPage,
               onBack: () => {
                 setNav(bookId ? 'detail' : 'shelf');
                 refreshProgress();
               },
+              onPractice: (mod) => openPractice({ bookId: bookId, moduleId: mod.id, chapters: mod.chapters, mode: 'mixed' }),
               error: error,
               setError: setError,
             })
-          : nav === 'detail' && bookId
+          : nav === 'practice' && practice
+            ? h(PracticeView, {
+                bookId: practice.bookId,
+                moduleId: practice.moduleId,
+                chapters: practice.chapters,
+                initialMode: practice.mode,
+                onBack: closePractice,
+                onOpenSource: (page, mid) => {
+                  const id = mid || practice.moduleId;
+                  if (id) openModule(id, 1, page);
+                },
+                error: error,
+                setError: setError,
+              })
+            : nav === 'detail' && bookId
             ? h(Detail, {
                 bookId: bookId,
                 onBack: () => {
@@ -4612,6 +5389,8 @@ body[data-ds-dark-theme] .bl-select{color-scheme:dark}
                   load();
                 },
                 onOpenModule: openModule,
+                onPractice: (item) => openPractice({ bookId: bookId, moduleId: item.id, chapters: item.chapters }),
+                onReview: (ns) => openPractice({ bookId: bookId, chapters: ns, mode: 'review' }),
                 onSettings: () => setNav('settings'),
                 error: error,
                 setError: setError,

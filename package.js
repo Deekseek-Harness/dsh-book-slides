@@ -345,6 +345,44 @@ export async function planExport(bookIds, options) {
       entry.modules.push(moduleEntry);
     }
 
+    // 练习与复习（v1.6）：题库 MUST、掌握度与场次 SHOULD；explain-cache 属缓存不入包
+    const practiceRoot = path.join(dir, 'practice');
+    if (fs.existsSync(practiceRoot)) {
+      const practiceEntry = { questions: null, mastery: null, sessions: [] };
+      for (const key of ['questions', 'mastery']) {
+        const abs = path.join(practiceRoot, key + '.json');
+        if (!isFile(abs)) continue;
+        const size = sizeOf(abs);
+        practiceEntry[key] = {
+          path: bookDirName + '/practice/' + key + '.json',
+          sha256: await sha256File(abs),
+          bytes: size,
+        };
+        files.push({ abs, name: practiceEntry[key].path, size });
+        bytes += size;
+      }
+      let sessionNames = [];
+      try {
+        sessionNames = fs
+          .readdirSync(path.join(practiceRoot, 'sessions'))
+          .filter((name) => /^[a-z0-9]{8,16}\.json$/.test(name));
+      } catch {
+        sessionNames = [];
+      }
+      for (const name of sessionNames) {
+        const abs = path.join(practiceRoot, 'sessions', name);
+        if (!isFile(abs)) continue;
+        const size = sizeOf(abs);
+        const meta = { path: bookDirName + '/practice/sessions/' + name, sha256: await sha256File(abs), bytes: size };
+        practiceEntry.sessions.push(meta);
+        files.push({ abs, name: meta.path, size });
+        bytes += size;
+      }
+      if (practiceEntry.questions || practiceEntry.mastery || practiceEntry.sessions.length) {
+        entry.practice = practiceEntry;
+      }
+    }
+
     books.push(entry);
   }
 
@@ -385,6 +423,7 @@ export function buildManifest(plan) {
       schemaVersion: book.schemaVersion,
       lastOpenedAt: book.lastOpenedAt,
       files: book.files,
+      practice: book.practice || undefined,
       modules: book.modules.map((module) => ({
         moduleId: module.moduleId,
         dir: module.dir,
@@ -465,6 +504,7 @@ function buildAllowlist(manifest) {
   const exact = new Set();
   const audioPrefixes = [];
   const imagePrefixes = [];
+  const practicePrefixes = [];
   for (const book of manifest.books) {
     for (const key of ['book', 'pages', 'chapters', 'toc', 'source']) {
       const file = book.files && book.files[key];
@@ -480,6 +520,15 @@ function buildAllowlist(manifest) {
         imagePrefixes.push(String(module.dir) + '/images/');
       }
     }
+    const practice = book.practice || {};
+    for (const file of [practice.questions, practice.mastery]) {
+      if (file && file.path) exact.add(String(file.path));
+    }
+    for (const file of Array.isArray(practice.sessions) ? practice.sessions : []) {
+      if (file && file.path) exact.add(String(file.path));
+    }
+    // 1.4.0 导出的包清单里没有 practice 字段（ZIP 里有文件）；按目录前缀放行，兼容旧包
+    if (book.dir) practicePrefixes.push(String(book.dir) + '/practice/');
   }
   return (name) => {
     if (exact.has(name)) return true;
@@ -488,6 +537,12 @@ function buildAllowlist(manifest) {
     }
     for (const prefix of imagePrefixes) {
       if (name.startsWith(prefix) && !name.slice(prefix.length).includes('/')) return true;
+    }
+    for (const prefix of practicePrefixes) {
+      if (!name.startsWith(prefix)) continue;
+      const rest = name.slice(prefix.length);
+      if (rest === 'questions.json' || rest === 'mastery.json') return true;
+      if (/^sessions\/[a-z0-9]{8,16}\.json$/.test(rest)) return true;
     }
     return false;
   };
@@ -632,6 +687,92 @@ function localContentKeys(bookDirPath) {
   return keys;
 }
 
+const PRACTICE_SESSION_RE = /^[a-z0-9]{8,16}\.json$/;
+
+function practiceMetasOf(entry) {
+  const practice = entry && entry.practice;
+  if (!practice) return [];
+  const out = [];
+  for (const file of [practice.questions, practice.mastery]) {
+    if (file && file.path) out.push(file);
+  }
+  for (const file of Array.isArray(practice.sessions) ? practice.sessions : []) {
+    if (file && file.path) out.push(file);
+  }
+  return out;
+}
+
+/**
+ * 合并练习数据（FR-11 / P.12）：题库按 qid 并集、掌握度取较新的 last_at、
+ * 场次按 session_id 去重；不覆盖目标机已有记录。
+ */
+function mergePractice(stagedBook, targetDir) {
+  const src = path.join(stagedBook, 'practice');
+  if (!fs.existsSync(src)) return 0;
+  const dst = path.join(targetDir, 'practice');
+  fs.mkdirSync(path.join(dst, 'sessions'), { recursive: true });
+
+  const pkgBank = readJson(path.join(src, 'questions.json'), null);
+  if (pkgBank && Array.isArray(pkgBank.questions)) {
+    const local = readJson(path.join(dst, 'questions.json'), null);
+    const bank =
+      local && Array.isArray(local.questions)
+        ? local
+        : {
+            schema_version: 1,
+            book_id: path.basename(targetDir),
+            prompt_version: String(pkgBank.prompt_version || ''),
+            blueprint_version: Number(pkgBank.blueprint_version) || 1,
+            chapters: {},
+            questions: [],
+          };
+    const known = new Set(bank.questions.map((question) => question && question.qid));
+    for (const question of pkgBank.questions) {
+      if (!question || !question.qid || known.has(question.qid)) continue;
+      if (bank.questions.length >= 300) break;
+      bank.questions.push(question);
+      known.add(question.qid);
+    }
+    bank.book_id = path.basename(targetDir);
+    bank.chapters = Object.assign({}, pkgBank.chapters || {}, bank.chapters || {});
+    for (const [n, meta] of Object.entries(bank.chapters)) {
+      if (meta && typeof meta === 'object') {
+        meta.count = bank.questions.filter((question) => Number(question.chapter) === Number(n)).length;
+      }
+    }
+    writeJson(path.join(dst, 'questions.json'), bank);
+  }
+
+  const pkgMastery = readJson(path.join(src, 'mastery.json'), null);
+  if (pkgMastery && pkgMastery.items) {
+    const local = readJson(path.join(dst, 'mastery.json'), null);
+    const mastery = local && local.items ? local : { schema_version: 1, updated_at: '', items: {} };
+    for (const [qid, state] of Object.entries(pkgMastery.items)) {
+      const current = mastery.items[qid];
+      if (!current || String((state && state.last_at) || '') > String(current.last_at || '')) {
+        mastery.items[qid] = state;
+      }
+    }
+    writeJson(path.join(dst, 'mastery.json'), mastery);
+  }
+
+  let added = 0;
+  let names = [];
+  try {
+    names = fs.readdirSync(path.join(src, 'sessions'));
+  } catch {
+    names = [];
+  }
+  for (const name of names) {
+    if (!PRACTICE_SESSION_RE.test(name)) continue;
+    const target = path.join(dst, 'sessions', name);
+    if (fs.existsSync(target)) continue;
+    fs.copyFileSync(path.join(src, 'sessions', name), target);
+    added += 1;
+  }
+  return added;
+}
+
 function rewriteBookForImport(book, targetId, index, now, meta) {
   const next = Object.assign({}, book, {
     id: targetId,
@@ -685,6 +826,10 @@ async function importOne(options) {
   await verifyFile(stagedRoot, entry.files.pages);
   await verifyFile(stagedRoot, entry.files.chapters);
   if (entry.files.toc) await verifyFile(stagedRoot, entry.files.toc);
+  for (const meta of practiceMetasOf(entry)) {
+    safeManifestPath(meta.path, entry.dir);
+    await verifyFile(stagedRoot, meta);
+  }
 
   const pages = readJson(path.join(stagedBook, 'pages.json'), null);
   if (!Array.isArray(pages) || pages.length === 0) {
@@ -809,12 +954,15 @@ async function importOne(options) {
     modulesAdded += 1;
   }
 
+  const practiceSessions = mergePractice(stagedBook, targetDir);
+
   return Object.assign({}, base, {
     bookId: targetId,
     status: 'merged',
     modulesAdded,
     moduleExists,
     orphanModules,
+    practiceSessions,
   });
 }
 

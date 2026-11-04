@@ -1,9 +1,9 @@
 {
   "name": "dsh-book-slides",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
-  "description": "DSH 左侧栏「精讲」面板：导入带文字层的 PDF，自动切章，勾选章节生成幻灯片式精讲，分屏对照原文播放；配图支持提示词占位或本地 ComfyUI 出图；可把精讲导出为带配音与备注的 PPTX。",
+  "description": "DSH 左侧栏「精讲」面板：导入带文字层的 PDF，自动切章，勾选章节生成幻灯片式精讲，分屏对照原文播放；配图支持提示词占位或本地 ComfyUI 出图；可把精讲导出为带配音与备注的 PPTX；可按章出题练习并按遗忘节奏复习。",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -24,6 +24,7 @@
     "comfy.js",
     "imaging.js",
     "generate.js",
+    "practice.js",
     "pptx.js",
     "pptexport.js",
     "assets/*",
@@ -64,7 +65,7 @@
     "yazl": "^3.3.1"
   },
   "scripts": {
-    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs && node test/package.test.mjs && node test/comfy.test.mjs && node test/imaging.test.mjs && node test/image-auto.test.mjs && node test/pptx.test.mjs && node test/pptexport.test.mjs",
+    "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/practice.test.mjs && node test/session.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs && node test/package.test.mjs && node test/comfy.test.mjs && node test/imaging.test.mjs && node test/image-auto.test.mjs && node test/pptx.test.mjs && node test/pptexport.test.mjs",
     "test:mech": "node test/books.mech.e2e.mjs",
     "test:chapters": "node test/books.toc.e2e.mjs",
     "test:truth": "node test/books.toc.e2e.mjs --truth test/truth --baseline",
@@ -79,7 +80,9 @@
     "tts",
     "comfyui",
     "pptx",
-    "powerpoint"
+    "powerpoint",
+    "quiz",
+    "practice"
   ],
   "license": "MIT",
   "devDependencies": {

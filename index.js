@@ -91,7 +91,7 @@ import {
   planExport,
   writeExportStream,
 } from './package.js';
-import { SLIDES_PROMPT_VERSION } from './slides.js';
+import { SLIDES_PROMPT_VERSION, chapterTextOf } from './slides.js';
 import {
   DEFAULT_HOST,
   DEFAULT_PORT,
@@ -123,6 +123,38 @@ import {
 } from './imaging.js';
 import { buildPptxPlan, planPptx } from './pptexport.js';
 import { loadShellParts, writePptx } from './pptx.js';
+import {
+  MAX_Q_PER_BOOK,
+  PRACTICE_PROMPT_VERSION,
+  PracticeError,
+  SESSION_DEFAULT_COUNT,
+  SESSION_MAX_COUNT,
+  SESSION_MODES,
+  appendAnswer,
+  applyExplanation,
+  buildExplainMessages,
+  chapterKey,
+  clampCount,
+  composeSession,
+  createSession,
+  explainCacheKey,
+  findRunningPractice,
+  finishSession,
+  getPracticeJob,
+  latestRunningSession,
+  nextMastery,
+  planTopUp,
+  readBank,
+  readExplainCache,
+  readMastery,
+  readSession,
+  startPracticeGeneration,
+  summarizeSession,
+  writeBank,
+  writeExplainCache,
+  writeMastery,
+  writeSession,
+} from './practice.js';
 
 const require = createRequire(import.meta.url);
 const PKG = require('./package.json');
@@ -184,6 +216,15 @@ export const ROUTE_IMAGE_TEST = ROUTE_PREFIX + '/image/test';
 export const ROUTE_IMAGE_STATUS = ROUTE_PREFIX + '/image/status';
 export const ROUTE_IMAGE_REGEN = ROUTE_PREFIX + '/image/regen';
 export const ROUTE_IMAGE_CANCEL = ROUTE_PREFIX + '/image/cancel';
+export const ROUTE_PRACTICE_SUMMARY = ROUTE_PREFIX + '/practice/summary';
+export const ROUTE_PRACTICE_GENERATE = ROUTE_PREFIX + '/practice/generate';
+export const ROUTE_PRACTICE_JOB = ROUTE_PREFIX + '/practice/job';
+export const ROUTE_PRACTICE_SESSION = ROUTE_PREFIX + '/practice/session';
+export const ROUTE_PRACTICE_ANSWER = ROUTE_PREFIX + '/practice/answer';
+export const ROUTE_PRACTICE_EXPLAIN = ROUTE_PREFIX + '/practice/explain';
+export const ROUTE_PRACTICE_FINISH = ROUTE_PREFIX + '/practice/finish';
+export const ROUTE_PRACTICE_FLAG = ROUTE_PREFIX + '/practice/flag';
+export const ROUTE_PRACTICE_REVIEW = ROUTE_PREFIX + '/practice/review';
 
 /** 一个精讲模块最多几章、多少字。前端 client.js 里有同一组数字。 */
 export const MAX_MODULE_CHAPTERS = 5;
@@ -2032,6 +2073,566 @@ async function handleRevoice(req, res) {
 
 /* ------------------------------ 注册 ------------------------------ */
 
+/* ------------------------------ 练习与复习（v1.6 / FR-11） ------------------------------ */
+
+function sendPracticeError(res, err) {
+  const code = (err && err.code) || 'E_QZ_FAIL';
+  const message = String((err && err.message) || err || '练习出错');
+  const hint = (err && err.hint) || '';
+  sendError(res, code, message, hint);
+}
+
+function practicePublicQuestion(question) {
+  return {
+    qid: question.qid,
+    chapter: Number(question.chapter) || 0,
+    moduleId: question.module_id ? String(question.module_id) : null,
+    point: String(question.point || ''),
+    type: String(question.type || 'single'),
+    difficulty: Number(question.difficulty) || 2,
+    stem: String(question.stem || ''),
+    options: Array.isArray(question.options) ? question.options.map((option) => ({ key: option.key, text: option.text })) : [],
+    source_pages: question.source_pages || null,
+    anchor_status: String(question.anchor_status || 'unanchored'),
+  };
+}
+
+function practiceQuestionOf(bank, qid) {
+  return (bank.questions || []).find((question) => question.qid === qid) || null;
+}
+
+/** 练习范围：模块的章，或显式章号；只接受非前置、非空白章。出题限 5 章，复习场次可放宽。 */
+function practiceChapters(loaded, body, maxChapters) {
+  const limit = Number(maxChapters) > 0 ? Number(maxChapters) : MAX_MODULE_CHAPTERS;
+  const all = (loaded.chapters || []).filter((chapter) => !chapter.front);
+  let ns = [];
+  if (body && body.moduleId) {
+    const module = listModules(loaded.book.id).find((item) => item.id === String(body.moduleId));
+    if (!module) throw new PracticeError('E_NOT_FOUND', '找不到这个精讲模块');
+    ns = Array.isArray(module.chapters) ? module.chapters : [];
+  } else {
+    ns = Array.isArray(body && body.chapters) ? body.chapters : [];
+  }
+  ns = Array.from(new Set(ns.map((n) => Math.round(Number(n) || 0)).filter((n) => n > 0))).sort((a, b) => a - b);
+  if (!ns.length) throw new PracticeError('E_SELECTION_EMPTY', '先选至少一章');
+  if (ns.length > limit) throw new PracticeError('E_SELECTION_TOO_LARGE', '最多 ' + limit + ' 章');
+  return ns.map((n) => {
+    const chapter = all.find((item) => Number(item.n) === n);
+    if (!chapter) throw new PracticeError('E_NO_CHAPTER', '没有第 ' + n + ' 章');
+    if ((Number(chapter.chars) || 0) < 50) throw new PracticeError('E_CHAPTER_EMPTY', '第 ' + n + ' 章是空白页');
+    return chapter;
+  });
+}
+
+/**
+ * 每章的出题输入：考点白名单来自覆盖该章的 ready 模块幻灯片，
+ * 依据来自章原文。没有 ready 模块覆盖的章不能生成新题（FR-11 / P.1）。
+ */
+function practiceSources(bookId, chapters, pages) {
+  const modules = listModules(bookId).filter((module) => ['ready', 'ready_degraded'].includes(String(module.status)));
+  const map = new Map();
+  for (const chapter of chapters) {
+    map.set(Number(chapter.n), { slidePoints: [], text: chapterTextOf(pages, chapter), moduleId: null });
+  }
+  for (const module of modules) {
+    let slides = [];
+    try {
+      const data = readJson(path.join(bookDir(bookId), 'modules', module.id, 'slides.json'), null);
+      slides = data && Array.isArray(data.slides) ? data.slides : [];
+    } catch {
+      slides = [];
+    }
+    for (const n of Array.isArray(module.chapters) ? module.chapters : []) {
+      const chapter = chapters.find((item) => Number(item.n) === Number(n));
+      if (!chapter) continue;
+      const entry = map.get(Number(n));
+      if (entry && !entry.moduleId) entry.moduleId = module.id;
+      for (const slide of slides) {
+        const range = slide && slide.source_pages ? slide.source_pages : {};
+        const from = Number(range.from) || 0;
+        const to = Number(range.to) || from;
+        if (!(from <= Number(chapter.to) && to >= Number(chapter.from))) continue;
+        const label = [slide.title]
+          .concat(Array.isArray(slide.bullet_points) ? slide.bullet_points : [])
+          .filter(Boolean)
+          .join('：');
+        if (label && !entry.slidePoints.includes(label)) entry.slidePoints.push(label);
+      }
+    }
+  }
+  for (const chapter of chapters) {
+    const covered = modules.some((module) => (module.chapters || []).map(Number).includes(Number(chapter.n)));
+    if (!covered) {
+      throw new PracticeError(
+        'E_QZ_NO_SOURCE',
+        '第 ' + chapter.n + ' 章还没有精讲',
+        '先为这一章生成精讲，再回来练习。',
+      );
+    }
+  }
+  return map;
+}
+
+function handlePracticeSummary(req, res) {
+  const q = query(req);
+  const bookId = String(q.get('bookId') || '').trim();
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '书架里可能已经删掉了。');
+    return;
+  }
+  const raw = String(q.get('chapters') || '').trim();
+  const all = (loaded.chapters || []).filter((chapter) => !chapter.front);
+  const ns = raw
+    ? raw
+        .split(',')
+        .map((value) => Math.round(Number(value) || 0))
+        .filter((n) => n > 0)
+    : all.map((chapter) => Number(chapter.n));
+  const bank = readBank(bookId);
+  const mastery = readMastery(bookId);
+  const questions = (bank.questions || []).filter((question) => !question.flagged && ns.includes(Number(question.chapter)));
+  const now = Date.now();
+  const stateOf = (qid) => mastery.items[qid] || null;
+  let unseen = 0;
+  let due = 0;
+  let wrong = 0;
+  const byChapter = {};
+  for (const question of questions) {
+    const state = stateOf(question.qid);
+    byChapter[question.chapter] = (byChapter[question.chapter] || 0) + 1;
+    if (!state || !Number(state.attempts)) unseen += 1;
+    if (state && state.due_at && new Date(state.due_at).getTime() <= now) due += 1;
+    if (state && (String(state.last) === 'wrong' || Number(state.box) === 0)) wrong += 1;
+  }
+  const modules = listModules(bookId)
+    .filter((module) => ['ready', 'ready_degraded'].includes(String(module.status)))
+    .map((module) => ({
+      moduleId: module.id,
+      title: module.title,
+      chapters: module.chapters || [],
+      ready: true,
+    }));
+  const mode = SESSION_MODES.includes(String(q.get('mode') || '')) ? String(q.get('mode')) : 'mixed';
+  const count = clampCount(q.get('count'));
+  const topup = planTopUp({
+    mode: mode,
+    count: count,
+    unseen: unseen,
+    chapters: ns.length,
+    bankTotal: (bank.questions || []).length,
+    oldAvailable: Math.max(0, questions.length - unseen),
+  });
+  if (mode === 'review') {
+    const available = questions.filter((question) => {
+      const state = stateOf(question.qid);
+      return !!state && (String(state.last) === 'wrong' || Number(state.box) === 0 || (state.due_at && new Date(state.due_at).getTime() <= now));
+    }).length;
+    topup.feasibleN = Math.min(count, available);
+    topup.blocked = available < 1;
+    topup.reason = available < 1 ? '没有到期或做错的题' : '';
+  }
+  const running = findRunningPractice(bookId, ns);
+  sendJson(res, 200, {
+    ok: true,
+    bank: { total: questions.length, unseen: unseen, due: due, wrong: wrong, byChapter: byChapter },
+    defaults: { count: SESSION_DEFAULT_COUNT, mode: 'mixed', max: SESSION_MAX_COUNT },
+    topup: topup,
+    chapters: all.map((chapter) => ({ n: Number(chapter.n), title: chapter.title, from: chapter.from, to: chapter.to, chars: chapter.chars })),
+    modules: modules,
+    job: running ? getPracticeJob(running.jobId) : null,
+    promptVersion: PRACTICE_PROMPT_VERSION,
+  });
+}
+
+async function handlePracticeGenerate(req, res, ctx) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '书架里可能已经删掉了。');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  let chapters;
+  try {
+    chapters = practiceChapters(loaded, body);
+  } catch (err) {
+    sendPracticeError(res, err);
+    return;
+  }
+  let sources;
+  try {
+    sources = practiceSources(bookId, chapters, pages);
+  } catch (err) {
+    sendPracticeError(res, err);
+    return;
+  }
+  const bank = readBank(bookId);
+  const append = !!(body.append || body.force);
+  if (append && bank.questions.length >= MAX_Q_PER_BOOK) {
+    sendJson(res, 200, { ok: true, full: true, added: 0, chapters: chapters.map((chapter) => Number(chapter.n)) });
+    return;
+  }
+  const keys = chapters.map((chapter) => chapterKey(bookId, chapter));
+  const isReadyChapter = (chapter, index) => {
+    const entry = bank.chapters[String(chapter.n)];
+    return entry && entry.status === 'ready' && entry.key === keys[index];
+  };
+  if (!append && chapters.every(isReadyChapter)) {
+    sendJson(res, 200, { ok: true, cached: true, chapters: chapters.map((chapter) => Number(chapter.n)) });
+    return;
+  }
+  const pendingChapters = append ? chapters : chapters.filter((chapter, index) => !isReadyChapter(chapter, index));
+  const running = findRunningPractice(
+    bookId,
+    pendingChapters.map((chapter) => Number(chapter.n)),
+  );
+  if (running) {
+    sendJson(res, 200, { ok: true, jobId: running.jobId, running: true, status: running.status });
+    return;
+  }
+  const prompt = loadPromptFile('practice-gen-v1.md');
+  if (!prompt) {
+    sendError(res, 'E_NO_PROMPT', '出题提示词缺失', '插件安装可能不完整，重新装一次。');
+    return;
+  }
+  let job;
+  try {
+    job = startPracticeGeneration({
+      bookId: bookId,
+      book: loaded.book,
+      chapters: pendingChapters,
+      pages: pages,
+      sources: sources,
+      prompt: prompt,
+      existing: bank.questions,
+      append: append,
+      callModel: (system, user, options) =>
+        callModel(ctx, system, user, Object.assign({ maxTokens: 8000, timeoutMs: 120000 }, options || {})),
+    });
+  } catch (err) {
+    sendPracticeError(res, err);
+    return;
+  }
+  sendJson(res, 200, { ok: true, jobId: job.jobId, status: job.status });
+}
+
+function handlePracticeJob(req, res) {
+  const q = query(req);
+  const job = getPracticeJob(String(q.get('jobId') || ''));
+  if (!job) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个出题作业');
+    return;
+  }
+  sendJson(res, 200, Object.assign({ ok: true }, job));
+}
+
+async function handlePracticeSession(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书');
+    return;
+  }
+  let chapters;
+  try {
+    chapters = practiceChapters(loaded, body, Number.MAX_SAFE_INTEGER);
+  } catch (err) {
+    sendPracticeError(res, err);
+    return;
+  }
+  const bank = readBank(bookId);
+  const mastery = readMastery(bookId);
+  const mode = SESSION_MODES.includes(String(body.mode)) ? String(body.mode) : 'mixed';
+  const count = clampCount(body.count);
+  const plan = composeSession({
+    bank: bank,
+    mastery: mastery,
+    chapterNs: chapters.map((chapter) => Number(chapter.n)),
+    mode: mode,
+    count: count,
+    now: Date.now(),
+  });
+  if (!plan.length) {
+    const empty =
+      mode === 'new'
+        ? { message: '新题已经练完了', hint: '切到「混合」练已答过的题，或点「再出一组」补 5 道新题。' }
+        : mode === 'review'
+          ? { message: '还没有到期或做错的题', hint: '先练一场新的，或者明天再来复习。' }
+          : { message: '还没有可练的题', hint: '点「再出一组」生成一组。' };
+    sendError(res, 'E_QZ_NOT_ENOUGH', empty.message, empty.hint);
+    return;
+  }
+  const session = createSession({
+    bookId: bookId,
+    moduleId: body.moduleId ? String(body.moduleId) : null,
+    chapterNs: chapters.map((chapter) => Number(chapter.n)),
+    mode: mode,
+    count: count,
+    plan: plan,
+  });
+  session.plan = session.plan.filter((item) => !!practiceQuestionOf(bank, item.qid));
+  if (!session.plan.length) {
+    sendError(res, 'E_QZ_NOT_ENOUGH', '题库里的题不在了', '重新生成一组。');
+    return;
+  }
+  writeSession(bookId, session);
+  const questions = session.plan.map((item) => practicePublicQuestion(practiceQuestionOf(bank, item.qid))).filter(Boolean);
+  sendJson(res, 200, { ok: true, sessionId: session.session_id, mode: mode, count: questions.length, questions: questions });
+}
+
+async function handlePracticeAnswer(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const sessionId = String(body.sessionId || '').trim();
+  const qid = String(body.qid || '').trim();
+  const session = readSession(bookId, sessionId);
+  if (!session) {
+    sendError(res, 'E_QZ_SESSION', '这一场练习不存在或已过期');
+    return;
+  }
+  if (session.status !== 'running') {
+    sendError(res, 'E_QZ_SESSION', '这一场练习已经结束');
+    return;
+  }
+  const plan = (session.plan || []).find((item) => item.qid === qid);
+  if (!plan) {
+    sendError(res, 'E_QZ_SESSION', '这道题不在本场练习里');
+    return;
+  }
+  const bank = readBank(bookId);
+  const question = practiceQuestionOf(bank, qid);
+  if (!question) {
+    sendError(res, 'E_NOT_FOUND', '题目不存在');
+    return;
+  }
+  const existing = (session.answers || []).find((answer) => answer.qid === qid);
+  if (existing) {
+    sendJson(res, 200, {
+      ok: true,
+      correct: existing.correct,
+      answer: question.answer,
+      explanation: question.explanation_status === 'ready' ? question.explanation : null,
+      sourceQuote: question.source_quote,
+      anchor: question.source_anchor,
+      duplicate: true,
+    });
+    return;
+  }
+  appendAnswer(session, question, body.picked, body.elapsedMs);
+  const answer = session.answers[session.answers.length - 1];
+  const mastery = readMastery(bookId);
+  mastery.items[qid] = nextMastery(mastery.items[qid], answer.correct, answer.at);
+  writeMastery(bookId, mastery);
+  writeSession(bookId, session);
+  sendJson(res, 200, {
+    ok: true,
+    correct: answer.correct,
+    answer: question.answer,
+    explanation: question.explanation_status === 'ready' ? question.explanation : null,
+    sourceQuote: question.source_quote,
+    anchor: question.source_anchor,
+    anchorStatus: question.anchor_status,
+    mastery: mastery.items[qid],
+  });
+}
+
+async function handlePracticeExplain(req, res, ctx) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const sessionId = String(body.sessionId || '').trim();
+  const qid = String(body.qid || '').trim();
+  const mode = String(body.mode || 'normal') === 'deep' ? 'deep' : 'normal';
+  const session = readSession(bookId, sessionId);
+  if (!session) {
+    sendError(res, 'E_QZ_SESSION', '这一场练习不存在或已过期');
+    return;
+  }
+  const bank = readBank(bookId);
+  const question = practiceQuestionOf(bank, qid);
+  if (!question) {
+    sendError(res, 'E_NOT_FOUND', '题目不存在');
+    return;
+  }
+  const cacheKey = explainCacheKey(qid, body.picked, mode);
+  if (mode === 'deep') {
+    const cached = readExplainCache(bookId, cacheKey);
+    if (cached) {
+      sendJson(res, 200, { ok: true, explanation: cached.text, cached: true, model: cached.model || '' });
+      return;
+    }
+  } else if (question.explanation_status === 'ready' && question.explanation) {
+    sendJson(res, 200, { ok: true, explanation: question.explanation, cached: true, model: question.explanation_model || '' });
+    return;
+  }
+  const pagesDir = existingBookDir(bookId);
+  const pages = pagesDir ? readJson(path.join(pagesDir, 'pages.json'), []) : [];
+  const page = Number(question.source_anchor && question.source_anchor.page) || 0;
+  const pageText = page ? String((pages.find((item) => Number(item.page) === page) || {}).text || '') : '';
+  const prompt = loadPromptFile('practice-explain-v1.md');
+  if (!prompt) {
+    sendError(res, 'E_NO_PROMPT', '讲解提示词缺失');
+    return;
+  }
+  if (mode === 'normal') {
+    question.explanation_status = 'pending';
+    writeBank(bookId, bank);
+  }
+  let reply;
+  try {
+    const messages = buildExplainMessages({ prompt: prompt, question: question, picked: body.picked, pageText: pageText });
+    reply = await callModel(ctx, messages.system, messages.user, { maxTokens: 2000, timeoutMs: 20000 });
+  } catch (err) {
+    if (mode === 'normal') {
+      question.explanation_status = 'failed';
+      writeBank(bookId, bank);
+    }
+    const timeout = /timeout|abort/i.test(String((err && err.message) || err));
+    sendError(
+      res,
+      timeout ? 'E_QZ_EXPLAIN_TIMEOUT' : 'E_QZ_EXPLAIN_FAILED',
+      timeout ? '讲解生成超时' : '讲解生成失败',
+      '可以重试，判题结果与原文不受影响。',
+    );
+    return;
+  }
+  const text = String((reply && reply.text) || '').trim();
+  if (!text) {
+    if (mode === 'normal') {
+      question.explanation_status = 'failed';
+      writeBank(bookId, bank);
+    }
+    sendError(res, 'E_QZ_EXPLAIN_FAILED', '讲解生成失败', '模型没有返回内容，可以重试。');
+    return;
+  }
+  if (mode === 'deep') {
+    writeExplainCache(bookId, cacheKey, text, (reply && reply.model) || '');
+  } else {
+    applyExplanation(question, text, (reply && reply.model) || '');
+    writeBank(bookId, bank);
+  }
+  sendJson(res, 200, { ok: true, explanation: text, cached: false, model: (reply && reply.model) || '' });
+}
+
+async function handlePracticeFinish(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const session = readSession(bookId, String(body.sessionId || ''));
+  if (!session) {
+    sendError(res, 'E_QZ_SESSION', '这一场练习不存在或已过期');
+    return;
+  }
+  finishSession(session);
+  writeSession(bookId, session);
+  const bank = readBank(bookId);
+  const details = (session.answers || []).map((answer) => {
+    const question = practiceQuestionOf(bank, answer.qid);
+    return {
+      qid: answer.qid,
+      picked: answer.picked,
+      correct: answer.correct,
+      stem: question ? question.stem : '',
+      options: question ? question.options : [],
+      answer: question ? question.answer : [],
+      explanation: question && question.explanation_status === 'ready' ? question.explanation : null,
+      sourceQuote: question ? question.source_quote : '',
+      anchor: question ? question.source_anchor : null,
+    };
+  });
+  sendJson(res, 200, { ok: true, summary: summarizeSession(session), details: details, status: session.status });
+}
+
+function handlePracticeSessionGet(req, res) {
+  const q = query(req);
+  const bookId = String(q.get('bookId') || '').trim();
+  const sessionId = String(q.get('sessionId') || '').trim();
+  const session = sessionId ? readSession(bookId, sessionId) : latestRunningSession(bookId);
+  if (!session) {
+    if (!sessionId) {
+      sendJson(res, 200, { ok: true, session: null });
+      return;
+    }
+    sendError(res, 'E_QZ_SESSION', '这一场练习不存在或已过期');
+    return;
+  }
+  const bank = readBank(bookId);
+  const answeredIds = new Set((session.answers || []).map((answer) => answer.qid));
+  const nextIndex = (session.plan || []).findIndex((item) => !answeredIds.has(item.qid));
+  const questions = (session.plan || [])
+    .map((item) => practiceQuestionOf(bank, item.qid))
+    .filter(Boolean)
+    .map(practicePublicQuestion);
+  sendJson(res, 200, {
+    ok: true,
+    session: {
+      session_id: session.session_id,
+      book_id: session.book_id,
+      module_id: session.module_id,
+      chapters: session.chapters,
+      mode: session.mode,
+      count: session.count,
+      status: session.status,
+      created_at: session.created_at,
+      finished_at: session.finished_at,
+    },
+    nextIndex: nextIndex < 0 ? session.plan.length : nextIndex,
+    answered: (session.answers || []).map((answer) => ({
+      qid: answer.qid,
+      picked: answer.picked,
+      correct: answer.correct,
+      at: answer.at,
+    })),
+    questions: questions,
+  });
+}
+
+async function handlePracticeFlag(req, res) {
+  const body = await readJsonBody(req, 64 * 1024);
+  const bookId = String(body.bookId || '').trim();
+  const qid = String(body.qid || '').trim();
+  const bank = readBank(bookId);
+  const question = practiceQuestionOf(bank, qid);
+  if (!question) {
+    sendError(res, 'E_NOT_FOUND', '题目不存在');
+    return;
+  }
+  question.flagged = true;
+  question.flag_reason = String(body.reason || '').slice(0, 120);
+  question.flagged_at = new Date().toISOString();
+  writeBank(bookId, bank);
+  sendJson(res, 200, { ok: true, hidden: true });
+}
+
+function handlePracticeReview(req, res) {
+  const q = query(req);
+  const bookId = String(q.get('bookId') || '').trim();
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书');
+    return;
+  }
+  const bank = readBank(bookId);
+  const mastery = readMastery(bookId);
+  const now = Date.now();
+  const due = [];
+  const wrong = [];
+  for (const question of bank.questions || []) {
+    if (question.flagged) continue;
+    const state = mastery.items[question.qid];
+    if (!state || !Number(state.attempts)) continue;
+    const item = Object.assign(practicePublicQuestion(question), {
+      box: Number(state.box) || 0,
+      due_at: state.due_at || '',
+      attempts: Number(state.attempts) || 0,
+    });
+    if (state.due_at && new Date(state.due_at).getTime() <= now) due.push(item);
+    if (String(state.last) === 'wrong' || Number(state.box) === 0) wrong.push(item);
+  }
+  sendJson(res, 200, { ok: true, due: due, wrong: wrong });
+}
+
 function guard(handler) {
   return (req, res) => {
     const headers = (req && req.headers) || {};
@@ -2390,6 +2991,90 @@ export function apply(ctx) {
         return;
       }
       return handleImageCancel(req, res);
+    });
+
+    route(ROUTE_PRACTICE_SUMMARY, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handlePracticeSummary(req, res);
+    });
+
+    route(ROUTE_PRACTICE_GENERATE, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handlePracticeGenerate(req, res, ctx);
+    });
+
+    route(ROUTE_PRACTICE_JOB, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handlePracticeJob(req, res);
+    });
+
+    route(ROUTE_PRACTICE_SESSION, (req, res) => {
+      if (methodIs(req, 'GET')) {
+        handlePracticeSessionGet(req, res);
+        return;
+      }
+      if (methodIs(req, 'POST')) {
+        return handlePracticeSession(req, res);
+      }
+      res.statusCode = 405;
+      res.end();
+    });
+
+    route(ROUTE_PRACTICE_ANSWER, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handlePracticeAnswer(req, res);
+    });
+
+    route(ROUTE_PRACTICE_EXPLAIN, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handlePracticeExplain(req, res, ctx);
+    });
+
+    route(ROUTE_PRACTICE_FINISH, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handlePracticeFinish(req, res);
+    });
+
+    route(ROUTE_PRACTICE_FLAG, (req, res) => {
+      if (!methodIs(req, 'POST')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      return handlePracticeFlag(req, res);
+    });
+
+    route(ROUTE_PRACTICE_REVIEW, (req, res) => {
+      if (!methodIs(req, 'GET')) {
+        res.statusCode = 405;
+        res.end();
+        return;
+      }
+      handlePracticeReview(req, res);
     });
 
     route(ROUTE_PAGES, (req, res) => {
