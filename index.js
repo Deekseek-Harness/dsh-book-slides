@@ -2914,30 +2914,11 @@ export function apply(ctx) {
       res.end();
     });
 
-    route(ROUTE_AUDIO, (req, res) => {
-      handleAudio(req, res);
-    });
+    route(ROUTE_AUDIO, routeV2);
 
-    route(ROUTE_VOICE, (req, res) => {
-      if (methodIs(req, 'GET')) {
-        handleVoiceGet(req, res);
-        return;
-      }
-      if (methodIs(req, 'POST')) {
-        return handleVoicePost(req, res);
-      }
-      res.statusCode = 405;
-      res.end();
-    });
+    route(ROUTE_VOICE, routeV2);
 
-    route(ROUTE_VOICE_PROBE, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleVoiceProbe(req, res);
-    });
+    route(ROUTE_VOICE_PROBE, routeV2);
 
     route(ROUTE_IMAGE, (req, res) => {
       handleImage(req, res);
@@ -3112,17 +3093,7 @@ export function apply(ctx) {
       res.end();
     });
 
-    route(ROUTE_PREFERENCE, (req, res) => {
-      if (methodIs(req, 'GET')) {
-        handlePreferenceGet(req, res);
-        return;
-      }
-      if (methodIs(req, 'POST')) {
-        return handlePreferencePost(req, res);
-      }
-      res.statusCode = 405;
-      res.end();
-    });
+    route(ROUTE_PREFERENCE, routeV2);
 
     route(ROUTE_TRASH_CLEAR, routeV2);
 
@@ -3171,14 +3142,9 @@ export function apply(ctx) {
       return handleImportPackage(req, res, headers);
     });
 
-    route(ROUTE_REVOICE, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleRevoice(req, res);
-    });
+    route(ROUTE_REVOICE, routeV2);
+    route(ROUTE_PREFIX + '/revoice/job', routeV2);
+    route(ROUTE_PREFIX + '/revoice/cancel', routeV2);
 
     // pdf.js 浏览器产物：前缀路由（worker / cmaps / fonts / wasm 都在这个目录下）
     offs.push(
@@ -3189,9 +3155,13 @@ export function apply(ctx) {
       }),
     );
 
-    route(ROUTE_PREFIX + '/storage', (req, res) => {
-      handleStorage(req, res);
-    });
+    // 2.0 M4：偏好、系列进度、设置/诊断、升级备份
+    route(ROUTE_PREFIX + '/series/progress', routeV2);
+    route(ROUTE_PREFIX + '/settings', routeV2);
+    route(ROUTE_PREFIX + '/diagnostics', routeV2);
+    route(ROUTE_PREFIX + '/backups', routeV2);
+    route(ROUTE_PREFIX + '/backups/delete', routeV2);
+    route(ROUTE_PREFIX + '/backups/open', routeV2);
 
     ctx.on('dispose', () => {
       for (const off of offs) {

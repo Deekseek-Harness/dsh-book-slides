@@ -1,9 +1,66 @@
 # 精讲台 · dsh-book-slides
 
-DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，勾几章交给模型写成幻灯片式精讲，
-左侧 PDF 原文、右侧讲稿同步播放。
+DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认一个 **Part**，由讲纲规划成 N 讲，
+逐讲生成并做可机检的接缝；播放时左侧 PDF 原文、右侧讲稿连播。**2.0 与 1.x 数据不兼容。**
 
-当前版本 **包 1.4.0 / 功能阶段 v1.6**（2026-11-04，含 v1.2 语音、v1.3 书档、v1.4 本地 ComfyUI 配图、v1.5 导出 PPT 与 v1.6 练习与复习；阶段号 ≠ 包版本）。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+**当前构建：包 `2.0.0-alpha.2` / 产品 `2.0` / 数据 schema `2`**（2026-11-06，M1–M4 完成；M5 的 P1 功能未开始）。
+变更记录 [CHANGELOG.md](CHANGELOG.md) · 实现进度与验收 [doc/2.0-实现进度.md](doc/2.0-实现进度.md) · 需求 [doc/requirements/规范需求2.0.md](doc/requirements/规范需求2.0.md)。
+
+## 2.0 预发布（alpha.2）
+
+> 2.0 是**不兼容重写**：同包名覆盖安装 1.x，同数据根 `~/.dsh/book-slides/`，只认 `meta.json.schema=2`。
+> 检测到 1.x 数据时自动把整根备份到同父目录 `book-slides.backup-<时间>/`，随后初始化空书架；**不迁移、不导入**，请重新导入 PDF。
+> 回滚：移走同根下的 2.0 数据，把备份目录重命名回 `book-slides/`。
+
+| 项 | 内容 |
+|---|---|
+| 包版本 | `2.0.0-alpha.2`（tag `v2.0.0-alpha.2`） |
+| 产品 / schema | 产品 `2.0`、数据 schema `2`、SRS 文档 v1.0 |
+| 已完成 | M1 数据根/导入/分章/书架 · M2 Part/briefs/讲纲 · M3 生成/预缝/后验缝/作业 · M4 播放器/连播/偏好/设置/语音 |
+| 未开始 | M5 书档、练习、配图、导出 PPT（P1）；M6 真书验收与发布 |
+| 兼容 | 不读 1.x 数据、不迁移、无独立单讲；1.x 最后版本仍是 1.4.0 |
+
+**2.0 流程（8 步）**
+
+1. 导入 PDF（只入库，不自动分章）。
+2. 「生成章节目录」：自动 / 目录 / 机械三选一；目录模式可指定页码范围并校准。
+3. 校准章节（起止页、合并、拆分、重命名），保存前校验覆盖与递增。
+4. 勾选一组章 →「确认此部分」落 `parts.json`（草稿预览不落盘）。
+5. 「预览讲纲」：看 N 讲、页数、时长、接缝句、术语与 `cut_warn`；可对草稿预览。
+6. 「保存为系列」→ 系列卡「开始生成讲义」：文本三阶段（不配音），进度可取消/续跑/重试/单讲重跑。
+7. 「缝合报告」：六项指标与一键确定性修复；`unstitched` 也可播放。
+8. 「继续听」进分屏播放器：左 PDF 视觉版式、右幻灯片，连播 / 系列目录 / 进度；系列卡「生成语音」独立配音（Qwen 或浏览器朗读）。
+
+**2.0 数据布局（同根）**
+
+```
+~/.dsh/book-slides/
+├── meta.json                ← schema=2
+├── preference.json          ← 分隔条/语速/静音/上次位置
+├── voice.json               ← 语音配置（0600）
+├── audio-cache/             ← TTS 缓存
+├── trash/<bookId>/          ← 软删除（7 天可恢复）
+└── books/<bookId>/
+    ├── book.json / pages.json / source.pdf / cover.svg
+    ├── chapters.json / parts.json / briefs.json
+    └── series/<seriesId>/
+        ├── series.json / stitch.json / progress.json
+        └── lectures/<n>/{lecture.json, slides.json, audio/…}
+```
+
+**2.0 验证**
+
+```powershell
+npm run test:v2     # 13 个文件 / 70 项，0 失败
+```
+
+覆盖 M1–M4：数据根与升级备份、导入/分章、Part/讲纲、逐讲生成/接缝、播放器、设置/偏好/诊断、语音与独立配音、系列删除、路由唯一注册。真书与真 Qwen 验收在 M6。
+
+## 1.x 使用说明（包 1.4.0 / 功能阶段 v1.6，冻结）
+
+> 以下是 1.4.0 的说明，保留用于回滚与对照。2.0 的安装命令相同（同包名覆盖安装），但数据与交互以本节之前的内容为准。
+
+1.x 最后版本 **包 1.4.0 / 功能阶段 v1.6**（2026-11-04，含 v1.2 语音、v1.3 书档、v1.4 本地 ComfyUI 配图、v1.5 导出 PPT 与 v1.6 练习与复习；阶段号 ≠ 包版本）。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 v1.6「练习与复习」：按章出题、模式驱动补题、即时判题、答错按需讲解、错题按遗忘节奏复习；数据落在 `practice/`，随书档一起走。
 
@@ -232,16 +289,20 @@ book-slides/
 
 ## 开发
 
-零构建：`index.js` 是普通 ESM，`client.js` 走 `window.__ModuleLoader__.load`，改完重启 DSH 生效。
+零构建：`index.js` 是普通 ESM，2.0 面板 `v2/client.js` 走 `window.__ModuleLoader__.load`，改完重启 DSH（或刷新面板）生效。
 
 ```powershell
 cd dsh-book-slides
 npm install
-npm test
+npm run test:v2   # 2.0 门禁
+npm test          # 1.4.0 冻结套件，仅作 1.x 回归参考
 ```
+
+> 2.0 替换了同名路由与数据模型，`npm test`（1.x）从 M1 起不再与当前实现一致；2.0 的验收以 `npm run test:v2` 与 [doc/2.0-实现进度.md](doc/2.0-实现进度.md) 为准。
 
 | 测试 | 跑什么 |
 |---|---|
+| `npm run test:v2` | **2.0 门禁**：13 个文件 / 70 项 —— 数据根/分章、Part/讲纲、生成/接缝、播放器、设置/偏好、语音/配音、系列删除、路由唯一注册 |
 | `node test/smoke.test.mjs` | 纯逻辑：正则、清洗、切章、存储、PDF 读取 |
 | `node test/server.test.mjs` | 起真服务：导入/书架/书封/Range/改名/删除 + 原文页/偏好/回收站清理 + pdf.js 资源转发 |
 | `node test/panel.test.mjs` | react-dom/server 渲染：书架、详情、生成进度、幻灯片舞台、PDF 窗格、高亮几何、播放器首屏 |
@@ -301,6 +362,9 @@ node test/books.gen.e2e.mjs "..\测试书籍\911780342-故事-材质-结构-风�
 | 文件 | 内容 |
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更、测试基线、已知限制 |
+| [doc/2.0-实现进度.md](doc/2.0-实现进度.md) | 2.0 M1–M4 进度、AC 证据、已知缺口与下一步 |
+| [doc/requirements/规范需求2.0.md](doc/requirements/规范需求2.0.md) | 2.0 SRS：Part/讲/系列、接缝、功能对等、发布门 |
+| [doc/requirements/2.0 版本关于“接缝”的探索.md](doc/requirements/2.0%20版本关于“接缝”的探索.md) | 接缝探索稿 v0.8（历史存档） |
 | [doc/requirements/规范需求.md](doc/requirements/规范需求.md) | v1.0 基线 + v1.1–v1.6 附录（目录切章、语音、书档、配图、PPT 导出、练习与复习） |
 | [doc/requirements/PPT导出-需求审阅.md](doc/requirements/PPT导出-需求审阅.md) | v1.5 导出 PPT 的评审过程、选项与已拍板默认值（已并入 SRS，仅存档） |
 | [doc/requirements/练习-需求审阅.md](doc/requirements/练习-需求审阅.md) | v1.6 练习与复习的评审过程与决策 D51–D61（已并入 SRS，仅存档） |

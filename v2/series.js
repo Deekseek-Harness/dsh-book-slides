@@ -246,3 +246,14 @@ export function listAllSeries() {
   }
   return out;
 }
+
+/**
+ * 删除系列目录（AC-130）：只删系列，不删书、不删 Part。
+ * 调用方负责先取消运行中作业；这里再兜一层，避免删到一半又被作业写回来。
+ */
+export function deleteSeries(seriesId) {
+  const found = findSeries(String(seriesId || ''));
+  if (!found) throw new SeriesError('E_NOT_FOUND', '找不到这个系列', '刷新列表后再试。');
+  fs.rmSync(found.dir, { recursive: true, force: true });
+  return found;
+}

@@ -150,6 +150,38 @@ export function createBook({ buffer, fileName, title, author, pages, rawPages })
   return book;
 }
 
+/**
+ * 系列概况：卡片要显示「K 个系列」与最近系列（FR-21.1）。
+ * 这里直接读 series/<id>/series.json，不 import v2/series.js —— 那边依赖 books.js，避免循环引用。
+ */
+function seriesSummary(bookDir) {
+  const root = path.join(bookDir, 'series');
+  let ids = [];
+  try {
+    ids = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return { count: 0, last: null };
+  }
+  const list = ids
+    .map((id) => readJson(path.join(root, id, 'series.json'), null))
+    .filter((item) => item && item.id);
+  if (!list.length) return { count: 0, last: null };
+  list.sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+  const last = list[0];
+  return {
+    count: list.length,
+    last: {
+      id: String(last.id),
+      title: String(last.title || ''),
+      status: String(last.status || ''),
+      stitch: String(last.stitch || 'unstitched'),
+      voiceStatus: String(last.voice_status || 'none'),
+      lectures: (last.lectures || []).length,
+      totalPages: Number(last.total_pages) || 0,
+    },
+  };
+}
+
 export function listBooks() {
   ensureRoot();
   let entries = [];
@@ -165,6 +197,7 @@ export function listBooks() {
     if (!loaded) continue;
     const book = loaded.book;
     const chapters = loaded.chapters;
+    const series = seriesSummary(loaded.dir);
     books.push({
       id: book.id,
       title: String(book.title || '未命名'),
@@ -174,8 +207,8 @@ export function listBooks() {
       chapters: loaded.chaptersBuilt ? chapters.length : 0,
       chaptersBuilt: loaded.chaptersBuilt,
       cover: loaded.cover,
-      seriesCount: 0,
-      lastSeries: null,
+      seriesCount: series.count,
+      lastSeries: series.last,
       sha256: String(book.sha256 || ''),
       importedAt: String(book.importedAt || ''),
       lastOpenedAt: String(book.lastOpenedAt || book.importedAt || ''),

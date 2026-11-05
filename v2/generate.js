@@ -802,6 +802,11 @@ export function cancelSeriesJob(seriesId) {
   return true;
 }
 
+/** 删除系列/书之前等待作业收口，避免删掉目录后又被作业写回来。 */
+export function isSeriesJobActive(seriesId) {
+  return !!activeJob(seriesId);
+}
+
 function normalizeScope(series, nums) {
   const all = (series.lectures || []).map((item) => Number(item.n)).sort((a, b) => a - b);
   if (!Array.isArray(nums) || !nums.length) return all;

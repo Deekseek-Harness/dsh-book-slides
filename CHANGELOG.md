@@ -3,26 +3,28 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
-## [2.0.0-alpha.1] - 2026-11-05
+## [2.0.0-alpha.2] - 2026-11-06
 
-2.0 预发布起点：首版需求规范落库，M1 后端骨架开始实现。
+M1–M4（P0）完成的可安装构建：数据根与书籍体验、Part 与讲纲、逐讲生成与接缝、播放/设置/偏好/语音。
+P1（M5：书档、练习、配图、导出 PPT）尚未开始；**数据与 1.x 不兼容**，同根首次启动会自动备份旧根。
 
-### 文档
+### 版本与环境
 
-- 新增 [规范需求2.0.md](doc/requirements/规范需求2.0.md)（文档 v1.0）：功能对等、Part/讲/系列、接缝、解耦契约、版本与预发布跟踪。
-- 新增 [2.0 版本关于“接缝”的探索.md](doc/requirements/2.0%20版本关于“接缝”的探索.md)（探索稿 v0.8）。
-- 版本四维：文档 `v1.0`、产品 `2.0`、插件包 `2.0.0-alpha.1`、数据 schema `2`。
+- 包 `2.0.0-alpha.2`（tag `v2.0.0-alpha.2`）、产品 `2.0`、数据 schema `2`、文档 v1.0。
+- 同包名 `dsh-book-slides` 覆盖 1.x；同根 `~/.dsh/book-slides/`，检测到旧 schema 自动备份到同父目录 `book-slides.backup-<时间>/`，原路径重建空书架，不迁移，需重新导入 PDF。
+- P0 功能对等（§2.5）P-0 ~ P-7、P-12、P-13 全部落地；M5 的 P-8 ~ P-11 不在本版。
+- 实现进度、AC 对照与已知缺口见 [doc/2.0-实现进度.md](doc/2.0-实现进度.md)。
 
-### 新增（M1 后端）
+### 新增（M1 数据根、导入、分章与书籍体验）
 
 - 2.0 数据根：同根 `schema=2`、旧 schema 自动备份、`/meta`。
 - 导入只入库（PDF/pages/book），分章与封面改为独立动作。
 - 分章：`auto/toc/mech` 可重跑、章校准、手动章保护；`toc` 支持 PDF 书签，无书签时读印刷目录（模型 + 校准 + `toc.json` 缓存，可离线重放）。
-- 书架、改名、软删除、回收站恢复与冲突、存储统计。
+- 书架、改名、软删除、回收站恢复与冲突、存储统计；卡片「⋯」菜单点外部 / 再点 / Esc 都能关，且不吞这次点击（AC-117）。
 - M1 客户端：书架、拖拽导入、分章构建、章校准、封面、回收站；目录模式可指定目录页码；深色模式使用 Canvas/DSH 主题变量，不再白底浅字。
 - M1 路由：`/meta`、`/import`、`/chapters/build`、`/chapters`、`/cover`、`/book`、`/trash`、`/file` 等。
 
-### 新增（M2）
+### 新增（M2 Part、briefs 与讲纲）
 
 - Part：`/parts`、`/part`、`/part/update`；非空/去重/front/48 章校验、两两不相交、冲突返回 conflicts。
 - briefs：模型生成 + `sections` 原文检索校验；失败回退“标题 + 首尾段”。
@@ -31,7 +33,7 @@
 - 系列：`POST /series` 只建 draft；`POST /series/plan` 写 plan；重复保存按幂等键复用/更新，不重复建系列。
 - M2 客户端：章节多选、Part 组头、冲突三选、讲纲居中预览、保存为系列。
 
-### 新增（M3）
+### 新增（M3 生成、预缝与后验缝）
 
 - 逐讲生成：`POST /series/start` 全量、`POST /series/lecture/generate` 单讲；文本三阶段 `structuring → validate → anchor`，不调 TTS，音频字段初始为 `null/none`。
 - 批预算：单批 ≤1.2 万字、单章超长按 8 千字切、批间 300 字承接；批检查点落 `lectures/<n>/batches/`，取消/重试只补未完成批。
@@ -40,7 +42,46 @@
 - 作业：`GET /series/job` 返回第 k/N 讲与页进度；`POST /series/cancel` 取消并保留已完成讲；`POST /series/resume` 跳过已 ready 讲；`POST /series/retry` 只重跑失败讲；启动时把 drafting/stitching 归一为 `interrupted`。
 - 单讲存储：`series/<id>/lectures/<n>/{lecture.json, slides.json, batches/}`；`GET /lecture` 读取讲义；N=1 系列同样走系列模型，缝合状态直接 `verified`。
 - M3 客户端：系列卡显示生成进度、取消/续跑/重试/单讲重新生成、逐讲状态与后验缝报告（含一键确定性修复）。
-- 测试：新增 `test/v2-m3.test.mjs`（AC-103 ~ AC-106、批预算、幂等）与 `test/v2-m3-server.test.mjs`（作业/取消/续跑/重试/单讲）；`npm run test:v2` 串起 M1–M3。
+
+### 新增（M4 播放、设置、偏好与语音）
+
+- 分屏播放器（FR-18 / AC-107 ~ AC-109、AC-123）：左 PDF 视觉版式（pdf.js，同源 vendor）、右幻灯片舞台（cover / content_text / quote）；`source_pages` 切页、`source_anchor` 段落高亮并滚入视野，未锚定显示「本页未定位到原句」；顶部页码 chip 与「打开原始 PDF」。
+- 配图位：点击/Enter/空格展开 `image_prompt`，可复制、可收起；翻页与跳讲自动收起（M5 接真配图）。
+- 系列连播：讲末页播完进 5 秒过渡卡（显示下一讲标题，可点击/空格跳过）；下一讲未就绪时提示并停在当前讲，后面还有就绪讲则跳过失败讲继续（记入提示）；N=1 隐藏系列目录与过渡卡。
+- 系列目录抽屉：列出 N 讲的标题、页数、已听页与状态，可跳讲、未就绪禁用。
+- 系列进度：`GET/POST /series/progress` 落 `progress.json`（当前讲/页 + 每讲已听最大页），显示「系列 24/42 页 · 第 2 讲 3/18 页」；同步 `preference.json` 的「上次打开」，书架「继续听」回到该讲该页且不自动播放。
+- 偏好（FR-21.7 / AC-127）：`GET/POST /preference` 记录分隔条比例、语速（0.8/1.0/1.2）、静音与上次位置；服务端夹紧（split 0.25–0.75、语速吸附到三档、页码非负）。
+- 语音（FR-23 / AC-126）：`GET/POST /voice`（Key 只回 `hasKey`/`apiKeyMask`，`voice.json` 0600）、`POST /voice/probe`（Qwen 回 WAV、浏览器回朗读参数）、`GET /audio?seriesId=&lecture=&i=` 支持 Range。
+- 独立配音（AC-137）：`POST /revoice` 只对 `ready/ready_degraded` 讲、返回 `jobId`；`GET /revoice/job` 有逐页进度；`POST /revoice/cancel` 幂等取消且不写半截音频字段；同系列同时只允许一个配音作业；同文本同音色命中 `audio-cache/` 不重复计费；失败页 `audio_provider="none"`、系列 `voice_status=partial`，未配置 Key 为 `none` + `E_TTS_UNCONFIGURED`，不自动回退浏览器。
+- 设置与运维（FR-21.5 / AC-118）：`GET /settings` 给出数据根、占用、回收站、升级备份列表与只读模型；`GET /diagnostics` 给出插件包版本、产品版本 `2.0`、schema、DSH/pdfjs 版本与最近 5 条错误（只含错误码与长度）；`GET /backups`、`POST /backups/delete`、`POST /backups/open` 管理同父目录 `book-slides.backup-*`；设置页四组（语音/模型只读/配图占位/存储与诊断）。
+- 系列删除（AC-130）：`DELETE /series` 先取消运行中作业（含配音）并等其收口，再删系列目录；书与 Part 保留、无游离讲。删除书时同样先取消该书全部作业。
+- 书架卡补「K 个系列」与「继续听」；`GET /books` 增加 `seriesCount`/`lastSeries`。
+
+### 修复（M4）
+
+- **播放器「配图位」点击无响应**：`SlideStage` 只画了静态占位，没有展开状态与点击处理；现改为可聚焦的配图位，点击/Enter/空格展开 `image_prompt`，支持「复制提示词」「收起」，翻页自动收起；同时让空格快捷键不再与按钮/配图位抢事件。
+
+### 测试与验证
+
+- `npm run test:v2`：13 个测试文件、70 项，**0 失败**；覆盖数据根/升级备份、导入分章、Part/讲纲、逐讲生成/预缝/后验缝、播放器（PDF 高亮/键盘/连播/目录/进度）、设置/偏好/备份/诊断、语音与独立配音、系列删除、书架菜单关闭、路由唯一注册。
+- 假模型与假 Qwen 端点走真 HTTP；真书（文科 + 技术）、真 Qwen 与三模式真 PDF 验收留到 M6。
+- 说明：`npm test` 是 1.x 冻结套件，从 M1 替换同名路由与数据模型起不再作为 2.0 门禁；2.0 以 `npm run test:v2` 为准。
+
+### 已知未完成（M5 / M6）
+
+- P1：书档导入/导出、练习与复习、ComfyUI 配图、导出 PPT（FR-19、FR-22、FR-24）。
+- `POST /series/replan`（`replanFrom(k)`，附录 B）按规范“本期未实现”。
+- 真书验收、发布门（AC-92 ~ AC-141 全绿）、版本/tag/meta 一致性检查（M6）。
+
+## [2.0.0-alpha.1] - 2026-11-05
+
+2.0 预发布起点：首版需求规范落库，代码尚未开始迁移。
+
+### 文档
+
+- 新增 [规范需求2.0.md](doc/requirements/规范需求2.0.md)（文档 v1.0）：功能对等、Part/讲/系列、接缝、解耦契约、版本与预发布跟踪。
+- 新增 [2.0 版本关于“接缝”的探索.md](doc/requirements/2.0%20版本关于“接缝”的探索.md)（探索稿 v0.8）。
+- 版本四维：文档 `v1.0`、产品 `2.0`、插件包 `2.0.0-alpha.1`、数据 schema `2`。
 
 ## [1.4.0] - 2026-11-04
 

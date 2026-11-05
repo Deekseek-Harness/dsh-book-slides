@@ -27,17 +27,41 @@ import {
 } from './books.js';
 import { ChapterError, buildBookChapters, saveBookChapters } from './chapters.js';
 import { PartError, deletePart, listParts, partChapterTexts, savePart, updatePart } from './parts.js';
-import { SeriesError, createSeries, findSeries, listSeries, persistSeries, savePlan } from './series.js';
+import {
+  SeriesError,
+  createSeries,
+  deleteSeries,
+  findSeries,
+  listSeries,
+  persistSeries,
+  savePlan,
+} from './series.js';
 import { buildPlan } from './plan.js';
 import {
   cancelSeriesJob,
   getSeriesJob,
+  isSeriesJobActive,
   resumeSeriesJob,
   startLectureJob,
   startSeriesJob,
 } from './generate.js';
 import { buildStitchReport, repairStitch, writeStitchReport } from './stitch.js';
 import { loadLecture } from './lectures.js';
+import { readPreference, writePreference } from './prefs.js';
+import { progressSummary, readProgress, saveProgress } from './progress.js';
+import {
+  cancelRevoiceJob,
+  cancelRevoiceJobsForSeries,
+  findAudioFile,
+  getRevoiceJob,
+  isRevoiceJobActive,
+  probeVoiceConfig,
+  saveVoice,
+  startRevoiceJob,
+  voicePayload,
+} from './voice.js';
+import { deleteBackup, diagnosticsPayload, listBackups, openBackup, settingsPayload } from './settings.js';
+import { recordError } from './errors.js';
 
 export const PREFIX = '/dsh-book-slides';
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -349,14 +373,25 @@ async function handleRename(req, res, url) {
   sendJson(res, 200, { ok: true, book });
 }
 
-function handleDelete(req, res, url) {
+async function handleDelete(req, res, url) {
   ensureRoot();
   const bookId = requireId(url);
+  // 删除书先取消该书所有作业（§6.11）；等它们收口，避免目录被移走后又被作业写回来
+  const seriesList = listSeries(bookId);
+  let cancelledJob = false;
+  for (const series of seriesList) {
+    if (cancelSeriesJob(series.id)) cancelledJob = true;
+    if (cancelRevoiceJobsForSeries(series.id) > 0) cancelledJob = true;
+  }
+  for (const series of seriesList) {
+    await waitJobIdle(series.id, 1500);
+    await waitRevoiceIdle(series.id, 1500);
+  }
   if (!trashBook(bookId)) {
     sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
     return;
   }
-  sendJson(res, 200, { ok: true, trashed: true });
+  sendJson(res, 200, { ok: true, trashed: true, cancelledJob });
 }
 
 function handleTrash(req, res) {
@@ -792,12 +827,246 @@ async function handleSeriesStitchRepair(req, res, options) {
   }
 }
 
+/* ------------------------------ M4: 播放 / 偏好 / 设置 / 语音 ------------------------------ */
+
+/** 通用文件流：带 Range（音频 seek 与断点续传都要）。 */
+function streamFile(req, res, file, type) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    sendError(res, 'E_NOT_FOUND', '找不到文件', '');
+    return;
+  }
+  const total = stat.size;
+  res.setHeader('content-type', type);
+  res.setHeader('accept-ranges', 'bytes');
+  res.setHeader('cache-control', 'no-store');
+  const range = String(req.headers.range || '');
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (!match) {
+    res.statusCode = 200;
+    res.setHeader('content-length', String(total));
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
+  let start = match[1] === '' ? null : Number(match[1]);
+  let end = match[2] === '' ? null : Number(match[2]);
+  if (start === null && end !== null) {
+    start = Math.max(0, total - end);
+    end = total - 1;
+  }
+  if (start === null) start = 0;
+  if (end === null || end >= total) end = total - 1;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= total) {
+    res.statusCode = 416;
+    res.setHeader('content-range', 'bytes */' + total);
+    res.end();
+    return;
+  }
+  res.statusCode = 206;
+  res.setHeader('content-range', 'bytes ' + start + '-' + end + '/' + total);
+  res.setHeader('content-length', String(end - start + 1));
+  fs.createReadStream(file, { start, end }).pipe(res);
+}
+
+function handlePreferenceGet(req, res) {
+  ensureRoot();
+  sendJson(res, 200, { ok: true, preference: readPreference() });
+}
+
+async function handlePreferencePost(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const preference = writePreference(body && body.preference && typeof body.preference === 'object' ? body.preference : body);
+  sendJson(res, 200, { ok: true, preference });
+}
+
+function handleSeriesProgressGet(req, res, url) {
+  ensureRoot();
+  const found = findSeriesOr404(res, url.searchParams.get('seriesId'));
+  if (!found) return;
+  const progress = progressSummary(found.series, readProgress(found.dir, found.series));
+  sendJson(res, 200, { ok: true, progress });
+}
+
+async function handleSeriesProgressPost(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  try {
+    const out = saveProgress({
+      series: found.series,
+      dir: found.dir,
+      lecture: Number(body.lecture) || 1,
+      slide: Number(body.slide) || 0,
+    });
+    sendJson(res, 200, { ok: true, progress: out.summary });
+  } catch (err) {
+    sendError(res, err.code || 'E_PROGRESS', err.message || '进度没存下来', err.hint || '');
+  }
+}
+
+function handleVoiceGet(req, res) {
+  ensureRoot();
+  sendJson(res, 200, Object.assign({ ok: true }, voicePayload()));
+}
+
+async function handleVoicePost(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    saveVoice(body && body.voice && typeof body.voice === 'object' ? body.voice : body);
+    sendJson(res, 200, Object.assign({ ok: true }, voicePayload()));
+  } catch (err) {
+    sendError(res, 'E_VOICE_SAVE', '语音配置没存下来', String((err && err.message) || err).slice(0, 200));
+  }
+}
+
+async function handleVoiceProbe(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const result = await probeVoiceConfig(body && body.text);
+  if (!result.ok) {
+    sendError(res, result.code || 'E_TTS_UNCONFIGURED', result.error || '语音不可用', result.hint || '');
+    return;
+  }
+  if (result.audio && Buffer.isBuffer(result.audio)) {
+    res.statusCode = 200;
+    res.setHeader('content-type', result.contentType || 'audio/wav');
+    res.setHeader('content-length', String(result.audio.length));
+    res.setHeader('cache-control', 'no-store');
+    res.end(result.audio);
+    return;
+  }
+  sendJson(res, 200, Object.assign({ ok: true }, result));
+}
+
+async function handleRevoice(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const out = startRevoiceJob({
+      seriesId: String(body.seriesId || ''),
+      lecture: body.lecture == null || body.lecture === 'all' ? null : Number(body.lecture),
+      force: body.force === true,
+      options: options || {},
+    });
+    sendJson(res, 200, { ok: true, jobId: out.jobId, scope: out.job.scope });
+  } catch (err) {
+    if (err && err.code) recordError(err.code, err.message);
+    sendError(res, err.code || 'E_TTS_FAIL', err.message || '配音没启动', err.hint || '');
+  }
+}
+
+function handleRevoiceJob(req, res, url) {
+  ensureRoot();
+  const job = getRevoiceJob(url.searchParams.get('jobId'));
+  if (!job) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个配音作业', '作业可能已完成并过期。');
+    return;
+  }
+  sendJson(res, 200, job);
+}
+
+async function handleRevoiceCancel(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const cancelled = cancelRevoiceJob(body.jobId);
+  sendJson(res, 200, { ok: true, cancelled });
+}
+
+function handleAudio(req, res, url) {
+  ensureRoot();
+  const found = findSeriesOr404(res, url.searchParams.get('seriesId'));
+  if (!found) return;
+  const lecture = Number(url.searchParams.get('lecture'));
+  const index = Number(url.searchParams.get('i'));
+  const hit = findAudioFile(found.dir, lecture, index);
+  if (!hit) {
+    sendError(res, 'E_NOT_FOUND', '这一页还没有音频', '先生成语音，或在播放器里用浏览器朗读。');
+    return;
+  }
+  streamFile(req, res, hit.file, hit.type);
+}
+
+function handleSettings(req, res, options) {
+  ensureRoot();
+  sendJson(res, 200, Object.assign({ ok: true }, settingsPayload(options.ctx || null)));
+}
+
+function handleDiagnostics(req, res) {
+  ensureRoot();
+  sendJson(res, 200, Object.assign({ ok: true }, diagnosticsPayload()));
+}
+
+function handleBackups(req, res) {
+  ensureRoot();
+  sendJson(res, 200, { ok: true, backups: listBackups(), parent: path.dirname(ROOT) });
+}
+
+async function handleBackupDelete(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const out = deleteBackup(body.name);
+    sendJson(res, 200, { ok: true, ...out, backups: listBackups() });
+  } catch (err) {
+    sendError(res, err.code || 'E_BACKUP', err.message || '删不掉这个备份', '');
+  }
+}
+
+async function handleBackupOpen(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const out = openBackup(body.name);
+    sendJson(res, 200, { ok: true, ...out });
+  } catch (err) {
+    sendError(res, err.code || 'E_BACKUP', err.message || '打不开这个备份', '');
+  }
+}
+
+/** 等系列作业收口后再删目录（最多 3 秒），避免作业把删掉的目录又写回来。 */
+async function waitJobIdle(seriesId, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (isSeriesJobActive(seriesId) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function waitRevoiceIdle(seriesId, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (isRevoiceJobActive(seriesId) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function handleSeriesDelete(req, res, url) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const seriesId = String(body.seriesId || (url && url.searchParams.get('seriesId')) || '');
+  const found = findSeriesOr404(res, seriesId);
+  if (!found) return;
+  const cancelledJob = cancelSeriesJob(found.series.id);
+  cancelRevoiceJobsForSeries(found.series.id);
+  if (cancelledJob) await waitJobIdle(found.series.id);
+  try {
+    deleteSeries(found.series.id);
+    sendJson(res, 200, { ok: true, seriesId: found.series.id, cancelledJob });
+  } catch (err) {
+    sendError(res, err.code || 'E_DELETE', err.message || '删不掉这个系列', '');
+  }
+}
+
 export async function routeM1(req, res, url, options = {}) {
   try {
     return await routeM1Inner(req, res, url, options);
   } catch (err) {
+    const code = err && err.code ? err.code : 'E_INTERNAL';
+    recordError(code, (err && err.message) || '内部错误');
     if (!res.headersSent) {
-      const code = err && err.code ? err.code : 'E_INTERNAL';
       sendError(res, code, (err && err.message) || '内部错误', (err && err.hint) || '');
     } else {
       try {
@@ -843,6 +1112,22 @@ async function routeM1Inner(req, res, url, options = {}) {
     }
     if (req.method === 'GET') {
       handleSeriesGet(req, res, url);
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      await handleSeriesDelete(req, res, url);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/series/progress') {
+    if (req.method === 'GET') {
+      handleSeriesProgressGet(req, res, url);
+      return true;
+    }
+    if (req.method === 'POST') {
+      await handleSeriesProgressPost(req, res);
       return true;
     }
     sendError(res, 'E_METHOD', '不支持的方法', '');
@@ -892,6 +1177,70 @@ async function routeM1Inner(req, res, url, options = {}) {
     handleBriefsGet(req, res, url);
     return true;
   }
+  if (pathname === PREFIX + '/preference') {
+    if (req.method === 'GET') {
+      handlePreferenceGet(req, res);
+      return true;
+    }
+    if (req.method === 'POST') {
+      await handlePreferencePost(req, res);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/voice') {
+    if (req.method === 'GET') {
+      handleVoiceGet(req, res);
+      return true;
+    }
+    if (req.method === 'POST') {
+      await handleVoicePost(req, res);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/voice/probe') {
+    await handleVoiceProbe(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/revoice') {
+    await handleRevoice(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/revoice/job') {
+    handleRevoiceJob(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/revoice/cancel') {
+    await handleRevoiceCancel(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/audio') {
+    handleAudio(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/settings') {
+    handleSettings(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/diagnostics') {
+    handleDiagnostics(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/backups') {
+    handleBackups(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/backups/delete') {
+    await handleBackupDelete(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/backups/open') {
+    await handleBackupOpen(req, res);
+    return true;
+  }
   if (pathname === PREFIX + '/meta') {
     handleMeta(req, res);
     return true;
@@ -906,7 +1255,7 @@ async function routeM1Inner(req, res, url, options = {}) {
       return true;
     }
     if (req.method === 'DELETE') {
-      handleDelete(req, res, url);
+      await handleDelete(req, res, url);
       return true;
     }
     if (req.method === 'PATCH') {
