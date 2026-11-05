@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import { buildChapters as heuristicChapters, cleanPages } from '../text.js';
 import { extractOutline } from './pdf.js';
+import { parsePrintedToc } from './toc.js';
 import { loadBook, writeChapters } from './books.js';
 
 export class ChapterError extends Error {
@@ -135,7 +136,7 @@ function hasManual(chapters) {
   return (Array.isArray(chapters) ? chapters : []).some((c) => c && c.manual);
 }
 
-export async function buildBookChapters(bookId, mode = 'auto', { force = false } = {}) {
+export async function buildBookChapters(bookId, mode = 'auto', { force = false, ctx = null, from = 0, to = 0 } = {}) {
   const loaded = loadBook(bookId);
   if (!loaded) throw new ChapterError('E_NOT_FOUND', '找不到这本书', '书架里可能已经删掉了。');
   if (hasManual(loaded.chapters) && !force) {
@@ -151,17 +152,40 @@ export async function buildBookChapters(bookId, mode = 'auto', { force = false }
   const warnings = [];
   let chapters = [];
   let source = mode;
+  let tocMeta = null;
 
   if (mode === 'mech') {
     chapters = mechChapters(clean);
   } else if (mode === 'toc') {
+    // 1) PDF 书签优先；2) 没有书签时读印刷目录；3) 都失败回退自动分章
     try {
       const buffer = fs.readFileSync(path.join(loaded.dir, 'source.pdf'));
       const outline = await extractOutline(buffer);
       chapters = outlineChapters(outline, clean);
-      if (!chapters.length) warnings.push('没有可用的 PDF 书签，已回退自动分章。');
-    } catch (err) {
-      warnings.push('读取 PDF 书签失败，已回退自动分章。');
+    } catch {
+      warnings.push('读取 PDF 书签失败，尝试印刷目录。');
+    }
+    if (!chapters.length) {
+      const printed = await parsePrintedToc({
+        ctx,
+        book: loaded.book,
+        pages: clean,
+        dir: loaded.dir,
+        from,
+        to,
+        force,
+      });
+      if (printed && printed.chapters && printed.chapters.length >= 2) {
+        chapters = printed.chapters;
+        warnings.push(...(printed.warnings || []));
+        tocMeta = printed.toc;
+        source = 'toc';
+      } else if (printed) {
+        warnings.push(...(printed.warnings || []));
+        tocMeta = printed.toc;
+      } else {
+        warnings.push('没有 PDF 书签，印刷目录也不可用；已回退自动分章。');
+      }
     }
     if (!chapters.length) {
       chapters = heuristicChapters(clean);
@@ -184,7 +208,7 @@ export async function buildBookChapters(bookId, mode = 'auto', { force = false }
     if (!c.source || c.source === 'manual') c.source = source;
   }
   writeChapters(bookId, chapters, source);
-  return { chapters, source, mode, warnings, confidence: source === 'toc' ? 0.95 : 0.7 };
+  return { chapters, source, mode, warnings, confidence: source === 'toc' ? 0.95 : 0.7, toc: tocMeta };
 }
 
 export function saveBookChapters(bookId, chapters) {

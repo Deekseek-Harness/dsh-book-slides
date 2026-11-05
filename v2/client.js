@@ -70,6 +70,7 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-progress{height:4px;background:var(--blm-line);border-radius:99px;overflow:hidden;margin:10px 0}
 .blm-progress i{display:block;height:100%;background:var(--blm-accent);transition:width .2s}
 .blm-select{border:1px solid var(--blm-line);border-radius:6px;padding:5px 8px;font:inherit;background:var(--blm-card);color:var(--blm-text);color-scheme:inherit}
+.blm-num{width:86px;border:1px solid var(--blm-line);border-radius:6px;padding:5px 7px;font:inherit;background:var(--blm-card);color:var(--blm-text);color-scheme:inherit}
 .blm-trash{position:absolute;inset:0;background:var(--blm-bg);color:var(--blm-text);z-index:10;display:flex;flex-direction:column}
 .blm-trash-list{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
 .blm-trash-row{border:1px solid var(--blm-line);border-radius:8px;padding:9px 10px;display:flex;align-items:center;gap:8px;background:var(--blm-card)}
@@ -251,6 +252,8 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
       const [loading, setLoading] = useState(true);
       const [busy, setBusy] = useState(false);
       const [mode, setMode] = useState('auto');
+      const [tocFrom, setTocFrom] = useState('');
+      const [tocTo, setTocTo] = useState('');
       const [progress, setProgress] = useState(0);
       const [draft, setDraft] = useState([]);
       const [editing, setEditing] = useState(false);
@@ -297,7 +300,12 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
           const out = await api('/chapters/build', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ bookId, mode }),
+            body: JSON.stringify({
+              bookId,
+              mode,
+              from: mode === 'toc' ? Number(tocFrom) || 0 : 0,
+              to: mode === 'toc' ? Number(tocTo) || 0 : 0,
+            }),
           });
           setProgress(1);
           const warn = Array.isArray(out.warnings) && out.warnings.length ? '；' + out.warnings.join(' ') : '';
@@ -371,9 +379,16 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
                 { className: 'blm-row' },
                 h('select', { className: 'blm-select', value: mode, onChange: (e) => setMode(e.target.value), disabled: busy },
                   h('option', { value: 'auto' }, '自动（书签/标题/机械）'),
-                  h('option', { value: 'toc' }, '目录（PDF 书签）'),
+                  h('option', { value: 'toc' }, '目录（书签或印刷目录）'),
                   h('option', { value: 'mech' }, '机械切分'),
                 ),
+                mode === 'toc'
+                  ? h(React.Fragment, null,
+                      h('input', { className: 'blm-num', type: 'number', min: 1, placeholder: '目录起始页', value: tocFrom, onChange: (e) => setTocFrom(e.target.value), disabled: busy }),
+                      h('span', { className: 'blm-dim' }, '–'),
+                      h('input', { className: 'blm-num', type: 'number', min: 1, placeholder: '目录结束页', value: tocTo, onChange: (e) => setTocTo(e.target.value), disabled: busy }),
+                    )
+                  : null,
                 h('button', { className: 'blm-btn primary', disabled: busy, onClick: build }, busy ? '正在分章…' : '生成章节目录'),
               ),
               h('div', { className: 'blm-progress' }, h('i', { style: { width: Math.round(progress * 100) + '%' } })),

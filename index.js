@@ -2761,7 +2761,7 @@ export function apply(ctx) {
     };
 
     const routeV2 = (req, res) => {
-      routeM1(req, res, new URL(req.url || '/', 'http://localhost')).then((handled) => {
+      routeM1(req, res, new URL(req.url || '/', 'http://localhost'), { ctx }).then((handled) => {
         if (!handled) {
           res.statusCode = 404;
           res.end();

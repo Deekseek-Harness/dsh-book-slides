@@ -236,7 +236,7 @@ async function handleImport(req, res) {
   }
 }
 
-async function handleBuildChapters(req, res) {
+async function handleBuildChapters(req, res, ctx) {
   ensureRoot();
   const body = await readJsonBody(req);
   if (!isValidId(String(body.bookId || ''))) {
@@ -246,6 +246,9 @@ async function handleBuildChapters(req, res) {
   try {
     const result = await buildBookChapters(String(body.bookId), String(body.mode || 'auto'), {
       force: body.force === true,
+      ctx: ctx || null,
+      from: Number(body.from) || 0,
+      to: Number(body.to) || 0,
     });
     sendJson(res, 200, { ok: true, ...result });
   } catch (err) {
@@ -380,9 +383,9 @@ function handleStorage(req, res) {
   sendJson(res, 200, { ok: true, ...storageStats() });
 }
 
-export async function routeM1(req, res, url) {
+export async function routeM1(req, res, url, options = {}) {
   try {
-    return await routeM1Inner(req, res, url);
+    return await routeM1Inner(req, res, url, options);
   } catch (err) {
     if (!res.headersSent) {
       const code = err && err.code ? err.code : 'E_INTERNAL';
@@ -398,7 +401,7 @@ export async function routeM1(req, res, url) {
   }
 }
 
-async function routeM1Inner(req, res, url) {
+async function routeM1Inner(req, res, url, options = {}) {
   const pathname = url.pathname;
   if (pathname === PREFIX + '/meta') {
     handleMeta(req, res);
@@ -433,7 +436,7 @@ async function routeM1Inner(req, res, url) {
     return true;
   }
   if (pathname === PREFIX + '/chapters/build') {
-    await handleBuildChapters(req, res);
+    await handleBuildChapters(req, res, options.ctx);
     return true;
   }
   if (pathname === PREFIX + '/chapters') {
