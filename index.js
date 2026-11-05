@@ -55,6 +55,8 @@ import {
   verifyChapters,
 } from './tocparse.js';
 import { coverSvg } from './cover.js';
+import { routeM1 } from './v2/api.js';
+import { ensureRoot } from './v2/root.js';
 import { runBookCheck } from './check.js';
 import {
   cancelJob,
@@ -177,6 +179,11 @@ function pdfjsRoot() {
 }
 
 export const ROUTE_PREFIX = '/dsh-book-slides';
+export const ROUTE_META = ROUTE_PREFIX + '/meta';
+export const ROUTE_CHAPTERS_BUILD = ROUTE_PREFIX + '/chapters/build';
+export const ROUTE_TRASH = ROUTE_PREFIX + '/trash';
+export const ROUTE_TRASH_RESTORE = ROUTE_PREFIX + '/trash/restore';
+export const ROUTE_STORAGE = ROUTE_PREFIX + '/storage';
 export const ROUTE_BOOKS = ROUTE_PREFIX + '/books';
 export const ROUTE_BOOK = ROUTE_PREFIX + '/book';
 export const ROUTE_IMPORT = ROUTE_PREFIX + '/import';
@@ -2700,7 +2707,7 @@ function cleanupImportStaging() {
 }
 
 export function apply(ctx) {
-  ensureDirs();
+  ensureRoot();
   try {
     cleanupImportStaging();
   } catch {
@@ -2753,58 +2760,34 @@ export function apply(ctx) {
       offs.push(scoped.webServer.register({ kind: 'exact', path: path, handler: guard(handler) }));
     };
 
-    route(ROUTE_BOOKS, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handleBooks(req, res);
-    });
+    const routeV2 = (req, res) => {
+      routeM1(req, res, new URL(req.url || '/', 'http://localhost')).then((handled) => {
+        if (!handled) {
+          res.statusCode = 404;
+          res.end();
+        }
+      });
+    };
 
-    route(ROUTE_BOOK, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handleBook(req, res);
-    });
+    route(ROUTE_BOOKS, routeV2);
 
-    route(ROUTE_IMPORT, (req, res, headers) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImport(req, res, headers);
-    });
+    route(ROUTE_META, routeV2);
+    route(ROUTE_CHAPTERS_BUILD, routeV2);
+    route(ROUTE_TRASH, routeV2);
+    route(ROUTE_TRASH_RESTORE, routeV2);
+    route(ROUTE_STORAGE, routeV2);
 
-    route(ROUTE_RENAME, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleRename(req, res);
-    });
+    route(ROUTE_BOOK, routeV2);
 
-    route(ROUTE_DELETE, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleDelete(req, res);
-    });
+    route(ROUTE_IMPORT, routeV2);
 
-    route(ROUTE_FILE, (req, res) => {
-      handleFile(req, res);
-    });
+    route(ROUTE_RENAME, routeV2);
 
-    route(ROUTE_COVER, (req, res) => {
-      handleCover(req, res);
-    });
+    route(ROUTE_DELETE, routeV2);
+
+    route(ROUTE_FILE, routeV2);
+
+    route(ROUTE_COVER, routeV2);
 
     route(ROUTE_REPARSE, (req, res) => {
       if (!methodIs(req, 'POST')) {
@@ -2815,14 +2798,7 @@ export function apply(ctx) {
       return handleReparse(req, res);
     });
 
-    route(ROUTE_CHAPTERS, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleChapters(req, res);
-    });
+    route(ROUTE_CHAPTERS, routeV2);
 
     route(ROUTE_TOC, (req, res) => {
       if (!methodIs(req, 'GET')) {
@@ -3110,14 +3086,7 @@ export function apply(ctx) {
       res.end();
     });
 
-    route(ROUTE_TRASH_CLEAR, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleTrashClear(req, res);
-    });
+    route(ROUTE_TRASH_CLEAR, routeV2);
 
     route(ROUTE_EXPORT, (req, res) => {
       if (!methodIs(req, 'GET')) {
