@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { PdfError, PDF_ERROR, extractPages, guessTitle, totalChars } from '../pdfread.js';
 import { coverSvg } from '../cover.js';
-import { ROOT, ensureRoot, getMeta, packageVersion } from './root.js';
+import { ROOT, ensureRoot, getMeta, packageVersion, readJson } from './root.js';
 import {
   clearTrash,
   createBook,
@@ -26,6 +26,9 @@ import {
   writeCover,
 } from './books.js';
 import { ChapterError, buildBookChapters, saveBookChapters } from './chapters.js';
+import { PartError, deletePart, getPart, listParts, partChapterTexts, savePart, updatePart } from './parts.js';
+import { SeriesError, createSeries, findSeries, listSeries, loadSeries, savePlan } from './series.js';
+import { buildPlan } from './plan.js';
 
 export const PREFIX = '/dsh-book-slides';
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -383,6 +386,195 @@ function handleStorage(req, res) {
   sendJson(res, 200, { ok: true, ...storageStats() });
 }
 
+/* ------------------------------ M2: Part / plan / series ------------------------------ */
+
+function chapterTextsForNumbers(bookId, numbers) {
+  const loaded = loadBook(bookId);
+  if (!loaded) return null;
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  const wanted = new Set((numbers || []).map(Number));
+  const chapters = loaded.chapters.filter((c) => wanted.has(Number(c.n))).map((c) => {
+    const text = (Array.isArray(pages) ? pages : [])
+      .filter((p) => Number(p.page) >= Number(c.from) && Number(p.page) <= Number(c.to))
+      .map((p) => String(p.text || ''))
+      .join('\n');
+    return { n: Number(c.n), title: String(c.title || ''), from: Number(c.from), to: Number(c.to), chars: Number(c.chars) || text.length, text };
+  });
+  return { loaded, chapters };
+}
+
+function handleParts(req, res, url) {
+  ensureRoot();
+  const bookId = requireId(url);
+  sendJson(res, 200, { ok: true, parts: listParts(bookId) });
+}
+
+async function handlePartPost(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  try {
+    const part = savePart({
+      bookId: String(body.bookId || ''),
+      chapters: body.chapters,
+      title: body.title,
+      partId: String(body.partId || ''),
+      source: String(body.source || 'manual'),
+    });
+    sendJson(res, 200, { ok: true, part });
+  } catch (err) {
+    if (err instanceof PartError) {
+      sendJson(res, 200, { ok: false, code: err.code, message: err.message, hint: err.hint, conflicts: err.conflicts || [] });
+      return;
+    }
+    throw err;
+  }
+}
+
+async function handlePartUpdate(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  try {
+    const part = updatePart({
+      bookId: String(body.bookId || ''),
+      partId: String(body.partId || ''),
+      title: body.title,
+      addChapters: Array.isArray(body.addChapters) ? body.addChapters : [],
+      removeChapters: Array.isArray(body.removeChapters) ? body.removeChapters : [],
+    });
+    sendJson(res, 200, { ok: true, part });
+  } catch (err) {
+    if (err instanceof PartError) {
+      sendJson(res, 200, { ok: false, code: err.code, message: err.message, hint: err.hint, conflicts: err.conflicts || [] });
+      return;
+    }
+    throw err;
+  }
+}
+
+function handlePartDelete(req, res, url) {
+  ensureRoot();
+  const bookId = String(url.searchParams.get('bookId') || '');
+  const partId = String(url.searchParams.get('partId') || '');
+  try {
+    deletePart(bookId, partId);
+    sendJson(res, 200, { ok: true });
+  } catch (err) {
+    if (err instanceof PartError) {
+      sendError(res, err.code, err.message, err.hint);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function handlePlanPreview(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 8 * 1024 * 1024);
+  const bookId = String(body.bookId || '');
+  if (!isValidId(bookId)) {
+    sendError(res, 'E_BAD_ID', '书 ID 非法', '');
+    return;
+  }
+  let ctxData = null;
+  if (body.partId) {
+    ctxData = partChapterTexts(bookId, String(body.partId));
+    if (!ctxData) {
+      sendError(res, 'E_PART_NOT_FOUND', '找不到这个 Part', '');
+      return;
+    }
+  } else {
+    ctxData = chapterTextsForNumbers(bookId, Array.isArray(body.chapters) ? body.chapters : []);
+  }
+  if (!ctxData || !ctxData.chapters.length) {
+    sendError(res, 'E_PART_EMPTY', '至少选 1 章', '');
+    return;
+  }
+  const part = ctxData.part || { title: String(body.title || '草稿'), chapters: ctxData.chapters.map((c) => c.n) };
+  try {
+    const out = await buildPlan({ ctx: options.ctx || null, book: ctxData.loaded.book, dir: ctxData.loaded.dir, part, chapters: ctxData.chapters });
+    sendJson(res, 200, {
+      ok: true,
+      plan: out.plan,
+      warnings: out.warnings || [],
+      briefsSource: out.briefs ? (out.briefs.fallback ? 'rule' : 'model') : 'none',
+      partId: body.partId || null,
+    });
+  } catch (err) {
+    sendError(res, err.code || 'E_PLAN_FAILED', err.message || '讲纲生成失败', err.hint || '');
+  }
+}
+
+async function handleSeriesCreate(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 8 * 1024 * 1024);
+  try {
+    const series = createSeries({
+      bookId: String(body.bookId || ''),
+      partId: String(body.partId || ''),
+      title: body.title,
+      plan: body.plan || null,
+    });
+    sendJson(res, 200, { ok: true, seriesId: series.id, status: series.status, series });
+  } catch (err) {
+    if (err instanceof SeriesError) {
+      sendError(res, err.code, err.message, err.hint);
+      return;
+    }
+    throw err;
+  }
+}
+
+function handleSeriesGet(req, res, url) {
+  ensureRoot();
+  const seriesId = String(url.searchParams.get('seriesId') || '');
+  if (seriesId) {
+    const found = findSeries(seriesId);
+    if (!found) {
+      sendError(res, 'E_NOT_FOUND', '找不到这个系列', '');
+      return;
+    }
+    sendJson(res, 200, { ok: true, series: found.series });
+    return;
+  }
+  const bookId = String(url.searchParams.get('bookId') || '');
+  if (!isValidId(bookId)) {
+    sendError(res, 'E_BAD_ID', '书 ID 非法', '');
+    return;
+  }
+  sendJson(res, 200, { ok: true, series: listSeries(bookId) });
+}
+
+async function handleSeriesPlan(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 8 * 1024 * 1024);
+  try {
+    const out = await savePlan({
+      seriesId: String(body.seriesId || ''),
+      plan: body.plan || null,
+      ctx: options.ctx || null,
+      force: body.force === true,
+    });
+    sendJson(res, 200, { ok: true, series: out.series, plan: out.series, warnings: out.warnings || [] });
+  } catch (err) {
+    if (err instanceof SeriesError) {
+      sendError(res, err.code, err.message, err.hint);
+      return;
+    }
+    sendError(res, err.code || 'E_PLAN_FAILED', err.message || '讲纲保存失败', err.hint || '');
+  }
+}
+
+function handleBriefsGet(req, res, url) {
+  ensureRoot();
+  const bookId = requireId(url);
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  sendJson(res, 200, { ok: true, briefs: readJson(path.join(loaded.dir, 'briefs.json'), null) });
+}
+
 export async function routeM1(req, res, url, options = {}) {
   try {
     return await routeM1Inner(req, res, url, options);
@@ -403,6 +595,50 @@ export async function routeM1(req, res, url, options = {}) {
 
 async function routeM1Inner(req, res, url, options = {}) {
   const pathname = url.pathname;
+  if (pathname === PREFIX + '/parts') {
+    handleParts(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/part') {
+    if (req.method === 'POST') {
+      await handlePartPost(req, res);
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      handlePartDelete(req, res, url);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/part/update') {
+    await handlePartUpdate(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/plan/preview') {
+    await handlePlanPreview(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/series') {
+    if (req.method === 'POST') {
+      await handleSeriesCreate(req, res);
+      return true;
+    }
+    if (req.method === 'GET') {
+      handleSeriesGet(req, res, url);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/series/plan') {
+    await handleSeriesPlan(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/briefs') {
+    handleBriefsGet(req, res, url);
+    return true;
+  }
   if (pathname === PREFIX + '/meta') {
     handleMeta(req, res);
     return true;

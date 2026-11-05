@@ -60,13 +60,29 @@ body[data-ds-dark-theme] .blm-root{color-scheme:dark}
 .blm-dim{color:var(--blm-dim)}
 .blm-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .blm-chapters{border:1px solid var(--blm-line);border-radius:10px;overflow:hidden;margin-top:12px;background:var(--blm-card)}
-.blm-chapter{display:grid;grid-template-columns:38px 1fr 62px 62px 34px;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--blm-line);font-size:12px;color:var(--blm-text)}
+.blm-parts{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.blm-part{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--blm-line);border-radius:8px;background:color-mix(in oklab,currentColor 3%,transparent)}
+.blm-part-main{flex:1;min-width:0}
+.blm-chapter{display:grid;grid-template-columns:22px 34px 1fr 52px 52px 72px;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--blm-line);font-size:12px;color:var(--blm-text)}
+.blm-chapter.owns{background:color-mix(in oklab,currentColor 4%,transparent)}
+.blm-chapter input[type="checkbox"]{width:14px;height:14px;margin:0;padding:0;accent-color:var(--blm-accent)}
+.blm-selectbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;position:sticky;bottom:0;padding:9px 0;margin-top:10px;background:var(--blm-bg);border-top:1px solid var(--blm-line);z-index:3}
+.blm-plan{border:1px solid var(--blm-line);border-radius:10px;padding:10px 12px;margin-top:14px;background:color-mix(in oklab,currentColor 3%,transparent)}
+.blm-plan-modal{max-height:84vh;overflow:auto;width:100%;max-width:760px;margin:0;z-index:31;background:var(--blm-card)}
+.blm-plan-line{margin:6px 0;font-size:12px}
+.blm-plan-lectures{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.blm-plan-lec{border-top:1px dashed var(--blm-line);padding-top:6px;font-size:12px}
+.blm-series{margin-top:14px;display:flex;flex-direction:column;gap:6px}
+.blm-series-row{display:flex;align-items:center;gap:8px;border:1px solid var(--blm-line);border-radius:8px;padding:7px 10px;background:var(--blm-card)}
+.blm-modal-mask{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.32);display:flex;align-items:center;justify-content:center;padding:18px}
+.blm-modal{width:100%;max-width:420px;background:var(--blm-card);color:var(--blm-text);border:1px solid var(--blm-line);border-radius:12px;padding:14px;box-shadow:0 18px 44px rgba(0,0,0,.32)}
 .blm-chapter:last-child{border-bottom:0}
 .blm-chapter input{width:100%;box-sizing:border-box;border:1px solid var(--blm-line);border-radius:5px;padding:3px 5px;font:inherit;background:var(--blm-card);color:inherit;color-scheme:inherit}
 .blm-chapter .t{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
 .blm-toast{position:absolute;left:14px;right:14px;bottom:12px;background:#222;color:#fff;border-radius:8px;padding:8px 12px;font-size:12px;z-index:20;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 .blm-error{background:color-mix(in oklab,#c62828 10%,transparent);border:1px solid color-mix(in oklab,#c62828 30%,transparent);color:#c62828;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:12px}
 body[data-ds-dark-theme] .blm-error{color:#ff8a80}
+.blm-note{background:color-mix(in oklab,currentColor 5%,transparent);border:1px solid var(--blm-line);color:var(--blm-dim);border-radius:8px;padding:8px 10px;margin-top:8px;font-size:12px}
 .blm-progress{height:4px;background:var(--blm-line);border-radius:99px;overflow:hidden;margin:10px 0}
 .blm-progress i{display:block;height:100%;background:var(--blm-accent);transition:width .2s}
 .blm-select{border:1px solid var(--blm-line);border-radius:6px;padding:5px 8px;font:inherit;background:var(--blm-card);color:var(--blm-text);color-scheme:inherit}
@@ -249,6 +265,8 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 
     function Detail({ bookId, onBack, onChanged, notify }) {
       const [data, setData] = useState(null);
+      const [parts, setParts] = useState([]);
+      const [series, setSeries] = useState([]);
       const [loading, setLoading] = useState(true);
       const [busy, setBusy] = useState(false);
       const [mode, setMode] = useState('auto');
@@ -257,13 +275,25 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
       const [progress, setProgress] = useState(0);
       const [draft, setDraft] = useState([]);
       const [editing, setEditing] = useState(false);
+      const [selected, setSelected] = useState([]);
+      const [plan, setPlan] = useState(null);
+      const [planPartId, setPlanPartId] = useState('');
+      const [planWarnings, setPlanWarnings] = useState([]);
+      const [savingSeries, setSavingSeries] = useState(false);
+      const [conflict, setConflict] = useState(null);
 
       const load = useCallback(async () => {
         setLoading(true);
         try {
-          const out = await api('/book?bookId=' + encodeURIComponent(bookId));
+          const [out, partOut, seriesOut] = await Promise.all([
+            api('/book?bookId=' + encodeURIComponent(bookId)),
+            api('/parts?bookId=' + encodeURIComponent(bookId)),
+            api('/series?bookId=' + encodeURIComponent(bookId)),
+          ]);
           setData(out);
           setDraft(out.chapters || []);
+          setParts(partOut.parts || []);
+          setSeries(seriesOut.series || []);
         } catch (err) {
           notify(err.message);
         } finally {
@@ -310,6 +340,7 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
           setProgress(1);
           const warn = Array.isArray(out.warnings) && out.warnings.length ? '；' + out.warnings.join(' ') : '';
           notify('已生成 ' + out.chapters.length + ' 章' + warn);
+          setSelected([]);
           await load();
           onChanged();
         } catch (err) {
@@ -340,12 +371,148 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
         }
       };
 
+      const postPart = async (chapters, partId = '') => {
+        const out = await api('/part', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ bookId, chapters, partId, source: 'manual' }),
+        });
+        notify('已确认 Part《' + out.part.title + '》');
+        setConflict(null);
+        setSelected([]);
+        await load();
+      };
+
+      const confirmPart = async () => {
+        if (!selected.length) return;
+        setBusy(true);
+        try {
+          await postPart(selected);
+        } catch (err) {
+          const conflicts = err.detail && err.detail.conflicts;
+          if (err.code === 'E_PART_CONFLICT' && Array.isArray(conflicts) && conflicts.length) {
+            setConflict({ chapters: selected.slice(), conflicts });
+          } else {
+            notify(err.message);
+          }
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const mergeConflict = async () => {
+        if (!conflict) return;
+        setBusy(true);
+        try {
+          await postPart(conflict.chapters, conflict.conflicts[0].partId);
+        } catch (err) {
+          if (err.code === 'E_PART_CONFLICT' && err.detail && err.detail.conflicts) {
+            setConflict({ chapters: conflict.chapters, conflicts: err.detail.conflicts });
+          } else {
+            notify(err.message);
+          }
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const removeConflict = async () => {
+        if (!conflict) return;
+        setBusy(true);
+        try {
+          for (const item of conflict.conflicts) {
+            try {
+              await api('/part/update', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ bookId, partId: item.partId, removeChapters: item.chapters }),
+              });
+            } catch (err) {
+              if (err.code === 'E_PART_EMPTY') {
+                await api('/part?bookId=' + encodeURIComponent(bookId) + '&partId=' + encodeURIComponent(item.partId), { method: 'DELETE' });
+              } else {
+                throw err;
+              }
+            }
+          }
+          await postPart(conflict.chapters);
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const previewPlan = async (part) => {
+        setBusy(true);
+        try {
+          const body = part
+            ? { bookId, partId: part.id }
+            : { bookId, chapters: selected };
+          const out = await api('/plan/preview', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          setPlan(out.plan);
+          setPlanWarnings(out.warnings || []);
+          setPlanPartId(part ? part.id : '');
+          if (!part) notify('这是草稿讲纲；保存为系列前先确认 Part。');
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const saveSeries = async () => {
+        if (!plan || !planPartId) {
+          notify('先确认 Part，再从 Part 组预览讲纲。');
+          return;
+        }
+        setSavingSeries(true);
+        try {
+          const out = await api('/series', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ bookId, partId: planPartId, plan }),
+          });
+          notify('已创建系列（' + out.status + '）');
+          setPlan(null);
+          setPlanWarnings([]);
+          await load();
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setSavingSeries(false);
+        }
+      };
+
+      const removePart = async (part) => {
+        if (!window.confirm('删除 Part《' + part.title + '》？系列会保留章快照。')) return;
+        try {
+          await api('/part?bookId=' + encodeURIComponent(bookId) + '&partId=' + encodeURIComponent(part.id), { method: 'DELETE' });
+          notify('Part 已删除');
+          setSelected([]);
+          await load();
+        } catch (err) {
+          notify(err.message);
+        }
+      };
+
       if (loading && !data) return h('div', { className: 'blm-body' }, h('div', { className: 'blm-dim' }, '加载中…'));
       if (!data) return h('div', { className: 'blm-body' }, h('button', { className: 'blm-btn', onClick: onBack }, '← 返回'));
 
       const book = data.book || {};
       const chapters = data.chapters || [];
       const cover = data.cover ? API + '/cover?bookId=' + encodeURIComponent(bookId) + '&v=' + encodeURIComponent(book.lastOpenedAt || '') : '';
+      const partOf = new Map();
+      for (const part of parts) for (const n of part.chapters || []) partOf.set(Number(n), part);
+      const selectedChars = chapters.filter((c) => selected.includes(Number(c.n))).reduce((sum, c) => sum + (Number(c.chars) || 0), 0);
+      const toggleChapter = (n) => {
+        if (partOf.has(Number(n))) return;
+        setSelected((list) => (list.includes(Number(n)) ? list.filter((x) => x !== Number(n)) : [...list, Number(n)].sort((a, b) => a - b)));
+      };
       return h(
         'div',
         { className: 'blm-body' },
@@ -365,11 +532,9 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
             { style: { minWidth: 0 } },
             h('h2', { className: 'blm-detail-title' }, book.title || '未命名'),
             h('div', { className: 'blm-meta' }, (book.author || '未知作者') + ' · ' + (book.pages || 0) + ' 页 · ' + (book.chars || 0) + ' 字'),
-            h('div', { className: 'blm-meta' }, data.chaptersBuilt ? chapters.length + ' 章 · 已分章' : '尚未分章'),
+            h('div', { className: 'blm-meta' }, data.chaptersBuilt ? chapters.length + ' 章 · ' + parts.length + ' 个 Part · ' + series.length + ' 个系列' : '尚未分章'),
           ),
         ),
-        h('div', { className: 'blm-error', style: { background: 'transparent', borderColor: 'transparent', padding: 0, color: 'inherit' } },
-          h('span', { className: 'blm-dim' }, 'M1 只开放分章与书库；讲次规划、生成与播放器在后续里程碑接入。')),
         !data.chaptersBuilt
           ? h(
               'div',
@@ -397,6 +562,26 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
           : h(
               'div',
               null,
+              parts.length
+                ? h(
+                    'div',
+                    { className: 'blm-parts' },
+                    parts.map((part) =>
+                      h(
+                        'div',
+                        { className: 'blm-part', key: part.id },
+                        h(
+                          'div',
+                          { className: 'blm-part-main' },
+                          h('div', { className: 'blm-title' }, part.title),
+                          h('div', { className: 'blm-meta' }, part.chapters.length + ' 章 · ' + (part.chars || 0) + ' 字 · v' + part.version + ' · 已确认'),
+                        ),
+                        h('button', { className: 'blm-btn', disabled: busy, onClick: () => previewPlan(part) }, '预览讲纲'),
+                        h('button', { className: 'blm-btn', disabled: busy, onClick: () => removePart(part) }, '删除'),
+                      ),
+                    ),
+                  )
+                : null,
               h(
                 'div',
                 { className: 'blm-row', style: { marginTop: 4 } },
@@ -409,7 +594,16 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
                 (editing ? draft : chapters).map((c, i) =>
                   h(
                     'div',
-                    { className: 'blm-chapter', key: c.n + '-' + c.from },
+                    { className: 'blm-chapter' + (partOf.has(Number(c.n)) ? ' owns' : ''), key: c.n + '-' + c.from },
+                    editing
+                      ? h('span', null)
+                      : h('input', {
+                          type: 'checkbox',
+                          checked: partOf.has(Number(c.n)) || selected.includes(Number(c.n)),
+                          disabled: c.front === true || partOf.has(Number(c.n)) || busy,
+                          onChange: () => toggleChapter(c.n),
+                          title: c.front === true ? '前文不参与 Part' : partOf.has(Number(c.n)) ? '属于《' + partOf.get(Number(c.n)).title + '》' : '选择这一章',
+                        }),
                     h('span', { className: 'blm-dim' }, String(c.n ?? i + 1)),
                     editing
                       ? h('input', { value: c.title, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { title: e.target.value }) : x))) })
@@ -420,10 +614,77 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
                     editing
                       ? h('input', { type: 'number', value: c.to, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { to: Number(e.target.value) }) : x))) })
                       : h('span', { className: 'blm-dim' }, 'p' + c.to),
-                    h('span', { className: 'blm-dim', style: { fontSize: 10, textAlign: 'right' } }, c.manual ? '手动' : ''),
+                    h('span', { className: 'blm-dim', style: { fontSize: 10, textAlign: 'right' } }, c.front === true ? '前文' : partOf.has(Number(c.n)) ? '属于 ' + partOf.get(Number(c.n)).title : c.manual ? '手动' : ''),
                   ),
                 ),
               ),
+              !editing
+                ? h(
+                    'div',
+                    { className: 'blm-selectbar' },
+                    h('div', { className: 'blm-dim' }, '已选 ' + selected.length + ' 章 · ' + selectedChars + ' 字'),
+                    h('div', { style: { flex: 1 } }),
+                    h('button', { className: 'blm-btn', disabled: !selected.length || busy, onClick: () => previewPlan(null) }, '预览讲纲（草稿）'),
+                    h('button', { className: 'blm-btn primary', disabled: !selected.length || busy, onClick: confirmPart }, '确认此部分'),
+                    h('button', { className: 'blm-btn', disabled: !selected.length, onClick: () => setSelected([]) }, '清空'),
+                  )
+                : null,
+              plan
+                ? h(
+                    'div',
+                    { className: 'blm-modal-mask' },
+                    h(
+                    'div',
+                    { className: 'blm-plan blm-plan-modal' },
+                    h('div', { className: 'blm-row' }, h('strong', null, '讲纲预览'), h('span', { className: 'blm-dim' }, plan.source === 'model' ? '模型' : '规则'), h('div', { style: { flex: 1 } }), h('button', { className: 'blm-btn', onClick: () => setPlan(null) }, '关闭')),
+                    plan.throughline ? h('div', { className: 'blm-plan-line' }, plan.throughline) : null,
+                    h('div', { className: 'blm-plan-lectures' }, (plan.lectures || []).map((lec) =>
+                      h('div', { className: 'blm-plan-lec', key: lec.n },
+                        h('strong', null, lec.title || '第 ' + lec.n + ' 讲'),
+                        h('div', { className: 'blm-meta' }, '章 ' + (lec.chapters || []).join('、') + ' · ' + lec.pages + ' 页 · ' + lec.chars + ' 字'),
+                        lec.goal ? h('div', { className: 'blm-dim' }, lec.goal) : null,
+                      ),
+                    )),
+                    (plan.seams || []).length ? h('div', { className: 'blm-plan-line' }, '接缝：' + plan.seams.map((s) => s.sentence).join(' / ')) : h('div', { className: 'blm-dim' }, '规则讲纲未生成接缝（unstitched）。'),
+                    planWarnings.length ? h('div', { className: 'blm-note' }, planWarnings.join(' ')) : null,
+                    h('div', { className: 'blm-row', style: { marginTop: 8 } },
+                      h('button', { className: 'blm-btn primary', disabled: !planPartId || savingSeries, onClick: saveSeries }, savingSeries ? '保存中…' : '保存为系列'),
+                      h('span', { className: 'blm-dim' }, planPartId ? '会创建 draft/planned 系列，不启动生成。' : '草稿讲纲需先确认 Part 后才能保存。'),
+                    ),
+                    ),
+                  )
+                : null,
+              series.length
+                ? h(
+                    'div',
+                    { className: 'blm-series' },
+                    h('div', { className: 'blm-dim' }, '系列'),
+                    series.map((s) => h('div', { className: 'blm-series-row', key: s.id },
+                      h('strong', null, s.title),
+                      h('span', { className: 'blm-badge' }, s.status),
+                      h('span', { className: 'blm-dim' }, (s.lectures || []).length + ' 讲 · ' + (s.total_pages || 0) + ' 页'),
+                    )),
+                  )
+                : null,
+        conflict
+          ? h(
+              'div',
+              { className: 'blm-modal-mask' },
+              h(
+                'div',
+                { className: 'blm-modal' },
+                h('div', { className: 'blm-detail-title', style: { fontSize: 15 } }, '章节归属冲突'),
+                h('div', { className: 'blm-dim' },
+                  conflict.conflicts.map((c) => '第 ' + c.chapters.join('、') + ' 章已属于《' + c.title + '》').join('；')),
+                h('div', { className: 'blm-row', style: { marginTop: 12 } },
+                  h('button', { className: 'blm-btn primary', disabled: busy, onClick: mergeConflict }, '并入已有 Part'),
+                  h('button', { className: 'blm-btn', disabled: busy, onClick: removeConflict }, '先移出原 Part'),
+                  h('button', { className: 'blm-btn', disabled: busy, onClick: () => { setConflict(null); setSelected([]); } }, '改选'),
+                ),
+                h('div', { className: 'blm-dim', style: { marginTop: 8, fontSize: 11 } }, '三个选择都会立即改 Part；“改选”不写盘。'),
+              ),
+            )
+          : null,
             ),
       );
     }

@@ -184,6 +184,13 @@ export const ROUTE_CHAPTERS_BUILD = ROUTE_PREFIX + '/chapters/build';
 export const ROUTE_TRASH = ROUTE_PREFIX + '/trash';
 export const ROUTE_TRASH_RESTORE = ROUTE_PREFIX + '/trash/restore';
 export const ROUTE_STORAGE = ROUTE_PREFIX + '/storage';
+export const ROUTE_PARTS = ROUTE_PREFIX + '/parts';
+export const ROUTE_PART = ROUTE_PREFIX + '/part';
+export const ROUTE_PART_UPDATE = ROUTE_PREFIX + '/part/update';
+export const ROUTE_PLAN_PREVIEW = ROUTE_PREFIX + '/plan/preview';
+export const ROUTE_SERIES = ROUTE_PREFIX + '/series';
+export const ROUTE_SERIES_PLAN = ROUTE_PREFIX + '/series/plan';
+export const ROUTE_BRIEFS = ROUTE_PREFIX + '/briefs';
 export const ROUTE_BOOKS = ROUTE_PREFIX + '/books';
 export const ROUTE_BOOK = ROUTE_PREFIX + '/book';
 export const ROUTE_IMPORT = ROUTE_PREFIX + '/import';
@@ -2776,6 +2783,13 @@ export function apply(ctx) {
     route(ROUTE_TRASH, routeV2);
     route(ROUTE_TRASH_RESTORE, routeV2);
     route(ROUTE_STORAGE, routeV2);
+    route(ROUTE_PARTS, routeV2);
+    route(ROUTE_PART, routeV2);
+    route(ROUTE_PART_UPDATE, routeV2);
+    route(ROUTE_PLAN_PREVIEW, routeV2);
+    route(ROUTE_SERIES, routeV2);
+    route(ROUTE_SERIES_PLAN, routeV2);
+    route(ROUTE_BRIEFS, routeV2);
 
     route(ROUTE_BOOK, routeV2);
 
