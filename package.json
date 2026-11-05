@@ -67,6 +67,7 @@
   },
   "scripts": {
     "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/practice.test.mjs && node test/session.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs && node test/package.test.mjs && node test/comfy.test.mjs && node test/imaging.test.mjs && node test/image-auto.test.mjs && node test/pptx.test.mjs && node test/pptexport.test.mjs",
+    "test:v2": "node test/v2-m1.test.mjs && node test/v2-m1-server.test.mjs && node test/v2-m2.test.mjs && node test/v2-m2-server.test.mjs && node test/v2-toc.test.mjs && node test/v2-m3.test.mjs && node test/v2-m3-server.test.mjs",
     "test:mech": "node test/books.mech.e2e.mjs",
     "test:chapters": "node test/books.toc.e2e.mjs",
     "test:truth": "node test/books.toc.e2e.mjs --truth test/truth --baseline",

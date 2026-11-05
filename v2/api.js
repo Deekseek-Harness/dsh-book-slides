@@ -1,6 +1,6 @@
 /**
- * 2.0 M1 HTTP API：meta / 书架 / 导入 / 分章 / 封面 / 回收站。
- * 路由前缀仍是 /dsh-book-slides。
+ * 2.0 HTTP API：meta / 书架 / 导入 / 分章 / 封面 / 回收站，
+ * 以及 Part、讲纲、系列生成、作业与后验缝。路由前缀仍是 /dsh-book-slides。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,9 +26,18 @@ import {
   writeCover,
 } from './books.js';
 import { ChapterError, buildBookChapters, saveBookChapters } from './chapters.js';
-import { PartError, deletePart, getPart, listParts, partChapterTexts, savePart, updatePart } from './parts.js';
-import { SeriesError, createSeries, findSeries, listSeries, loadSeries, savePlan } from './series.js';
+import { PartError, deletePart, listParts, partChapterTexts, savePart, updatePart } from './parts.js';
+import { SeriesError, createSeries, findSeries, listSeries, persistSeries, savePlan } from './series.js';
 import { buildPlan } from './plan.js';
+import {
+  cancelSeriesJob,
+  getSeriesJob,
+  resumeSeriesJob,
+  startLectureJob,
+  startSeriesJob,
+} from './generate.js';
+import { buildStitchReport, repairStitch, writeStitchReport } from './stitch.js';
+import { loadLecture } from './lectures.js';
 
 export const PREFIX = '/dsh-book-slides';
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -575,6 +584,214 @@ function handleBriefsGet(req, res, url) {
   sendJson(res, 200, { ok: true, briefs: readJson(path.join(loaded.dir, 'briefs.json'), null) });
 }
 
+/* ------------------------------ M3: 生成 / 作业 / 后验缝 ------------------------------ */
+
+function findSeriesOr404(res, seriesId) {
+  const found = findSeries(String(seriesId || ''));
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个系列', '刷新列表后再试。');
+    return null;
+  }
+  return found;
+}
+
+function requirePlanned(series) {
+  if (!series.plan_version || !(series.lectures || []).length) {
+    throw Object.assign(new Error('先生成/保存讲纲，再开始生成'), { code: 'E_SERIES_UNPLANNED' });
+  }
+}
+
+async function handleSeriesStart(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  try {
+    requirePlanned(found.series);
+    const explicit = body.lectures != null && body.lectures !== 'all';
+    if (explicit && !Array.isArray(body.lectures)) {
+      sendError(res, 'E_REPLAN_RANGE', 'lectures 必须是 all 或讲次数组', '');
+      return;
+    }
+    const nums = explicit ? body.lectures : null;
+    const force = explicit ? nums.map(Number) : [];
+    const out = startSeriesJob({ found, nums, force, ctx: options.ctx || null });
+    sendJson(res, 200, {
+      ok: true,
+      cached: !!out.cached,
+      jobId: out.jobId,
+      skipped: out.skipped || [],
+      scope: out.scope || null,
+    });
+  } catch (err) {
+    sendError(res, err.code || 'E_GENERATE', err.message || '启动失败', err.hint || '');
+  }
+}
+
+async function handleSeriesLectureGenerate(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  const n = Number(body.n);
+  if (!Number.isInteger(n) || n < 1) {
+    sendError(res, 'E_REPLAN_RANGE', '讲次不合法', '');
+    return;
+  }
+  if (!(found.series.lectures || []).some((item) => Number(item.n) === n)) {
+    sendError(res, 'E_REPLAN_RANGE', '第 ' + n + ' 讲不存在', '');
+    return;
+  }
+  try {
+    requirePlanned(found.series);
+    const out = startLectureJob({ found, n, force: true, ctx: options.ctx || null });
+    sendJson(res, 200, { ok: true, cached: !!out.cached, jobId: out.jobId, skipped: out.skipped || [], scope: out.scope || null });
+  } catch (err) {
+    sendError(res, err.code || 'E_GENERATE', err.message || '启动失败', err.hint || '');
+  }
+}
+
+async function handleSeriesResume(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  try {
+    requirePlanned(found.series);
+    const out = resumeSeriesJob({ found, ctx: options.ctx || null });
+    sendJson(res, 200, {
+      ok: true,
+      cached: !!out.cached,
+      jobId: out.jobId,
+      skipped: out.skipped || [],
+      scope: out.scope || null,
+    });
+  } catch (err) {
+    sendError(res, err.code || 'E_GENERATE', err.message || '续跑失败', err.hint || '');
+  }
+}
+
+async function handleSeriesRetry(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  const raw = body.lecture == null ? [] : Array.isArray(body.lecture) ? body.lecture : [body.lecture];
+  const nums = raw.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (nums.length !== raw.length) {
+    sendError(res, 'E_REPLAN_RANGE', '讲次不合法', '');
+    return;
+  }
+  const all = (found.series.lectures || []).map((item) => Number(item.n));
+  for (const n of nums) {
+    if (!all.includes(n)) {
+      sendError(res, 'E_REPLAN_RANGE', '第 ' + n + ' 讲不存在', '');
+      return;
+    }
+  }
+  try {
+    requirePlanned(found.series);
+    const out = startSeriesJob({ found, nums: nums.length ? nums : null, force: [], ctx: options.ctx || null });
+    sendJson(res, 200, {
+      ok: true,
+      cached: !!out.cached,
+      jobId: out.jobId,
+      skipped: out.skipped || [],
+      scope: out.scope || null,
+    });
+  } catch (err) {
+    sendError(res, err.code || 'E_GENERATE', err.message || '重试失败', err.hint || '');
+  }
+}
+
+function handleSeriesJob(req, res, url) {
+  ensureRoot();
+  const seriesId = String(url.searchParams.get('seriesId') || '');
+  const found = findSeriesOr404(res, seriesId);
+  if (!found) return;
+  const state = getSeriesJob(seriesId);
+  if (state) {
+    sendJson(res, 200, state);
+    return;
+  }
+  sendJson(res, 200, {
+    ok: true,
+    jobId: null,
+    seriesId,
+    stage: 'done',
+    lecture: 0,
+    lecturesTotal: (found.series.lectures || []).length,
+    current: 0,
+    total: 0,
+    message: '',
+    status: String(found.series.status || 'planned'),
+    skipped: [],
+    scope: [],
+    error: found.series.code ? { code: found.series.code, message: found.series.error || '' } : null,
+  });
+}
+
+async function handleSeriesCancel(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  const cancelled = cancelSeriesJob(found.series.id);
+  sendJson(res, 200, { ok: true, cancelled });
+}
+
+function handleLectureGet(req, res, url) {
+  ensureRoot();
+  const found = findSeriesOr404(res, url.searchParams.get('seriesId'));
+  if (!found) return;
+  const n = Number(url.searchParams.get('n'));
+  if (!Number.isInteger(n) || n < 1) {
+    sendError(res, 'E_REPLAN_RANGE', '讲次不合法', '');
+    return;
+  }
+  const doc = loadLecture(found.dir, n);
+  if (!doc.exists) {
+    sendError(res, 'E_NOT_FOUND', '这一讲还没有生成内容', '');
+    return;
+  }
+  sendJson(res, 200, { ok: true, lecture: doc.lecture, slides: doc.slidesDoc });
+}
+
+function handleSeriesStitchGet(req, res, url) {
+  ensureRoot();
+  const found = findSeriesOr404(res, url.searchParams.get('seriesId'));
+  if (!found) return;
+  const report = buildStitchReport(found);
+  writeStitchReport(found, report, { persist: false });
+  if (
+    ['ready', 'partial', 'failed', 'cancelled', 'interrupted'].includes(String(found.series.status)) &&
+    found.series.stitch !== report.state
+  ) {
+    found.series.stitch = report.state;
+    persistSeries(found.series);
+  }
+  sendJson(res, 200, { ok: true, stitch: report });
+}
+
+async function handleSeriesStitchRepair(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  const running = getSeriesJob(found.series.id);
+  if (running && ['queued', 'drafting', 'stitching', 'structuring', 'validate', 'anchor', 'cancelling'].includes(String(running.status))) {
+    sendError(res, 'E_SERIES_BUSY', '正在生成，请稍候', '等作业结束后再修后验缝。');
+    return;
+  }
+  try {
+    const targets = Array.isArray(body.targets) ? body.targets.map(String) : null;
+    const out = await repairStitch({ found, ctx: options.ctx || null, targets });
+    sendJson(res, 200, { ok: true, stitch: out.report, repaired: out.repaired, unresolved: out.unresolved });
+  } catch (err) {
+    sendError(res, err.code || 'E_STITCH', err.message || '修复失败', err.hint || '');
+  }
+}
+
 export async function routeM1(req, res, url, options = {}) {
   try {
     return await routeM1Inner(req, res, url, options);
@@ -633,6 +850,42 @@ async function routeM1Inner(req, res, url, options = {}) {
   }
   if (pathname === PREFIX + '/series/plan') {
     await handleSeriesPlan(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/start') {
+    await handleSeriesStart(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/lecture/generate') {
+    await handleSeriesLectureGenerate(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/resume') {
+    await handleSeriesResume(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/retry') {
+    await handleSeriesRetry(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/job') {
+    handleSeriesJob(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/cancel') {
+    await handleSeriesCancel(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/stitch') {
+    handleSeriesStitchGet(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/series/stitch/repair') {
+    await handleSeriesStitchRepair(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/lecture') {
+    handleLectureGet(req, res, url);
     return true;
   }
   if (pathname === PREFIX + '/briefs') {

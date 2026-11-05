@@ -101,7 +101,9 @@ function planFields(plan) {
     total_chars: Number(plan.totalChars) || 0,
     total_pages: Number(plan.totalPages) || 0,
     est_minutes: Number(plan.estMinutes) || 0,
-    lectures: plan.lectures,
+    lectures: (Array.isArray(plan.lectures) ? plan.lectures : []).map((item) =>
+      Object.assign({ status: 'draft' }, item),
+    ),
     seams: plan.seams || [],
     terms: plan.terms || [],
     cut_notes: plan.cut_notes || [],
@@ -126,17 +128,14 @@ export function createSeries({ bookId, partId, title, plan = null }) {
   if (plan) validatePlanShape(plan, chapters);
   const resolvedTitle = String(title || part.title || '').trim() || part.title;
   const key = planKey(bookId, part, resolvedTitle, plan);
-  const existing = listSeries(bookId).find(
-    (item) => item.idempotency_key === key && (item.status === 'draft' || item.status === 'planned'),
-  );
+  const existing = listSeries(bookId).find((item) => item.idempotency_key === key);
   if (existing) return existing;
   // 兼容本次修复前创建的系列：它们没有 idempotency_key，但同一 Part/标题不应再新建
   const legacy = listSeries(bookId).find(
     (item) =>
       !item.idempotency_key &&
       item.part_id === part.id &&
-      item.title === resolvedTitle &&
-      (item.status === 'draft' || item.status === 'planned'),
+      item.title === resolvedTitle,
   );
   if (legacy) {
     if (!plan) return legacy;
@@ -202,4 +201,48 @@ export async function savePlan({ seriesId, plan = null, ctx = null, force = fals
 
 export function markPlanDraft(series, plan) {
   return Object.assign({}, series, planFields(plan));
+}
+
+/** 写回系列文档（作业进度、讲状态、缝合状态都走这里）。 */
+export function persistSeries(series) {
+  if (!series || !series.book_id || !series.id) return null;
+  series.updated_at = new Date().toISOString();
+  writeJson(path.join(seriesDir(series.book_id, series.id), 'series.json'), series);
+  return series;
+}
+
+/** 同步更新 series.lectures 中某一讲的字段，不碰 plan 切片。 */
+export function patchSeriesLecture(series, n, patch) {
+  let hit = null;
+  series.lectures = (series.lectures || []).map((item) => {
+    if (Number(item.n) !== Number(n)) return item;
+    hit = Object.assign({}, item, patch);
+    return hit;
+  });
+  return hit;
+}
+
+/** 扫全部书、全部系列；启动归一用。 */
+export function listAllSeries() {
+  let books = [];
+  try {
+    books = fs.readdirSync(BOOKS_DIR(), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const bookId of books) {
+    const dir = seriesRoot(bookId);
+    let ids = [];
+    try {
+      ids = fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {
+      continue;
+    }
+    for (const id of ids) {
+      const series = loadSeries(bookId, id);
+      if (series) out.push({ bookId, series, dir: seriesDir(bookId, id) });
+    }
+  }
+  return out;
 }

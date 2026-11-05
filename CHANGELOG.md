@@ -31,6 +31,17 @@
 - 系列：`POST /series` 只建 draft；`POST /series/plan` 写 plan；重复保存按幂等键复用/更新，不重复建系列。
 - M2 客户端：章节多选、Part 组头、冲突三选、讲纲居中预览、保存为系列。
 
+### 新增（M3）
+
+- 逐讲生成：`POST /series/start` 全量、`POST /series/lecture/generate` 单讲；文本三阶段 `structuring → validate → anchor`，不调 TTS，音频字段初始为 `null/none`。
+- 批预算：单批 ≤1.2 万字、单章超长按 8 千字切、批间 300 字承接；批检查点落 `lectures/<n>/batches/`，取消/重试只补未完成批。
+- 预缝：cover `audio_script` 逐字以接缝句开头、末页逐字以接缝句结尾；不通过只做页级修复（模型优先，确定性兜底），不重跑整讲。
+- 后验缝：`GET /series/stitch` 六项指标（接缝一致、页序/章序、相邻讲重复率、术语禁用词、密度 ρ、覆盖）；`POST /series/stitch/repair` 补接缝、替换禁用术语；重复页有模型时页级重写。
+- 作业：`GET /series/job` 返回第 k/N 讲与页进度；`POST /series/cancel` 取消并保留已完成讲；`POST /series/resume` 跳过已 ready 讲；`POST /series/retry` 只重跑失败讲；启动时把 drafting/stitching 归一为 `interrupted`。
+- 单讲存储：`series/<id>/lectures/<n>/{lecture.json, slides.json, batches/}`；`GET /lecture` 读取讲义；N=1 系列同样走系列模型，缝合状态直接 `verified`。
+- M3 客户端：系列卡显示生成进度、取消/续跑/重试/单讲重新生成、逐讲状态与后验缝报告（含一键确定性修复）。
+- 测试：新增 `test/v2-m3.test.mjs`（AC-103 ~ AC-106、批预算、幂等）与 `test/v2-m3-server.test.mjs`（作业/取消/续跑/重试/单讲）；`npm run test:v2` 串起 M1–M3。
+
 ## [1.4.0] - 2026-11-04
 
 v1.6「练习与复习」：把精讲延伸成「听完 → 做题 → 看讲解 → 按遗忘节奏复习」的闭环。

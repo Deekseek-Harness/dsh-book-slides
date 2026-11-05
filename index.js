@@ -57,6 +57,7 @@ import {
 import { coverSvg } from './cover.js';
 import { routeM1 } from './v2/api.js';
 import { ensureRoot } from './v2/root.js';
+import { reconcileAllSeries } from './v2/generate.js';
 import { runBookCheck } from './check.js';
 import {
   cancelJob,
@@ -190,6 +191,15 @@ export const ROUTE_PART_UPDATE = ROUTE_PREFIX + '/part/update';
 export const ROUTE_PLAN_PREVIEW = ROUTE_PREFIX + '/plan/preview';
 export const ROUTE_SERIES = ROUTE_PREFIX + '/series';
 export const ROUTE_SERIES_PLAN = ROUTE_PREFIX + '/series/plan';
+export const ROUTE_SERIES_START = ROUTE_PREFIX + '/series/start';
+export const ROUTE_SERIES_LECTURE_GENERATE = ROUTE_PREFIX + '/series/lecture/generate';
+export const ROUTE_SERIES_RESUME = ROUTE_PREFIX + '/series/resume';
+export const ROUTE_SERIES_RETRY = ROUTE_PREFIX + '/series/retry';
+export const ROUTE_SERIES_JOB = ROUTE_PREFIX + '/series/job';
+export const ROUTE_SERIES_CANCEL = ROUTE_PREFIX + '/series/cancel';
+export const ROUTE_SERIES_STITCH = ROUTE_PREFIX + '/series/stitch';
+export const ROUTE_SERIES_STITCH_REPAIR = ROUTE_PREFIX + '/series/stitch/repair';
+export const ROUTE_LECTURE = ROUTE_PREFIX + '/lecture';
 export const ROUTE_BRIEFS = ROUTE_PREFIX + '/briefs';
 export const ROUTE_BOOKS = ROUTE_PREFIX + '/books';
 export const ROUTE_BOOK = ROUTE_PREFIX + '/book';
@@ -2727,6 +2737,11 @@ export function apply(ctx) {
     /* 坏模块不能挡插件启动 */
   }
   try {
+    reconcileAllSeries();
+  } catch {
+    /* 坏系列不能挡插件启动 */
+  }
+  try {
     reconcileImagingJobs();
   } catch {
     /* 配图作业归一失败也不能挡启动 */
@@ -2789,6 +2804,15 @@ export function apply(ctx) {
     route(ROUTE_PLAN_PREVIEW, routeV2);
     route(ROUTE_SERIES, routeV2);
     route(ROUTE_SERIES_PLAN, routeV2);
+    route(ROUTE_SERIES_START, routeV2);
+    route(ROUTE_SERIES_LECTURE_GENERATE, routeV2);
+    route(ROUTE_SERIES_RESUME, routeV2);
+    route(ROUTE_SERIES_RETRY, routeV2);
+    route(ROUTE_SERIES_JOB, routeV2);
+    route(ROUTE_SERIES_CANCEL, routeV2);
+    route(ROUTE_SERIES_STITCH, routeV2);
+    route(ROUTE_SERIES_STITCH_REPAIR, routeV2);
+    route(ROUTE_LECTURE, routeV2);
     route(ROUTE_BRIEFS, routeV2);
 
     route(ROUTE_BOOK, routeV2);

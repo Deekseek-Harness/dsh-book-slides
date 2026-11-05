@@ -1,6 +1,6 @@
 /**
- * 2.0 M1 客户端：书架、导入、分章构建、章校准、封面、回收站。
- * 只调用 /dsh-book-slides 的 2.0 M1 路由；讲次/生成/播放器在后续里程碑接入。
+ * 2.0 客户端：书架、导入、分章构建、章校准、封面、回收站、Part/讲纲、
+ * 系列生成进度/取消/续跑/重试与后验缝报告。播放器在 M4 接入。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-book-slides',
@@ -74,6 +74,16 @@ body[data-ds-dark-theme] .blm-root{color-scheme:dark}
 .blm-plan-lec{border-top:1px dashed var(--blm-line);padding-top:6px;font-size:12px}
 .blm-series{margin-top:14px;display:flex;flex-direction:column;gap:6px}
 .blm-series-row{display:flex;align-items:center;gap:8px;border:1px solid var(--blm-line);border-radius:8px;padding:7px 10px;background:var(--blm-card)}
+.blm-series-card{border:1px solid var(--blm-line);border-radius:9px;padding:9px 10px;background:var(--blm-card);display:flex;flex-direction:column;gap:7px}
+.blm-series-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.blm-series-lec{display:flex;align-items:center;gap:8px;border-top:1px dashed var(--blm-line);padding-top:6px;font-size:12px}
+.blm-series-lec .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.blm-series-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.blm-stitch-table{display:flex;flex-direction:column;gap:5px;margin:8px 0;font-size:12px}
+.blm-stitch-metric{display:flex;align-items:center;gap:8px;border-top:1px dashed var(--blm-line);padding-top:4px}
+.blm-stitch-metric .grow{flex:1}
+.blm-ok{color:#2ea043}
+.blm-bad{color:#e55353}
 .blm-modal-mask{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.32);display:flex;align-items:center;justify-content:center;padding:18px}
 .blm-modal{width:100%;max-width:420px;background:var(--blm-card);color:var(--blm-text);border:1px solid var(--blm-line);border-radius:12px;padding:14px;box-shadow:0 18px 44px rgba(0,0,0,.32)}
 .blm-chapter:last-child{border-bottom:0}
@@ -263,6 +273,255 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
       );
     }
 
+    function SeriesCard({ series, notify, onReload }) {
+      const [job, setJob] = useState(null);
+      const [stitch, setStitch] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const doneRef = useRef(false);
+      const lectures = series.lectures || [];
+      const activeStatus = ['queued', 'drafting', 'stitching', 'structuring', 'validate', 'anchor', 'cancelling'];
+      const isActive = job != null && activeStatus.includes(String(job.status || ''));
+
+      const poll = useCallback(async () => {
+        try {
+          const out = await api('/series/job?seriesId=' + encodeURIComponent(series.id));
+          setJob(out);
+          if (!activeStatus.includes(String(out.status || '')) && !doneRef.current) {
+            doneRef.current = true;
+            await onReload();
+          }
+        } catch (err) {
+          notify(err.message);
+        }
+      }, [series.id, notify, onReload]);
+
+      useEffect(() => {
+        if (!isActive) return undefined;
+        const timer = setInterval(poll, 1000);
+        return () => clearInterval(timer);
+      }, [isActive, poll]);
+
+      useEffect(() => {
+        if (['drafting', 'stitching'].includes(String(series.status)) && !doneRef.current) poll();
+      }, [series.status, poll]);
+
+      const startJob = async (path, body) => {
+        setBusy(true);
+        doneRef.current = false;
+        try {
+          const out = await api(path, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (out.cached) {
+            notify('全部讲已就绪，无需重跑');
+            await onReload();
+            return;
+          }
+          setJob({
+            status: 'drafting',
+            stage: 'queued',
+            lecture: 1,
+            lecturesTotal: lectures.length,
+            current: 0,
+            total: 0,
+            message: '已开始生成',
+          });
+          await poll();
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const start = () => startJob('/series/start', { seriesId: series.id });
+      const resume = () => startJob('/series/resume', { seriesId: series.id });
+      const retry = (n) => startJob('/series/retry', { seriesId: series.id, lecture: n });
+      const generateOne = (n) => startJob('/series/lecture/generate', { seriesId: series.id, n });
+      const cancel = async () => {
+        setBusy(true);
+        try {
+          const out = await api('/series/cancel', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id }),
+          });
+          notify(out.cancelled ? '正在取消…' : '作业已经结束');
+          await poll();
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+      const openStitch = async () => {
+        setBusy(true);
+        try {
+          const out = await api('/series/stitch?seriesId=' + encodeURIComponent(series.id));
+          setStitch(out.stitch);
+          await onReload();
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+      const repairStitch = async () => {
+        setBusy(true);
+        try {
+          const out = await api('/series/stitch/repair', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id }),
+          });
+          setStitch(out.stitch);
+          notify(out.unresolved && out.unresolved.length ? '还有 ' + out.unresolved.length + ' 项未修复' : '缝合报告已刷新');
+          await onReload();
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const stageText = (() => {
+        if (isActive && job) {
+          if (job.stage === 'stitching') return '正在做后验缝…';
+          const k = job.lecture || 1;
+          const n = job.lecturesTotal || lectures.length;
+          return '第 ' + k + '/' + n + ' 讲 · 第 ' + (job.current || 0) + '/' + (job.total || 0) + ' 页 · ' + String(job.message || '');
+        }
+        if (series.status === 'drafting' || series.status === 'stitching') return '正在生成，请稍候…';
+        if (series.status === 'partial') return '部分讲未就绪';
+        if (series.status === 'failed') return '生成失败';
+        if (series.status === 'cancelled') return '已取消，可续跑';
+        if (series.status === 'interrupted') return '上次生成被中断，可续跑';
+        return '';
+      })();
+      const progress = isActive && job && job.total ? Math.min(100, Math.round(((job.current || 0) / job.total) * 100)) : 0;
+
+      return h(
+        'div',
+        { className: 'blm-series-card' },
+        h(
+          'div',
+          { className: 'blm-series-head' },
+          h('strong', null, series.title),
+          h('span', { className: 'blm-badge' + (series.status === 'ready' ? ' ok' : '') }, series.status),
+          h('span', { className: 'blm-dim' }, lectures.length + ' 讲 · ' + (series.total_pages || 0) + ' 页'),
+          series.stitch && ['ready', 'partial'].includes(series.status)
+            ? h('span', { className: 'blm-badge' + (['stitched', 'verified'].includes(series.stitch) ? ' ok' : '') },
+                series.stitch === 'verified' ? '已验收' : series.stitch === 'stitched' ? '已衔接' : '未衔接')
+            : null,
+          h('div', { style: { flex: 1 } }),
+          h(
+            'div',
+            { className: 'blm-series-actions' },
+            series.status === 'planned' && !isActive
+              ? h('button', { className: 'blm-btn primary', disabled: busy, onClick: start }, '开始生成讲义')
+              : null,
+            ['partial', 'failed', 'cancelled', 'interrupted'].includes(series.status) && !isActive
+              ? h('button', { className: 'blm-btn primary', disabled: busy, onClick: resume }, '续跑')
+              : null,
+            ['ready', 'partial', 'failed'].includes(series.status)
+              ? h('button', { className: 'blm-btn', disabled: busy, onClick: openStitch }, '缝合报告')
+              : null,
+            ['drafting', 'stitching'].includes(series.status) || isActive
+              ? h('button', { className: 'blm-btn', disabled: busy, onClick: cancel }, '取消')
+              : null,
+          ),
+        ),
+        stageText ? h('div', { className: 'blm-dim', style: { fontSize: 12 } }, stageText) : null,
+        progress ? h('div', { className: 'blm-progress' }, h('i', { style: { width: progress + '%' } })) : null,
+        series.error && ['failed', 'partial'].includes(series.status)
+          ? h('div', { className: 'blm-note' }, (series.code ? series.code + '：' : '') + series.error)
+          : null,
+        lectures.length
+          ? h(
+              'div',
+              { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+              lectures.map((lec) => {
+                const jobLec = isActive && job && Number(job.lecture) === Number(lec.n);
+                const text = jobLec
+                  ? '第 ' + (job.current || 0) + '/' + (job.total || 0) + ' 页'
+                  : (lec.pages || 0) + ' 页 · ' + (lec.chars || 0) + ' 字';
+                return h(
+                  'div',
+                  { className: 'blm-series-lec', key: lec.n },
+                  h('span', { className: 'blm-dim' }, '第 ' + lec.n + ' 讲'),
+                  h('span', { className: 'grow', title: lec.title }, lec.title),
+                  h('span', { className: 'blm-badge' + (['ready', 'ready_degraded'].includes(lec.status) ? ' ok' : '') }, lec.status),
+                  h('span', { className: 'blm-dim' }, text),
+                  ['failed', 'cancelled', 'interrupted'].includes(lec.status)
+                    ? h('button', { className: 'blm-btn', disabled: busy || isActive, onClick: () => retry(lec.n) }, '重试')
+                    : null,
+                  ['draft', 'planned', 'queued'].includes(lec.status) && !isActive
+                    ? h('button', { className: 'blm-btn', disabled: busy, onClick: () => generateOne(lec.n) }, '生成本讲')
+                    : null,
+                  ['ready', 'ready_degraded'].includes(lec.status) && !isActive
+                    ? h('button', { className: 'blm-btn', disabled: busy, onClick: () => generateOne(lec.n) }, '重新生成')
+                    : null,
+                );
+              }),
+            )
+          : null,
+        stitch
+          ? h(
+              'div',
+              { className: 'blm-modal-mask' },
+              h(
+                'div',
+                { className: 'blm-modal blm-plan-modal' },
+                h(
+                  'div',
+                  { className: 'blm-row' },
+                  h('strong', null, '后验缝报告'),
+                  h('span', { className: 'blm-badge' + (['stitched', 'verified'].includes(stitch.state) ? ' ok' : '') }, stitch.state),
+                  h('div', { style: { flex: 1 } }),
+                  h('button', { className: 'blm-btn', onClick: () => setStitch(null) }, '关闭'),
+                ),
+                h(
+                  'div',
+                  { className: 'blm-stitch-table' },
+                  (stitch.metrics || []).map((metric) =>
+                    h(
+                      'div',
+                      { className: 'blm-stitch-metric', key: metric.id },
+                      h('span', { className: 'grow' }, metric.label),
+                      h('span', { className: metric.ok ? 'blm-ok' : 'blm-bad' },
+                        Array.isArray(metric.value)
+                          ? metric.value.map((item) => '第 ' + item.n + ' 讲 ρ=' + item.rho).join('；')
+                          : String(metric.value)),
+                      metric.warn ? h('span', { className: 'blm-bad' }, '密度告警') : null,
+                    ),
+                  ),
+                ),
+                (stitch.failures || []).length
+                  ? h(
+                      'div',
+                      null,
+                      h('div', { className: 'blm-dim' }, '失败项'),
+                      (stitch.failures || []).map((failure, index) =>
+                        h('div', { className: 'blm-plan-line', key: index },
+                          (failure.lecture ? '第 ' + failure.lecture + ' 讲' : '系列') + ' · ' + failure.message + '（' + failure.action + '）'),
+                      ),
+                    )
+                  : h('div', { className: 'blm-dim' }, '六项指标全部通过。'),
+                (stitch.warnings || []).length ? h('div', { className: 'blm-note' }, stitch.warnings.join(' ')) : null,
+                h(
+                  'div',
+                  { className: 'blm-row', style: { marginTop: 8 } },
+                  h('button', { className: 'blm-btn primary', disabled: busy, onClick: repairStitch }, '一键修复（接缝/术语/重复页）'),
+                  h('span', { className: 'blm-dim' }, '重复页在模型可用时重写该页；不修不影响播放。'),
+                ),
+              ),
+            )
+          : null,
+      );
+    }
+
     function Detail({ bookId, onBack, onChanged, notify }) {
       const [data, setData] = useState(null);
       const [parts, setParts] = useState([]);
@@ -303,6 +562,15 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
       useEffect(() => {
         load();
       }, [load]);
+
+      const reloadSeries = useCallback(async () => {
+        try {
+          const out = await api('/series?bookId=' + encodeURIComponent(bookId));
+          setSeries(out.series || []);
+        } catch (err) {
+          notify(err.message);
+        }
+      }, [bookId, notify]);
 
       const generateCover = async () => {
         setBusy(true);
@@ -659,11 +927,12 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
                     'div',
                     { className: 'blm-series' },
                     h('div', { className: 'blm-dim' }, '系列'),
-                    series.map((s) => h('div', { className: 'blm-series-row', key: s.id },
-                      h('strong', null, s.title),
-                      h('span', { className: 'blm-badge' }, s.status),
-                      h('span', { className: 'blm-dim' }, (s.lectures || []).length + ' 讲 · ' + (s.total_pages || 0) + ' 页'),
-                    )),
+                    series.map((s) => h(SeriesCard, {
+                      key: s.id,
+                      series: s,
+                      notify,
+                      onReload: reloadSeries,
+                    })),
                   )
                 : null,
         conflict

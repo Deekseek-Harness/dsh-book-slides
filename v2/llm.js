@@ -13,16 +13,17 @@ export function resolveModel(ctx) {
   return { provider, model };
 }
 
-export async function callModel(ctx, system, user, { maxTokens = 12000, timeoutMs = 180000 } = {}) {
+export async function callModel(ctx, system, user, { maxTokens = 12000, timeoutMs = 180000, signal = null } = {}) {
   const llm = ctx && ctx.get ? ctx.get('llm') : null;
   if (!llm || typeof llm.prepareCall !== 'function') throw new Error('这个 DSH 里没有可用的模型服务');
   const target = resolveModel(ctx);
-  const signal = AbortSignal.timeout(timeoutMs);
-  const prepared = await llm.prepareCall({ provider: target.provider, model: target.model, maxTokens }, signal);
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const combined = signal ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : signal) : timeout;
+  const prepared = await llm.prepareCall({ provider: target.provider, model: target.model, maxTokens }, combined);
   const messages = [{ role: 'user', content: [{ type: 'text', text: user }] }];
   let text = '';
   let stopReason = '';
-  for await (const chunk of prepared.stream(Object.assign({}, prepared.config, { system, messages, signal }))) {
+  for await (const chunk of prepared.stream(Object.assign({}, prepared.config, { system, messages, signal: combined }))) {
     if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') {
       text += chunk.text;
       continue;
