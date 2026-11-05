@@ -26,6 +26,7 @@ import {
   writeLectureOutputs,
 } from './lectures.js';
 import { buildStitchReport, writeStitchReport, withSeamSentence } from './stitch.js';
+import { initialImageStatus } from './images.js';
 import { callModel, readJsonBlock, resolveModel } from './llm.js';
 import {
   AUDIO_MAX,
@@ -666,12 +667,13 @@ async function generateLecture(job, context, planLecture) {
 
     assertActive(job);
     const finishedAt = nowIso();
+    const imageState = initialImageStatus();
     const withAudio = slides.map((slide) => Object.assign({}, slide, {
       audio_file: null,
       audio_provider: 'none',
       audio_ms: 0,
       image_file: null,
-      image_status: 'none',
+      image_status: imageState,
     }));
     const seamPrev = (series.seams || []).find((s) => Number(s.to) === n) || null;
     const seamNext = (series.seams || []).find((s) => Number(s.from) === n) || null;

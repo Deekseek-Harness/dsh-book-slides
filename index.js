@@ -58,6 +58,8 @@ import { coverSvg } from './cover.js';
 import { routeM1 } from './v2/api.js';
 import { ensureRoot } from './v2/root.js';
 import { reconcileAllSeries } from './v2/generate.js';
+import { cleanupStaleImports } from './v2/package.js';
+import { reconcileImageJobs } from './v2/images.js';
 import { runBookCheck } from './check.js';
 import {
   cancelJob,
@@ -230,7 +232,10 @@ export const ROUTE_EXPORT = ROUTE_PREFIX + '/export';
 export const ROUTE_EXPORT_SIZE = ROUTE_PREFIX + '/export/size';
 export const ROUTE_EXPORT_PPTX = ROUTE_PREFIX + '/export/pptx';
 export const ROUTE_EXPORT_PPTX_PLAN = ROUTE_PREFIX + '/export/pptx/plan';
+export const ROUTE_EXPORT_PPTX_BATCH = ROUTE_PREFIX + '/export/pptx/batch';
 export const ROUTE_IMPORT_PACKAGE = ROUTE_PREFIX + '/import/package';
+export const ROUTE_IMPORT_PACKAGE_JOB = ROUTE_PREFIX + '/import/package/job';
+export const ROUTE_IMPORT_PACKAGE_CANCEL = ROUTE_PREFIX + '/import/package/cancel';
 export const ROUTE_REVOICE = ROUTE_PREFIX + '/revoice';
 export const ROUTE_IMAGE = ROUTE_PREFIX + '/image';
 export const ROUTE_IMAGE_CONFIG = ROUTE_PREFIX + '/image/config';
@@ -241,8 +246,10 @@ export const ROUTE_IMAGE_STATUS = ROUTE_PREFIX + '/image/status';
 export const ROUTE_IMAGE_REGEN = ROUTE_PREFIX + '/image/regen';
 export const ROUTE_IMAGE_CANCEL = ROUTE_PREFIX + '/image/cancel';
 export const ROUTE_PRACTICE_SUMMARY = ROUTE_PREFIX + '/practice/summary';
+export const ROUTE_PRACTICE_BANK = ROUTE_PREFIX + '/practice/bank';
 export const ROUTE_PRACTICE_GENERATE = ROUTE_PREFIX + '/practice/generate';
 export const ROUTE_PRACTICE_JOB = ROUTE_PREFIX + '/practice/job';
+export const ROUTE_PRACTICE_CANCEL = ROUTE_PREFIX + '/practice/cancel';
 export const ROUTE_PRACTICE_SESSION = ROUTE_PREFIX + '/practice/session';
 export const ROUTE_PRACTICE_ANSWER = ROUTE_PREFIX + '/practice/answer';
 export const ROUTE_PRACTICE_EXPLAIN = ROUTE_PREFIX + '/practice/explain';
@@ -2746,6 +2753,17 @@ export function apply(ctx) {
   } catch {
     /* 配图作业归一失败也不能挡启动 */
   }
+  // 2.0 M5：清理残留书档 staging、把上次没跑完的配图作业标成 interrupted
+  try {
+    cleanupStaleImports();
+  } catch {
+    /* 清理失败不挡启动 */
+  }
+  try {
+    reconcileImageJobs();
+  } catch {
+    /* 2.0 配图作业归一失败也不能挡启动 */
+  }
   // 真书对照命令：跑「目录 → 校准」这条路，按严重程度分类报告
   ctx.inject(['commands'], (scoped) => {
     scoped.commands.register({
@@ -2920,166 +2938,28 @@ export function apply(ctx) {
 
     route(ROUTE_VOICE_PROBE, routeV2);
 
-    route(ROUTE_IMAGE, (req, res) => {
-      handleImage(req, res);
-    });
+    // 2.0 M5：配图 / 练习 / 导出 / 书档由 2.0 接管（1.x 同名处理器不再注册）
+    route(ROUTE_IMAGE, routeV2);
+    route(ROUTE_IMAGE_CONFIG, routeV2);
+    route(ROUTE_IMAGE_WORKFLOW, routeV2);
+    route(ROUTE_IMAGE_PROBE, routeV2);
+    route(ROUTE_IMAGE_TEST, routeV2);
+    route(ROUTE_IMAGE_STATUS, routeV2);
+    route(ROUTE_IMAGE_REGEN, routeV2);
+    route(ROUTE_IMAGE_CANCEL, routeV2);
 
-    route(ROUTE_IMAGE_CONFIG, (req, res) => {
-      const method = String((req && req.method) || 'GET').toUpperCase();
-      if (method !== 'GET' && method !== 'POST') {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImageConfig(req, res);
-    });
+    route(ROUTE_PRACTICE_SUMMARY, routeV2);
+    route(ROUTE_PRACTICE_BANK, routeV2);
+    route(ROUTE_PRACTICE_JOB, routeV2);
+    route(ROUTE_PRACTICE_CANCEL, routeV2);
+    route(ROUTE_PRACTICE_SESSION, routeV2);
+    route(ROUTE_PRACTICE_ANSWER, routeV2);
+    route(ROUTE_PRACTICE_EXPLAIN, routeV2);
+    route(ROUTE_PRACTICE_FINISH, routeV2);
+    route(ROUTE_PRACTICE_FLAG, routeV2);
+    route(ROUTE_PRACTICE_REVIEW, routeV2);
 
-    route(ROUTE_IMAGE_WORKFLOW, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImageWorkflow(req, res);
-    });
-
-    route(ROUTE_IMAGE_PROBE, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImageProbe(req, res);
-    });
-
-    route(ROUTE_IMAGE_TEST, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImageTest(req, res);
-    });
-
-    route(ROUTE_IMAGE_STATUS, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handleImageStatus(req, res);
-    });
-
-    route(ROUTE_IMAGE_REGEN, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImageRegen(req, res);
-    });
-
-    route(ROUTE_IMAGE_CANCEL, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImageCancel(req, res);
-    });
-
-    route(ROUTE_PRACTICE_SUMMARY, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handlePracticeSummary(req, res);
-    });
-
-    route(ROUTE_PRACTICE_GENERATE, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handlePracticeGenerate(req, res, ctx);
-    });
-
-    route(ROUTE_PRACTICE_JOB, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handlePracticeJob(req, res);
-    });
-
-    route(ROUTE_PRACTICE_SESSION, (req, res) => {
-      if (methodIs(req, 'GET')) {
-        handlePracticeSessionGet(req, res);
-        return;
-      }
-      if (methodIs(req, 'POST')) {
-        return handlePracticeSession(req, res);
-      }
-      res.statusCode = 405;
-      res.end();
-    });
-
-    route(ROUTE_PRACTICE_ANSWER, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handlePracticeAnswer(req, res);
-    });
-
-    route(ROUTE_PRACTICE_EXPLAIN, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handlePracticeExplain(req, res, ctx);
-    });
-
-    route(ROUTE_PRACTICE_FINISH, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handlePracticeFinish(req, res);
-    });
-
-    route(ROUTE_PRACTICE_FLAG, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handlePracticeFlag(req, res);
-    });
-
-    route(ROUTE_PRACTICE_REVIEW, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handlePracticeReview(req, res);
-    });
-
-    route(ROUTE_PAGES, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handlePages(req, res);
-    });
+    route(ROUTE_PAGES, routeV2);
 
     route(ROUTE_PROGRESS, (req, res) => {
       if (methodIs(req, 'GET')) {
@@ -3097,50 +2977,15 @@ export function apply(ctx) {
 
     route(ROUTE_TRASH_CLEAR, routeV2);
 
-    route(ROUTE_EXPORT, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleExport(req, res);
-    });
+    route(ROUTE_EXPORT, routeV2);
+    route(ROUTE_EXPORT_SIZE, routeV2);
+    route(ROUTE_EXPORT_PPTX_PLAN, routeV2);
+    route(ROUTE_EXPORT_PPTX, routeV2);
+    route(ROUTE_EXPORT_PPTX_BATCH, routeV2);
 
-    route(ROUTE_EXPORT_SIZE, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleExportSize(req, res);
-    });
-
-    route(ROUTE_EXPORT_PPTX_PLAN, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handlePptxPlan(req, res);
-    });
-
-    route(ROUTE_EXPORT_PPTX, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handlePptxExport(req, res);
-    });
-
-    route(ROUTE_IMPORT_PACKAGE, (req, res, headers) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleImportPackage(req, res, headers);
-    });
+    route(ROUTE_IMPORT_PACKAGE, routeV2);
+    route(ROUTE_IMPORT_PACKAGE_JOB, routeV2);
+    route(ROUTE_IMPORT_PACKAGE_CANCEL, routeV2);
 
     route(ROUTE_REVOICE, routeV2);
     route(ROUTE_PREFIX + '/revoice/job', routeV2);

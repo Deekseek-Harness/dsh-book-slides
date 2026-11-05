@@ -61,6 +61,44 @@ import {
   voicePayload,
 } from './voice.js';
 import { deleteBackup, diagnosticsPayload, listBackups, openBackup, settingsPayload } from './settings.js';
+import {
+  cancelPracticeJob,
+  cancelPracticeJobsForBook,
+  cancelPracticeJobsForSeries,
+  explainQuestion,
+  finishSessionById,
+  flagQuestion,
+  getPracticeJob,
+  getRunningSession,
+  practiceSummary,
+  reviewSession,
+  startPracticeBankJob,
+  startSession,
+  submitAnswer,
+} from './practice.js';
+import {
+  cancelImageJobsForBook,
+  cancelImageJobsForSeries,
+  getImageStatus,
+  imageFile,
+  imagePayload,
+  probeImage,
+  saveImageConfig,
+  saveImageWorkflow,
+  startImageJob,
+  testImage,
+} from './images.js';
+import { buildPptx, buildPptxBatch, contentDisposition, planPptx, PptxError } from './pptx.js';
+import {
+  cancelImportJob,
+  exportSize,
+  getImportJob,
+  normalizePolicy,
+  packageFileName,
+  planExport,
+  startImportPackageJob,
+  writeExportStream,
+} from './package.js';
 import { recordError } from './errors.js';
 
 export const PREFIX = '/dsh-book-slides';
@@ -382,7 +420,11 @@ async function handleDelete(req, res, url) {
   for (const series of seriesList) {
     if (cancelSeriesJob(series.id)) cancelledJob = true;
     if (cancelRevoiceJobsForSeries(series.id) > 0) cancelledJob = true;
+    if (cancelPracticeJobsForSeries(series.id) > 0) cancelledJob = true;
+    if (cancelImageJobsForSeries(series.id)) cancelledJob = true;
   }
+  if (cancelPracticeJobsForBook(bookId) > 0) cancelledJob = true;
+  if (cancelImageJobsForBook(bookId) > 0) cancelledJob = true;
   for (const series of seriesList) {
     await waitJobIdle(series.id, 1500);
     await waitRevoiceIdle(series.id, 1500);
@@ -991,6 +1033,18 @@ function handleAudio(req, res, url) {
   streamFile(req, res, hit.file, hit.type);
 }
 
+function handlePages(req, res, url) {
+  ensureRoot();
+  const bookId = requireId(url);
+  const loaded = loadBook(bookId);
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  sendJson(res, 200, { ok: true, pages: Array.isArray(pages) ? pages : [] });
+}
+
 function handleSettings(req, res, options) {
   ensureRoot();
   sendJson(res, 200, Object.assign({ ok: true }, settingsPayload(options.ctx || null)));
@@ -1028,7 +1082,466 @@ async function handleBackupOpen(req, res) {
   }
 }
 
-/** 等系列作业收口后再删目录（最多 3 秒），避免作业把删掉的目录又写回来。 */
+/* ------------------------------ M5: 练习 / 配图 / 导出 / 书档 ------------------------------ */
+
+function practiceError(res, err) {
+  if (err && err.code === 'E_BANK_CACHED') {
+    sendJson(res, 200, { ok: true, cached: true, code: err.code, message: err.message, hint: err.hint || '' });
+    return;
+  }
+  if (err && err.code && String(err.code).startsWith('E_')) {
+    sendError(res, err.code, err.message || '练习操作失败', err.hint || '');
+    return;
+  }
+  sendError(res, 'E_PRACTICE', '练习操作失败', String((err && err.message) || err).slice(0, 200));
+}
+
+async function handlePracticeBank(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 256 * 1024);
+  try {
+    const job = startPracticeBankJob({
+      seriesId: String(body.seriesId || ''),
+      chapters: Array.isArray(body.chapters) ? body.chapters : null,
+      topup: body.topup === true,
+      rounds: body.rounds,
+      ctx: options.ctx || null,
+    });
+    sendJson(res, 200, job);
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+function handlePracticeJob(req, res, url) {
+  ensureRoot();
+  const job = getPracticeJob(url.searchParams.get('jobId'));
+  if (!job) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个题库作业', '作业可能已完成并过期。');
+    return;
+  }
+  sendJson(res, 200, job);
+}
+
+async function handlePracticeCancel(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  sendJson(res, 200, { ok: true, cancelled: cancelPracticeJob(body.jobId) });
+}
+
+function handlePracticeSummary(req, res, url) {
+  ensureRoot();
+  try {
+    sendJson(res, 200, Object.assign({ ok: true }, practiceSummary(url.searchParams.get('seriesId'))));
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+function handlePracticeSessionGet(req, res, url) {
+  ensureRoot();
+  try {
+    const out = getRunningSession(url.searchParams.get('seriesId'));
+    if (!out) {
+      sendJson(res, 200, { ok: false, code: 'E_NO_SESSION', message: '当前没有可继续的练习', hint: '开始一场新练习。' });
+      return;
+    }
+    sendJson(res, 200, Object.assign({ ok: true }, out));
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+async function handlePracticeSessionPost(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const out = startSession({
+      seriesId: String(body.seriesId || ''),
+      mode: String(body.mode || 'mixed'),
+      count: body.count,
+      chapters: Array.isArray(body.chapters) ? body.chapters : null,
+    });
+    sendJson(res, 200, Object.assign({ ok: true }, out));
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+async function handlePracticeAnswer(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const out = submitAnswer({
+      seriesId: String(body.seriesId || ''),
+      sessionId: String(body.sessionId || ''),
+      qid: String(body.qid || ''),
+      picked: Array.isArray(body.picked) ? body.picked : [],
+    });
+    sendJson(res, 200, Object.assign({ ok: true }, out));
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+async function handlePracticeExplain(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const out = await explainQuestion({
+      seriesId: String(body.seriesId || ''),
+      qid: String(body.qid || ''),
+      picked: Array.isArray(body.picked) ? body.picked : [],
+      ctx: options.ctx || null,
+      options: { timeoutMs: Number(body.timeoutMs) || undefined },
+    });
+    sendJson(res, 200, Object.assign({ ok: true }, out));
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+async function handlePracticeFinish(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const summary = finishSessionById({ seriesId: String(body.seriesId || ''), sessionId: String(body.sessionId || '') });
+    sendJson(res, 200, { ok: true, summary });
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+async function handlePracticeFlag(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    sendJson(res, 200, Object.assign({ ok: true }, flagQuestion({
+      seriesId: String(body.seriesId || ''),
+      qid: String(body.qid || ''),
+      flagged: body.flagged !== false,
+    })));
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+async function handlePracticeReview(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    sendJson(res, 200, Object.assign({ ok: true }, reviewSession({ seriesId: String(body.seriesId || '') })));
+  } catch (err) {
+    practiceError(res, err);
+  }
+}
+
+/* 配图 ---------------------------------------------------------------- */
+
+async function handleImageConfig(req, res) {
+  ensureRoot();
+  if (req.method === 'GET') {
+    sendJson(res, 200, Object.assign({ ok: true }, imagePayload()));
+    return;
+  }
+  const body = await readJsonBody(req, 256 * 1024);
+  try {
+    sendJson(res, 200, Object.assign({ ok: true }, saveImageConfig(body && body.image && typeof body.image === 'object' ? body.image : body)));
+  } catch (err) {
+    sendError(res, err.code || 'E_IMG_CONFIG', '配图配置没存下来', String((err && err.message) || err).slice(0, 200));
+  }
+}
+
+async function handleImageWorkflow(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 2 * 1024 * 1024);
+  try {
+    sendJson(res, 200, Object.assign({ ok: true }, saveImageWorkflow(body)));
+  } catch (err) {
+    sendJson(res, 200, {
+      ok: false,
+      code: (err && err.code) || 'E_IMG_WORKFLOW',
+      error: String((err && err.message) || err),
+      hint: (err && err.hint) || '',
+      candidates: (err && err.candidates) || [],
+    });
+  }
+}
+
+async function handleImageProbe(req, res, options) {
+  ensureRoot();
+  try {
+    const out = await probeImage({ fetchImpl: options.imageFetch });
+    sendJson(res, 200, Object.assign({ ok: true }, out));
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_IMG_CONNECT', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
+async function handleImageTest(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 16 * 1024);
+  try {
+    const out = await testImage({ prompt: body && body.prompt, options: { fetchImpl: options.imageFetch } });
+    res.statusCode = 200;
+    res.setHeader('content-type', 'image/png');
+    res.setHeader('content-length', String(out.buffer.length));
+    res.setHeader('cache-control', 'no-store');
+    res.setHeader('x-image-seed', String(out.seed));
+    res.setHeader('x-image-node', String(out.promptNode));
+    res.end(out.buffer);
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_IMG_FAIL', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
+function handleImageStatus(req, res, url) {
+  ensureRoot();
+  try {
+    sendJson(res, 200, getImageStatus(url.searchParams.get('seriesId')));
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_NOT_FOUND', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
+async function handleImageRegen(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const job = startImageJob({
+      seriesId: String(body.seriesId || ''),
+      lecture: body.lecture == null || body.lecture === 'all' ? null : Number(body.lecture),
+      slide: body.slide == null ? null : Number(body.slide),
+      force: body.force === true,
+      options: { fetchImpl: options.imageFetch },
+    });
+    sendJson(res, 200, job);
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_IMG_FAIL', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
+async function handleImageCancel(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const cancelled = cancelImageJobsForSeries(String(body.seriesId || ''));
+  sendJson(res, 200, { ok: true, cancelled, status: cancelled ? 'cancelling' : 'none' });
+}
+
+function handleImageFile(req, res, url) {
+  ensureRoot();
+  const found = findSeriesOr404(res, url.searchParams.get('seriesId'));
+  if (!found) return;
+  const lecture = Number(url.searchParams.get('lecture'));
+  const index = Number(url.searchParams.get('i'));
+  const file = imageFile(found.dir, lecture, index);
+  if (!file) {
+    sendError(res, 'E_NOT_FOUND', '这一页还没有配图', '到设置里切到 ComfyUI 并生成配图。');
+    return;
+  }
+  const stat = fs.statSync(file);
+  res.statusCode = 200;
+  res.setHeader('content-type', 'image/png');
+  res.setHeader('content-length', String(stat.size));
+  res.setHeader('cache-control', 'no-store');
+  fs.createReadStream(file).pipe(res);
+}
+
+/* PPT 导出 ------------------------------------------------------------ */
+
+function flagOf(url, key) {
+  const raw = url.searchParams.get(key);
+  if (raw == null || raw === '') return true;
+  return raw !== '0' && raw !== 'false';
+}
+
+function pptxOptions(url) {
+  return {
+    includeAudio: flagOf(url, 'audio'),
+    includeImages: flagOf(url, 'images'),
+    includeNotes: flagOf(url, 'notes'),
+  };
+}
+
+function pptxError(res, err) {
+  if (err instanceof PptxError) {
+    sendError(res, err.code, err.message, err.hint);
+    return;
+  }
+  sendError(res, (err && err.code) || 'E_PPT_FAIL', String((err && err.message) || err), (err && err.hint) || '');
+}
+
+function handlePptxPlan(req, res, url) {
+  ensureRoot();
+  const seriesId = String(url.searchParams.get('seriesId') || '');
+  const lecture = url.searchParams.get('lecture') || 'all';
+  try {
+    const plan = planPptx(Object.assign({ seriesId, lecture: lecture === 'all' ? 'all' : Number(lecture) }, pptxOptions(url)));
+    sendJson(res, 200, { ok: true, plan });
+  } catch (err) {
+    pptxError(res, err);
+  }
+}
+
+async function handlePptxExport(req, res, url) {
+  ensureRoot();
+  const seriesId = String(url.searchParams.get('seriesId') || '');
+  const lecture = url.searchParams.get('lecture') || 'all';
+  try {
+    const out = await buildPptx(Object.assign({ seriesId, lecture: lecture === 'all' ? 'all' : Number(lecture) }, pptxOptions(url)));
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    res.setHeader('content-length', String(out.buffer.length));
+    res.setHeader('content-disposition', contentDisposition(out.plan.fileName));
+    res.setHeader('cache-control', 'no-store');
+    res.end(out.buffer);
+  } catch (err) {
+    pptxError(res, err);
+  }
+}
+
+async function handlePptxBatch(req, res, url) {
+  ensureRoot();
+  const seriesId = String(url.searchParams.get('seriesId') || '');
+  const lectures = url.searchParams.get('lectures') || 'all';
+  try {
+    const out = await buildPptxBatch(Object.assign({ seriesId, lectures }, pptxOptions(url)));
+    const found = findSeries(seriesId);
+    const title = String((found && found.series.title) || '精讲').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/zip');
+    res.setHeader('content-length', String(out.buffer.length));
+    res.setHeader('content-disposition', contentDisposition(title + '-精讲-合集.zip'));
+    res.setHeader('cache-control', 'no-store');
+    res.end(out.buffer);
+  } catch (err) {
+    pptxError(res, err);
+  }
+}
+
+/* 书档 ---------------------------------------------------------------- */
+
+async function handlePackageExport(req, res, url) {
+  ensureRoot();
+  const q = url.searchParams;
+  const bookIds = q.get('bookIds')
+    ? q.get('bookIds').split(',')
+    : q.get('bookId')
+      ? [q.get('bookId')]
+      : 'all';
+  try {
+    const plan = await planExport(bookIds, {
+      includeAudio: flagOf(url, 'audio'),
+      includeImages: flagOf(url, 'images'),
+      includePractice: flagOf(url, 'practice'),
+    });
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/zip');
+    res.setHeader('content-disposition', contentDisposition(packageFileName(plan)));
+    res.setHeader('cache-control', 'no-store');
+    writeExportStream(res, plan);
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_EXPORT_FAILED', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
+function handlePackageSize(req, res, url) {
+  ensureRoot();
+  const q = url.searchParams;
+  try {
+    const out = exportSize({
+      bookId: q.get('bookId') || null,
+      all: q.get('all') === '1' || q.get('all') === 'true' || !q.get('bookId'),
+    });
+    sendJson(res, 200, Object.assign({ ok: true }, out));
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_EXPORT_FAILED', String((err && err.message) || err), '');
+  }
+}
+
+/** 书档上传：流式落盘到 .import/，避免 4 GiB 包整份进内存。 */
+function saveUpload(req, file, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const out = fs.createWriteStream(file);
+    let failed = false;
+    const fail = (err) => {
+      if (failed) return;
+      failed = true;
+      try {
+        out.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        fs.rmSync(file, { force: true });
+      } catch {
+        /* ignore */
+      }
+      reject(err);
+    };
+    req.on('data', (chunk) => {
+      if (failed) return;
+      size += chunk.length;
+      if (size > limit) {
+        fail(Object.assign(new Error('书档超过 4 GiB'), { code: 'E_PKG_TOO_LARGE' }));
+        req.destroy();
+        return;
+      }
+      out.write(chunk);
+    });
+    req.on('end', () => {
+      if (failed) return;
+      out.end(() => resolve({ size }));
+    });
+    req.on('error', (err) => fail(err));
+    out.on('error', (err) => fail(err));
+  });
+}
+
+async function handleImportPackage(req, res) {
+  ensureRoot();
+  const staging = path.join(ROOT, '.import');
+  fs.mkdirSync(staging, { recursive: true });
+  const zipPath = path.join(staging, 'upload-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.zip');
+  let fileName = 'package.zip';
+  try {
+    fileName = decodeURIComponent(String(req.headers['x-file-name'] || 'package.zip'));
+  } catch {
+    fileName = String(req.headers['x-file-name'] || 'package.zip');
+  }
+  try {
+    await saveUpload(req, zipPath, 4 * 1024 ** 3);
+    const policy = normalizePolicy(req.headers['x-package-policy'] || new URL(req.url || '/', 'http://localhost').searchParams.get('policy'));
+    const job = startImportPackageJob({ zipPath, policy, fileName });
+    sendJson(res, 200, { ok: true, jobId: job.jobId, policy: job.policy, status: job.status });
+  } catch (err) {
+    try {
+      fs.rmSync(zipPath, { force: true });
+    } catch {
+      /* ignore */
+    }
+    sendError(res, (err && err.code) || 'E_PKG_FAILED', String((err && err.message) || err).slice(0, 300), '');
+  }
+}
+
+function handleImportJob(req, res, url) {
+  ensureRoot();
+  const job = getImportJob(url.searchParams.get('jobId'));
+  if (!job) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个导入作业', '作业可能已完成并过期。');
+    return;
+  }
+  sendJson(res, 200, job);
+}
+
+async function handleImportCancel(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  sendJson(res, 200, { ok: true, cancelled: cancelImportJob(body.jobId) });
+}
+
+
 async function waitJobIdle(seriesId, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
   while (isSeriesJobActive(seriesId) && Date.now() < deadline) {
@@ -1051,6 +1564,8 @@ async function handleSeriesDelete(req, res, url) {
   if (!found) return;
   const cancelledJob = cancelSeriesJob(found.series.id);
   cancelRevoiceJobsForSeries(found.series.id);
+  cancelPracticeJobsForSeries(found.series.id);
+  cancelImageJobsForSeries(found.series.id);
   if (cancelledJob) await waitJobIdle(found.series.id);
   try {
     deleteSeries(found.series.id);
@@ -1177,6 +1692,10 @@ async function routeM1Inner(req, res, url, options = {}) {
     handleBriefsGet(req, res, url);
     return true;
   }
+  if (pathname === PREFIX + '/pages') {
+    handlePages(req, res, url);
+    return true;
+  }
   if (pathname === PREFIX + '/preference') {
     if (req.method === 'GET') {
       handlePreferenceGet(req, res);
@@ -1219,6 +1738,122 @@ async function routeM1Inner(req, res, url, options = {}) {
   }
   if (pathname === PREFIX + '/audio') {
     handleAudio(req, res, url);
+    return true;
+  }
+  /* ------------------------------ M5 路由 ------------------------------ */
+  if (pathname === PREFIX + '/practice/bank') {
+    await handlePracticeBank(req, res, options);
+    return true;
+  }  if (pathname === PREFIX + '/practice/job') {
+    handlePracticeJob(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/cancel') {
+    await handlePracticeCancel(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/summary') {
+    handlePracticeSummary(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/session') {
+    if (req.method === 'GET') {
+      handlePracticeSessionGet(req, res, url);
+      return true;
+    }
+    if (req.method === 'POST') {
+      await handlePracticeSessionPost(req, res);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/answer') {
+    await handlePracticeAnswer(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/explain') {
+    await handlePracticeExplain(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/finish') {
+    await handlePracticeFinish(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/flag') {
+    await handlePracticeFlag(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/practice/review') {
+    await handlePracticeReview(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/image') {
+    if (req.method === 'GET') {
+      handleImageFile(req, res, url);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/image/config') {
+    await handleImageConfig(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/image/workflow') {
+    await handleImageWorkflow(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/image/probe') {
+    await handleImageProbe(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/image/test') {
+    await handleImageTest(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/image/status') {
+    handleImageStatus(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/image/regen') {
+    await handleImageRegen(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/image/cancel') {
+    await handleImageCancel(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/export/pptx/plan') {
+    handlePptxPlan(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/export/pptx/batch') {
+    await handlePptxBatch(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/export/pptx') {
+    await handlePptxExport(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/export/size') {
+    handlePackageSize(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/export') {
+    await handlePackageExport(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/import/package') {
+    await handleImportPackage(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/import/package/job') {
+    handleImportJob(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/import/package/cancel') {
+    await handleImportCancel(req, res);
     return true;
   }
   if (pathname === PREFIX + '/settings') {

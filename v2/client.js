@@ -144,6 +144,7 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-stage-figure{flex:0 0 34%;border:1px dashed #c9bda0;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:10px;color:#8a7b5a;text-align:center;padding:8px;background:rgba(255,255,255,.35);cursor:pointer}
 .blm-stage-figure:hover,.blm-stage-figure:focus-visible{border-color:#a8986f;background:rgba(255,255,255,.62);outline:none}
 .blm-stage-figure.prompt-open{align-items:stretch;justify-content:flex-start;text-align:left;cursor:default;background:rgba(255,255,255,.78);overflow:auto}
+.blm-stage-figure.has-img{border-style:solid;padding:0;background:transparent;cursor:zoom-in;overflow:hidden}
 .blm-stage-figure b{font-size:11px;color:#6b5f47}
 .blm-stage-figure-prompt{display:flex;flex-direction:column;gap:6px;width:100%;height:100%}
 .blm-stage-figure-prompt-text{flex:1;overflow:auto;font-size:10px;line-height:1.55;color:#4a4030;word-break:break-word}
@@ -194,6 +195,25 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-note.warn{border-color:color-mix(in oklab,#c62828 30%,transparent);color:#c62828}
 body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 .blm-errline{font-size:11px;color:var(--blm-dim)}
+
+/* ---------- M5 练习 / 导出 / 书档 / 配图 ---------- */
+.blm-practice{display:flex;flex-direction:column;gap:8px}
+.blm-practice-q{border:1px solid var(--blm-line);border-radius:10px;padding:10px 12px;background:var(--blm-card)}
+.blm-practice-stem{font-size:13px;font-weight:600;margin-bottom:8px;line-height:1.6}
+.blm-option{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--blm-line);border-radius:8px;padding:7px 9px;margin:6px 0;cursor:pointer;background:transparent;color:inherit;font:inherit;text-align:left;width:100%}
+.blm-option .key{flex:0 0 20px;font-weight:650;color:var(--blm-dim)}
+.blm-option.on{border-color:var(--blm-accent);background:color-mix(in oklab,var(--blm-accent) 8%,transparent)}
+.blm-option.right{border-color:#2ea043;background:color-mix(in oklab,#2ea043 10%,transparent)}
+.blm-option.wrong{border-color:#e55353;background:color-mix(in oklab,#e55353 10%,transparent)}
+.blm-option:disabled{cursor:default}
+.blm-practice-feedback{border-top:1px dashed var(--blm-line);margin-top:8px;padding-top:8px;font-size:12px}
+.blm-practice-quote{border-left:3px solid var(--blm-line);padding-left:8px;color:var(--blm-dim);margin-top:6px;white-space:pre-wrap}
+.blm-cover-thumb{width:100%;border-radius:8px;border:1px solid var(--blm-line);object-fit:contain;max-height:180px}
+.blm-stage-figure-img{width:100%;height:100%;object-fit:contain;border-radius:4px;display:block}
+.blm-export-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
+.blm-import-items{display:flex;flex-direction:column;gap:5px;margin:8px 0;max-height:220px;overflow:auto}
+.blm-import-item{border:1px solid var(--blm-line);border-radius:7px;padding:6px 8px;font-size:12px;display:flex;align-items:center;gap:6px}
+.blm-import-item .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 `;
 
     async function api(path, options) {
@@ -240,6 +260,44 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
     function Toast({ text }) {
       if (!text) return null;
       return h('div', { className: 'blm-toast' }, text);
+    }
+
+    /** 书档上传：裸 ZIP + x-file-name；返回 {jobId} 或错误码。 */
+    function uploadZip(file, policy, onProgress) {
+      return new Promise((resolve, reject) => {
+        if (typeof XMLHttpRequest === 'undefined') {
+          reject(new Error('当前环境不支持上传'));
+          return;
+        }
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', API + '/import/package?policy=' + encodeURIComponent(policy || 'merge'));
+        xhr.setRequestHeader('content-type', 'application/zip');
+        xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total);
+        };
+        xhr.onerror = () => reject(new Error('上传失败，检查连接后重试。'));
+        xhr.onload = () => {
+          try {
+            resolve(JSON.parse(xhr.responseText || '{}'));
+          } catch {
+            reject(new Error('服务端返回的不是 JSON'));
+          }
+        };
+        xhr.send(file);
+      });
+    }
+
+    function downloadUrl(path, fileName) {
+      if (typeof document === 'undefined') return;
+      const url = API + path;
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = String(fileName || '');
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
     }
 
     /* ------------------------------ M4 纯函数（可单测） ------------------------------ */
@@ -592,7 +650,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
     }
 
-    function Card({ book, onOpen, onRename, onDelete, onContinue }) {
+    function Card({ book, onOpen, onRename, onDelete, onContinue, onExport }) {
       const [menu, setMenu] = useState(false);
       const moreRef = useRef(null);
       const menuRef = useRef(null);
@@ -678,6 +736,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 onClick: (event) => event.stopPropagation(),
               },
               h('button', { onClick: () => { setMenu(false); onRename(); } }, '重命名'),
+              h('button', { onClick: () => { setMenu(false); if (onExport) onExport(book); } }, '导出书档'),
               h('button', { className: 'danger', onClick: () => { setMenu(false); onDelete(); } }, '删除'),
             )
           : null,
@@ -983,8 +1042,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
      * 配图位：默认显示占位，点一下（或 Enter/空格）展开 image_prompt，
      * 再点「收起」回占位；有复制按钮。配图本身在 M5 才生成，这里只承载提示词。
      */
-    function StageFigure({ prompt, open, copied, onToggle, onCopy }) {
+    function StageFigure({ prompt, src, open, copied, onToggle, onCopy }) {
       const text = String(prompt || '');
+      const hasImage = Boolean(src && !open);
       const panel = h(
         'div',
         { className: 'blm-stage-figure-prompt', onClick: (event) => event.stopPropagation() },
@@ -999,12 +1059,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       return h(
         'div',
         {
-          className: 'blm-stage-figure' + (open ? ' prompt-open' : ''),
+          className: 'blm-stage-figure' + (open ? ' prompt-open' : '') + (hasImage ? ' has-img' : ''),
           role: 'button',
           tabIndex: 0,
           'aria-expanded': open ? 'true' : 'false',
-          'aria-label': open ? '收起配图提示词' : '查看配图提示词',
-          title: open ? '点击收起' : '点击查看配图提示词',
+          'aria-label': open ? '收起配图提示词' : hasImage ? '查看配图提示词' : '查看配图提示词',
+          title: open ? '点击收起' : hasImage ? '点击查看配图提示词' : '点击查看配图提示词',
           onClick: onToggle,
           onKeyDown: (event) => {
             if (event.target !== event.currentTarget) return;
@@ -1016,17 +1076,19 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         },
         open
           ? panel
-          : h(
-              React.Fragment,
-              null,
-              h('b', null, '配图位'),
-              h('span', null, text ? '点击查看提示词' : '本页无配图'),
-            ),
+          : hasImage
+            ? h('img', { className: 'blm-stage-figure-img', src, alt: '配图' })
+            : h(
+                React.Fragment,
+                null,
+                h('b', null, '配图位'),
+                h('span', null, text ? '点击查看提示词' : '本页无配图'),
+              ),
       );
     }
 
     /** 幻灯片舞台：沿用 1.x 的米色底 / 宋体标题 / 要点 / 引文 / 右下页码。 */
-    function SlideStage({ slide }) {
+    function SlideStage({ slide, seriesId, lecture }) {
       const slideKey = slide ? Number(slide.slide_index) || 0 : 0;
       const [showPrompt, setShowPrompt] = useState(false);
       const [copied, setCopied] = useState(false);
@@ -1037,6 +1099,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       }, [slideKey]);
       if (!slide) return null;
       const layout = String(slide.layout || 'content_text');
+      const imageSrc =
+        slide.image_status === 'ready' && slide.image_file && seriesId
+          ? API + '/image?seriesId=' + encodeURIComponent(seriesId) + '&lecture=' + encodeURIComponent(lecture) + '&i=' + encodeURIComponent(slide.slide_index) + '&v=' + encodeURIComponent(slide.image_seed || '')
+          : '';
       const foot = h('div', { className: 'blm-stage-foot' }, '第 ' + slide.slide_index + ' 页');
       const copyPrompt = (event) => {
         if (event && event.stopPropagation) event.stopPropagation();
@@ -1106,6 +1172,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             ),
             h(StageFigure, {
               prompt: slide.image_prompt,
+              src: imageSrc,
               open: showPrompt,
               copied: copied,
               onToggle: () => setShowPrompt((value) => !value),
@@ -1781,7 +1848,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               }
             },
           }),
-          h('div', { className: 'blm-pane-stage' }, h(SlideStage, { key: lectureN + '-' + (slide ? slide.slide_index : 0), slide })),
+          h('div', { className: 'blm-pane-stage' }, h(SlideStage, { key: lectureN + '-' + (slide ? slide.slide_index : 0), slide, seriesId, lecture: lectureN })),
         ),
         transition
           ? h(TransitionCard, {
@@ -1877,16 +1944,699 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       );
     }
 
+    /* ------------------------------ M5 练习面板 ------------------------------ */
+
+    function PracticePanel({ series, onClose, notify }) {
+      const [summary, setSummary] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [busy, setBusy] = useState(false);
+      const [job, setJob] = useState(null);
+      const [session, setSession] = useState(null);
+      const [index, setIndex] = useState(0);
+      const [picked, setPicked] = useState([]);
+      const [feedback, setFeedback] = useState(null);
+      const [explainState, setExplainState] = useState({ status: 'idle', text: '' });
+      const [finished, setFinished] = useState(null);
+      const [mode, setMode] = useState('mixed');
+      const [count, setCount] = useState(8);
+      const [topupOpen, setTopupOpen] = useState(false);
+      const [topupRounds, setTopupRounds] = useState(1);
+
+      const loadSummary = useCallback(async () => {
+        setLoading(true);
+        try {
+          setSummary(await api('/practice/summary?seriesId=' + encodeURIComponent(series.id)));
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setLoading(false);
+        }
+      }, [series.id, notify]);
+
+      useEffect(() => {
+        loadSummary();
+      }, [loadSummary]);
+
+      const jobActive = job != null && ['queued', 'drafting', 'checking', 'anchoring', 'cancelling'].includes(String(job.status || ''));
+      useEffect(() => {
+        if (!jobActive || !job || !job.jobId) return undefined;
+        const timer = setInterval(async () => {
+          try {
+            const out = await api('/practice/job?jobId=' + encodeURIComponent(job.jobId));
+            setJob(out);
+            if (!['queued', 'drafting', 'checking', 'anchoring', 'cancelling'].includes(String(out.status || ''))) {
+              await loadSummary();
+            }
+          } catch (err) {
+            notify(err.message);
+          }
+        }, 900);
+        return () => clearInterval(timer);
+      }, [jobActive, job, notify, loadSummary]);
+
+      const startBank = async (topup, rounds) => {
+        setBusy(true);
+        try {
+          const out = await api('/practice/bank', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, topup: topup === true, rounds: rounds || 1 }),
+          });
+          if (out.cached) {
+            notify('题库已经准备好了');
+            await loadSummary();
+          } else if (out.ok) {
+            setJob(out);
+            notify('已开始准备题库');
+          } else {
+            notify(out.message || '准备题库失败');
+          }
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+          setTopupOpen(false);
+        }
+      };
+
+      const cancelJob = async () => {
+        if (!job || !job.jobId) return;
+        try {
+          await api('/practice/cancel', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jobId: job.jobId }),
+          });
+          notify('正在取消…');
+        } catch (err) {
+          notify(err.message);
+        }
+      };
+
+      const applySession = (payload) => {
+        setSession(payload);
+        setFinished(null);
+        setFeedback(null);
+        setPicked([]);
+        setExplainState({ status: 'idle', text: '' });
+        const answered = new Set(((payload.session && payload.session.answers) || []).map((answer) => String(answer.qid)));
+        const next = (payload.questions || []).findIndex((question) => !answered.has(String(question.qid)));
+        setIndex(next < 0 ? 0 : next);
+      };
+
+      const begin = async () => {
+        setBusy(true);
+        try {
+          const out = await api('/practice/session', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, mode, count }),
+          });
+          if (!out.ok) {
+            notify(out.code === 'E_BANK_INSUFFICIENT' ? '题库不足：先准备题库或补题。' : out.message || '开场失败');
+            return;
+          }
+          applySession(out);
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const resume = async () => {
+        setBusy(true);
+        try {
+          const out = await api('/practice/session?seriesId=' + encodeURIComponent(series.id));
+          if (!out.ok) {
+            notify('没有可继续的练习');
+            await loadSummary();
+            return;
+          }
+          applySession(out);
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const question = session && session.questions ? session.questions[index] : null;
+      const answeredCount = session && session.session && Array.isArray(session.session.answers) ? session.session.answers.length : 0;
+
+      const choose = (key) => {
+        if (feedback) return;
+        if (String(question.type) === 'multi') {
+          setPicked((prev) => (prev.includes(key) ? prev.filter((value) => value !== key) : prev.concat(key)));
+          return;
+        }
+        setPicked([key]);
+      };
+
+      const submit = async (empty) => {
+        if (!question) return;
+        setBusy(true);
+        try {
+          const out = await api('/practice/answer', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, sessionId: session.sessionId, qid: question.qid, picked: empty ? [] : picked }),
+          });
+          if (!out.ok) {
+            notify(out.message || '提交失败');
+            return;
+          }
+          setFeedback(out);
+          setExplainState({ status: out.explanation ? 'ready' : 'idle', text: out.explanation || '' });
+          await loadSummary();
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const askExplain = async () => {
+        if (!question) return;
+        setExplainState({ status: 'loading', text: '' });
+        try {
+          const out = await api('/practice/explain', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, qid: question.qid, picked: feedback ? [] : picked }),
+          });
+          if (!out.ok) {
+            setExplainState({ status: 'failed', text: out.message || '讲解暂时生成不了，先看原文。' });
+            return;
+          }
+          setExplainState({ status: 'ready', text: out.explanation || '' });
+        } catch (err) {
+          setExplainState({ status: 'failed', text: err.message });
+        }
+      };
+
+      const next = () => {
+        const total = session && session.questions ? session.questions.length : 0;
+        setFeedback(null);
+        setPicked([]);
+        setExplainState({ status: 'idle', text: '' });
+        if (index + 1 >= total) {
+          notify('已经是最后一题，可以结束练习查看总结。');
+          return;
+        }
+        setIndex(index + 1);
+      };
+
+      const finish = async () => {
+        if (!session) return;
+        setBusy(true);
+        try {
+          const out = await api('/practice/finish', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, sessionId: session.sessionId }),
+          });
+          if (!out.ok) {
+            notify(out.message || '结束失败');
+            return;
+          }
+          setFinished(out.summary);
+          setSession(null);
+          await loadSummary();
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const flag = async () => {
+        if (!question) return;
+        try {
+          await api('/practice/flag', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, qid: question.qid }),
+          });
+          notify('已标记，这题不再组卷');
+        } catch (err) {
+          notify(err.message);
+        }
+      };
+
+      const close = () => {
+        if (jobActive) {
+          notify('题库还在准备中；关闭面板后可回来查看进度。');
+        }
+        onClose();
+      };
+
+      return h(
+        'div',
+        { className: 'blm-modal-mask', onClick: (event) => { if (event.target === event.currentTarget) close(); } },
+        h(
+          'div',
+          { className: 'blm-modal blm-plan-modal' },
+          h(
+            'div',
+            { className: 'blm-row' },
+            h('strong', null, '练一练 · ' + series.title),
+            h('span', { className: 'blm-badge' }, (series.chapters || []).length + ' 章'),
+            h('div', { style: { flex: 1 } }),
+            h('button', { className: 'blm-btn', onClick: close }, '关闭'),
+          ),
+          loading
+            ? h('div', { className: 'blm-dim', style: { marginTop: 10 } }, '正在读题库…')
+            : !summary
+              ? h(
+                  'div',
+                  { className: 'blm-practice' },
+                  h('div', { className: 'blm-error' }, '题库状态没读出来，稍后重试。'),
+                  h('button', { className: 'blm-btn', onClick: loadSummary }, '重试'),
+                )
+              : finished
+              ? h(
+                  'div',
+                  { className: 'blm-practice' },
+                  h('div', { className: 'blm-note' }, '本场结束：答 ' + finished.answered + '/' + finished.total + ' 题，正确 ' + finished.correct + ' 题（' + Math.round((finished.accuracy || 0) * 100) + '%）'),
+                  (finished.wrongQids || []).length ? h('div', { className: 'blm-dim' }, '错题已进入错题本：' + finished.wrongQids.length + ' 题') : null,
+                  h(
+                    'div',
+                    { className: 'blm-row' },
+                    h('button', { className: 'blm-btn primary', disabled: busy, onClick: begin }, '再练一场'),
+                    h('button', { className: 'blm-btn', disabled: busy, onClick: async () => {
+                      setBusy(true);
+                      try {
+                        const out = await api('/practice/review', {
+                          method: 'POST',
+                          headers: { 'content-type': 'application/json' },
+                          body: JSON.stringify({ seriesId: series.id }),
+                        });
+                        if (!out.ok) notify(out.message || '没有到期/错题可复习');
+                        else applySession(out);
+                      } catch (err) {
+                        notify(err.message);
+                      } finally {
+                        setBusy(false);
+                      }
+                    } }, '复习错题'),
+                  ),
+                )
+              : session && question
+                ? h(
+                    'div',
+                    { className: 'blm-practice' },
+                    h(
+                      'div',
+                      { className: 'blm-row', style: { fontSize: 12 } },
+                      h('span', { className: 'blm-dim' }, '第 ' + (index + 1) + '/' + session.questions.length + ' 题 · 已答 ' + answeredCount + ' · ' + String(question.type === 'multi' ? '多选' : question.type === 'judge' ? '判断' : '单选')),
+                      h('span', { className: 'blm-badge' }, question.point || '考点'),
+                      h('div', { style: { flex: 1 } }),
+                      h('button', { className: 'blm-btn', disabled: busy, onClick: flag }, '这题有问题'),
+                    ),
+                    h('div', { className: 'blm-practice-q' },
+                      h('div', { className: 'blm-practice-stem' }, question.stem),
+                      (question.options || []).map((option) => {
+                        const key = String(option.key);
+                        const chosen = picked.includes(key);
+                        const isAnswer = feedback && feedback.correct !== undefined && Array.isArray(feedback.answer) && feedback.answer.includes(key);
+                        const wrong = feedback && !feedback.correct && chosen;
+                        return h(
+                          'button',
+                          {
+                            key,
+                            className: 'blm-option' + (isAnswer ? ' right' : wrong ? ' wrong' : chosen ? ' on' : ''),
+                            disabled: Boolean(feedback) || busy,
+                            onClick: () => choose(key),
+                          },
+                          h('span', { className: 'key' }, key),
+                          h('span', null, option.text),
+                        );
+                      }),
+                      feedback
+                        ? h(
+                            'div',
+                            { className: 'blm-practice-feedback' },
+                            h('div', { className: feedback.correct ? 'blm-ok' : 'blm-bad' }, feedback.correct ? '答对了' : '答错了 · 正确答案 ' + (feedback.answer || []).join('、')),
+                            feedback.source_quote ? h('div', { className: 'blm-practice-quote' }, '原文：' + feedback.source_quote) : null,
+                            h(
+                              'div',
+                              { className: 'blm-row', style: { marginTop: 6 } },
+                              h('button', { className: 'blm-btn', disabled: busy, onClick: askExplain }, explainState.status === 'loading' ? '讲解生成中…' : '查看讲解'),
+                              explainState.status === 'failed' ? h('span', { className: 'blm-dim' }, explainState.text) : null,
+                            ),
+                            explainState.status === 'ready' && explainState.text ? h('div', { className: 'blm-practice-quote' }, explainState.text) : null,
+                          )
+                        : null,
+                    ),
+                    h(
+                      'div',
+                      { className: 'blm-row' },
+                      feedback
+                        ? h('button', { className: 'blm-btn primary', disabled: busy, onClick: next }, '下一题')
+                        : h(
+                            React.Fragment,
+                            null,
+                            h('button', { className: 'blm-btn primary', disabled: busy || !picked.length, onClick: () => submit(false) }, '提交答案'),
+                            h('button', { className: 'blm-btn', disabled: busy, onClick: () => submit(true) }, '不会，看答案'),
+                          ),
+                      h('button', { className: 'blm-btn', disabled: busy, onClick: finish }, '结束练习'),
+                    ),
+                  )
+                : h(
+                    'div',
+                    { className: 'blm-practice' },
+                    h(
+                      'div',
+                      { className: 'blm-row', style: { fontSize: 12 } },
+                      h('span', null, '题库 ' + summary.counts.questions + ' 题'),
+                      h('span', { className: 'blm-dim' }, '覆盖 ' + summary.counts.covered + '/' + summary.counts.chapters + ' 章'),
+                      h('span', { className: 'blm-dim' }, '待复习 ' + summary.counts.due + ' · 错题 ' + summary.counts.wrong),
+                    ),
+                    h(
+                      'div',
+                      { className: 'blm-chapters', style: { marginTop: 0 } },
+                      (summary.chapters || []).map((chapter) =>
+                        h(
+                          'div',
+                          { className: 'blm-chapter', key: chapter.n, style: { gridTemplateColumns: '34px 1fr 70px 60px' } },
+                          h('span', { className: 'blm-dim' }, '#' + chapter.n),
+                          h('span', { className: 't' }, chapter.title),
+                          h('span', { className: 'blm-dim' }, chapter.covered ? chapter.count + ' 题' : '未就绪'),
+                          h('span', { className: 'blm-badge' + (chapter.count >= 4 ? ' ok' : '') }, chapter.count >= 4 ? '可用' : '待补'),
+                        ),
+                      ),
+                    ),
+                    jobActive
+                      ? h(
+                          'div',
+                          null,
+                          h('div', { className: 'blm-dim', style: { fontSize: 12 } }, '题库准备中：' + (job.stage || '') + ' · ' + (job.current || 0) + '/' + (job.total || 0)),
+                          h('div', { className: 'blm-progress' }, h('i', { style: { width: Math.round((Math.min(1, (job.current || 0) / Math.max(1, job.total || 1))) * 100) + '%' } })),
+                          h('button', { className: 'blm-btn', disabled: busy, onClick: cancelJob }, '取消题库作业'),
+                        )
+                      : null,
+                    h(
+                      'div',
+                      { className: 'blm-row' },
+                      h('button', { className: 'blm-btn', disabled: busy || jobActive, onClick: () => startBank(false) }, '准备题库'),
+                      h('button', { className: 'blm-btn', disabled: busy || jobActive, onClick: () => setTopupOpen(true) }, '补题'),
+                      summary.session
+                        ? h('button', { className: 'blm-btn primary', disabled: busy, onClick: resume }, '继续上次练习（已答 ' + ((summary.session.answers || []).length) + ' 题）')
+                        : null,
+                      h(
+                        'button',
+                        { className: 'blm-btn primary', disabled: busy || jobActive, onClick: begin },
+                        summary.counts.questions ? '开始练习' : '题库不足，先准备',
+                      ),
+                      h('select', { className: 'blm-select', value: mode, onChange: (event) => setMode(event.target.value), 'aria-label': '练习模式' },
+                        h('option', { value: 'mixed' }, '混合（新题 + 到期）'),
+                        h('option', { value: 'new' }, '只出新题'),
+                        h('option', { value: 'review' }, '只复习到期/错题'),
+                      ),
+                      h('select', { className: 'blm-select', value: count, onChange: (event) => setCount(Number(event.target.value)), 'aria-label': '题量' },
+                        [5, 8, 10, 12, 15, 20].map((value) => h('option', { key: value, value }, value + ' 题')),
+                      ),
+                    ),
+                    h('div', { className: 'blm-dim', style: { fontSize: 11 } }, '准备题库与开始练习是两个动作：开始练习只从已有题库组卷，不触发生成。'),
+                    topupOpen
+                      ? h(
+                          'div',
+                          { className: 'blm-note' },
+                          h('div', null, '补题计划：每章 +5 题，单次最多 30 题、最多 6 轮；先确认再执行。'),
+                          h(
+                            'div',
+                            { className: 'blm-field' },
+                            h('span', { className: 'label' }, '轮数'),
+                            h(
+                              'select',
+                              { className: 'blm-select', value: topupRounds, onChange: (event) => setTopupRounds(Number(event.target.value)) },
+                              [1, 2, 3, 4, 5, 6].map((value) => h('option', { key: value, value }, value + ' 轮（每章 +' + value * 5 + ' 题）')),
+                            ),
+                          ),
+                          h('div', { className: 'blm-dim' }, '预计新增约 ' + Math.min(30, topupRounds * 5 * Math.max(1, summary.counts.covered)) + ' 题，单次上限 30 题。'),
+                          h(
+                            'div',
+                            { className: 'blm-row', style: { marginTop: 6 } },
+                            h('button', { className: 'blm-btn primary', disabled: busy, onClick: () => startBank(true, topupRounds) }, '确认补题'),
+                            h('button', { className: 'blm-btn', onClick: () => setTopupOpen(false) }, '取消'),
+                          ),
+                        )
+                      : null,
+                  ),
+        ),
+      );
+    }
+
+    /* ------------------------------ M5 导出对话框 ------------------------------ */
+
+    function ExportDialog({ series, notify, onClose }) {
+      const [lecture, setLecture] = useState('all');
+      const [includeAudio, setIncludeAudio] = useState(true);
+      const [includeImages, setIncludeImages] = useState(true);
+      const [includeNotes, setIncludeNotes] = useState(true);
+      const [plan, setPlan] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState('');
+
+      const query = (extra) =>
+        '?seriesId=' + encodeURIComponent(series.id) +
+        '&lecture=' + encodeURIComponent(lecture) +
+        '&audio=' + (includeAudio ? '1' : '0') +
+        '&images=' + (includeImages ? '1' : '0') +
+        '&notes=' + (includeNotes ? '1' : '0') +
+        (extra || '');
+
+      const load = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const out = await api('/export/pptx/plan' + query());
+          if (!out.ok) {
+            setError(out.message || '这个系列还没有可导出的讲');
+            setPlan(null);
+          } else {
+            setPlan(out.plan);
+          }
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      }, [series.id, lecture, includeAudio, includeImages, includeNotes]);
+
+      useEffect(() => {
+        load();
+      }, [load]);
+
+      const download = () => {
+        if (!plan) return;
+        downloadUrl('/export/pptx' + query(), plan.fileName);
+        notify('开始导出：' + plan.fileName);
+      };
+      const downloadBatch = () => {
+        if (!plan) return;
+        downloadUrl('/export/pptx/batch?seriesId=' + encodeURIComponent(series.id) + '&lectures=' + (lecture === 'all' ? 'all' : String(lecture)), series.title + '-精讲-合集.zip');
+        notify('开始批量导出 ZIP');
+      };
+
+      return h(
+        'div',
+        { className: 'blm-modal-mask', onClick: (event) => { if (event.target === event.currentTarget) onClose(); } },
+        h(
+          'div',
+          { className: 'blm-modal blm-plan-modal' },
+          h(
+            'div',
+            { className: 'blm-row' },
+            h('strong', null, '导出 PPT · ' + series.title),
+            h('div', { style: { flex: 1 } }),
+            h('button', { className: 'blm-btn', onClick: onClose }, '关闭'),
+          ),
+          h(
+            'div',
+            { className: 'blm-export-row', style: { marginTop: 8 } },
+            h('span', { className: 'blm-dim' }, '范围'),
+            h('select', { className: 'blm-select', value: lecture, onChange: (event) => setLecture(event.target.value) },
+              h('option', { value: 'all' }, '整套合并（' + (series.lectures || []).length + ' 讲）'),
+              (series.lectures || []).filter((item) => READY_LECTURE.includes(String(item.status))).map((item) =>
+                h('option', { key: item.n, value: String(item.n) }, '第 ' + item.n + ' 讲 · ' + (item.title || '')),
+              ),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'blm-export-row', style: { marginTop: 6 } },
+            h('label', { className: 'blm-field' }, h('input', { type: 'checkbox', checked: includeAudio, onChange: (event) => setIncludeAudio(event.target.checked) }), '含音频'),
+            h('label', { className: 'blm-field' }, h('input', { type: 'checkbox', checked: includeImages, onChange: (event) => setIncludeImages(event.target.checked) }), '含配图'),
+            h('label', { className: 'blm-field' }, h('input', { type: 'checkbox', checked: includeNotes, onChange: (event) => setIncludeNotes(event.target.checked) }), '含备注'),
+          ),
+          loading ? h('div', { className: 'blm-dim', style: { marginTop: 10 } }, '正在计算页数与体积…') : null,
+          error ? h('div', { className: 'blm-error', style: { marginTop: 10 } }, error) : null,
+          plan
+            ? h(
+                'div',
+                { style: { marginTop: 10 } },
+                h('div', { className: 'blm-kv' },
+                  h('dt', null, '讲数'), h('dd', null, plan.lectures.length + ' 讲' + (plan.transitionPages ? ' · 含 ' + plan.transitionPages + ' 个过渡页' : '')),
+                  h('dt', null, '页数'), h('dd', null, plan.slides + ' 页'),
+                  h('dt', null, '音频'), h('dd', null, plan.includeAudio ? plan.audioPages + ' 页含音频' : '本次不含音频'),
+                  h('dt', null, '配图'), h('dd', null, plan.includeImages ? plan.imagePages + ' 页含配图' : '本次不含配图'),
+                  h('dt', null, '体积'), h('dd', null, formatSize(plan.bytes)),
+                  h('dt', null, '文件名'), h('dd', null, plan.fileName),
+                ),
+                (plan.warnings || []).length ? h('div', { className: 'blm-note', style: { marginTop: 8 } }, plan.warnings.join(' ')) : null,
+                h(
+                  'div',
+                  { className: 'blm-row', style: { marginTop: 10 } },
+                  h('button', { className: 'blm-btn primary', onClick: download }, '下载 PPTX'),
+                  plan.mode === 'series' ? h('button', { className: 'blm-btn', onClick: downloadBatch }, '批量导出 ZIP（每讲一份）') : null,
+                ),
+                h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 6 } }, '整套合并按讲序拼接，讲间插入过渡页（讲标题 + 接缝句）；导出不修改任何数据。'),
+              )
+            : null,
+        ),
+      );
+    }
+
+    /* ------------------------------ M5 书档导入对话框 ------------------------------ */
+
+    function ImportPackageDialog({ file, notify, onClose, onDone }) {
+      const [policy, setPolicy] = useState('merge');
+      const [progress, setProgress] = useState(0);
+      const [job, setJob] = useState(null);
+      const [error, setError] = useState('');
+      const [uploading, setUploading] = useState(false);
+      const startedRef = useRef(false);
+
+      const start = useCallback(async () => {
+        if (!file || startedRef.current) return;
+        startedRef.current = true;
+        setUploading(true);
+        setError('');
+        try {
+          const out = await uploadZip(file, policy, setProgress);
+          if (!out.ok) {
+            setError(out.message || '导入失败');
+            return;
+          }
+          setJob({ jobId: out.jobId, status: out.status || 'queued', current: 0, total: 0, items: [] });
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setUploading(false);
+        }
+      }, [file, policy]);
+
+      useEffect(() => {
+        start();
+      }, [start]);
+
+      useEffect(() => {
+        if (!job || !job.jobId) return undefined;
+        if (['done', 'failed', 'cancelled'].includes(String(job.status))) {
+          if (String(job.status) === 'done' && onDone) onDone(job);
+          return undefined;
+        }
+        const timer = setInterval(async () => {
+          try {
+            const out = await api('/import/package/job?jobId=' + encodeURIComponent(job.jobId));
+            if (!out.ok) {
+              setError(out.message || '作业不存在');
+              return;
+            }
+            setJob(out);
+            if (['done', 'failed', 'cancelled'].includes(String(out.status)) && onDone) onDone(out);
+          } catch (err) {
+            setError(err.message);
+          }
+        }, 700);
+        return () => clearInterval(timer);
+      }, [job, onDone]);
+
+      const cancel = async () => {
+        if (!job || !job.jobId) return;
+        try {
+          await api('/import/package/cancel', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jobId: job.jobId }),
+          });
+          notify('正在取消导入…');
+        } catch (err) {
+          notify(err.message);
+        }
+      };
+
+      return h(
+        'div',
+        { className: 'blm-modal-mask', onClick: (event) => { if (event.target === event.currentTarget) onClose(); } },
+        h(
+          'div',
+          { className: 'blm-modal blm-plan-modal' },
+          h(
+            'div',
+            { className: 'blm-row' },
+            h('strong', null, '导入书档'),
+            h('span', { className: 'blm-dim' }, file ? file.name : ''),
+            h('div', { style: { flex: 1 } }),
+            h('button', { className: 'blm-btn', onClick: onClose }, '关闭'),
+          ),
+          h(
+            'div',
+            { className: 'blm-export-row', style: { marginTop: 8 } },
+            h('span', { className: 'blm-dim' }, '冲突策略'),
+            h('select', { className: 'blm-select', value: policy, disabled: uploading || Boolean(job), onChange: (event) => setPolicy(event.target.value) },
+              h('option', { value: 'merge' }, '并入（默认）'),
+              h('option', { value: 'skip' }, '跳过已有'),
+              h('option', { value: 'copy' }, '复制一本'),
+            ),
+          ),
+          uploading ? h('div', { className: 'blm-progress' }, h('i', { style: { width: Math.round(progress * 100) + '%' } })) : null,
+          error ? h('div', { className: 'blm-error', style: { marginTop: 10 } }, error) : null,
+          job
+            ? h(
+                'div',
+                { style: { marginTop: 10 } },
+                h('div', { className: 'blm-dim', style: { fontSize: 12 } }, '状态：' + job.status + ' · ' + (job.stage || '') + ' · ' + (job.current || 0) + '/' + (job.total || 0) + (job.message ? ' · ' + job.message : '')),
+                h(
+                  'div',
+                  { className: 'blm-import-items' },
+                  (job.items || []).map((item) =>
+                    h(
+                      'div',
+                      { className: 'blm-import-item', key: item.bookId },
+                      h('span', { className: 'grow', title: item.title }, item.title || item.bookId),
+                      h('span', { className: 'blm-badge' + (item.status === 'ok' ? ' ok' : '') }, item.status),
+                      item.code ? h('span', { className: 'blm-bad', style: { fontSize: 11 } }, item.code) : null,
+                      item.message ? h('span', { className: 'blm-dim', style: { fontSize: 11 } }, item.message) : null,
+                    ),
+                  ),
+                ),
+                !['done', 'failed', 'cancelled'].includes(String(job.status))
+                  ? h('button', { className: 'blm-btn', onClick: cancel }, '取消导入')
+                  : null,
+              )
+            : h('div', { className: 'blm-dim', style: { fontSize: 12, marginTop: 8 } }, '上传后逐本校验；失败不影响同包其它本。'),
+        ),
+      );
+    }
+
+
     function SeriesCard({ series, notify, onReload, onPlay }) {
       const [job, setJob] = useState(null);
       const [stitch, setStitch] = useState(null);
       const [voiceJob, setVoiceJob] = useState(null);
+      const [imageJob, setImageJob] = useState(null);
+      const [practiceOpen, setPracticeOpen] = useState(false);
+      const [exportOpen, setExportOpen] = useState(false);
       const [busy, setBusy] = useState(false);
       const doneRef = useRef(false);
       const lectures = series.lectures || [];
       const activeStatus = ['queued', 'drafting', 'stitching', 'structuring', 'validate', 'anchor', 'cancelling'];
       const isActive = job != null && activeStatus.includes(String(job.status || ''));
       const voiceActive = voiceJob != null && ['queued', 'voicing', 'cancelling'].includes(String(voiceJob.status || ''));
+      const imageActive = imageJob != null && ['queued', 'running', 'cancelling'].includes(String(imageJob.status || ''));
       const playable = lectures.filter((lec) => READY_LECTURE.includes(String(lec.status)));
       const voiceText = (() => {
         const status = String(series.voice_status || 'none');
@@ -1894,6 +2644,15 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         if (status === 'partial') return '部分配音';
         if (series.voice_status === 'none' && series.voice_code) return '配音失败';
         return '未配音';
+      })();
+      const imageText = (() => {
+        const images = series.images || null;
+        if (!images || !images.status || images.status === 'none') return '配图占位';
+        if (images.status === 'done') return '配图 ' + (images.done || 0) + ' 张';
+        if (images.status === 'partial') return '配图 ' + (images.done || 0) + '/' + (images.total || 0);
+        if (images.status === 'failed') return '配图失败';
+        if (images.status === 'interrupted') return '配图中断';
+        return '配图中…';
       })();
 
       const pollVoice = useCallback(async () => {
@@ -1914,6 +2673,62 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         const timer = setInterval(pollVoice, 1000);
         return () => clearInterval(timer);
       }, [voiceActive, pollVoice]);
+
+      const pollImage = useCallback(async () => {
+        if (!imageJob) return;
+        try {
+          const out = await api('/image/status?seriesId=' + encodeURIComponent(series.id));
+          setImageJob(out);
+          if (!['queued', 'running', 'cancelling'].includes(String(out.status || ''))) {
+            await onReload();
+          }
+        } catch (err) {
+          notify(err.message);
+        }
+      }, [imageJob, notify, onReload, series.id]);
+
+      useEffect(() => {
+        if (!imageActive) return undefined;
+        const timer = setInterval(pollImage, 1000);
+        return () => clearInterval(timer);
+      }, [imageActive, pollImage]);
+
+      /** 配图是独立动作（FR-24）：只补图片字段，不动文字与音频。 */
+      const regenImages = async () => {
+        setBusy(true);
+        try {
+          const out = await api('/image/regen', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id }),
+          });
+          if (!out.ok) {
+            notify(out.code === 'E_IMG_DISABLED' ? '当前配图策略是「提示词占位」：到设置 → 配图切到「本地 ComfyUI」。' : out.message || '配图没启动');
+            return;
+          }
+          setImageJob(out);
+          notify('已开始补配图（' + out.total + ' 页）');
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+      const cancelImages = async () => {
+        setBusy(true);
+        try {
+          const out = await api('/image/cancel', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id }),
+          });
+          notify(out.cancelled ? '正在取消配图…' : '配图已经结束');
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      };
 
       const poll = useCallback(async () => {
         try {
@@ -2123,6 +2938,20 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             voiceActive
               ? h('button', { className: 'blm-btn', disabled: busy, onClick: cancelVoice }, '取消配音')
               : null,
+            playable.length
+              ? h('button', { className: 'blm-btn', disabled: busy || isActive, onClick: () => setPracticeOpen(true) }, '练一练')
+              : null,
+            playable.length
+              ? h('button', { className: 'blm-btn', disabled: busy || isActive, onClick: () => setExportOpen(true) }, '导出')
+              : null,
+            playable.length
+              ? h(
+                  'button',
+                  { className: 'blm-btn', disabled: busy || isActive || imageActive, onClick: regenImages, title: '只补图片，不改文字与音频' },
+                  imageActive ? '配图中…' : '补配图',
+                )
+              : null,
+            imageActive ? h('button', { className: 'blm-btn', disabled: busy, onClick: cancelImages }, '取消配图') : null,
             ['ready', 'partial', 'failed'].includes(series.status)
               ? h('button', { className: 'blm-btn', disabled: busy, onClick: openStitch }, '缝合报告')
               : null,
@@ -2136,6 +2965,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           'div',
           { className: 'blm-row', style: { fontSize: 11 } },
           h('span', { className: 'blm-badge' + (series.voice_status === 'ready' ? ' ok' : '') }, voiceText),
+          playable.length ? h('span', { className: 'blm-badge' + ((series.images || {}).status === 'done' ? ' ok' : '') }, imageText) : null,
           series.stitch && ['ready', 'partial'].includes(series.status)
             ? h('span', { className: 'blm-badge' + (['stitched', 'verified'].includes(series.stitch) ? ' ok' : '') },
                 series.stitch === 'verified' ? '已验收' : series.stitch === 'stitched' ? '已衔接' : '未衔接')
@@ -2228,6 +3058,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               ),
             )
           : null,
+        practiceOpen ? h(PracticePanel, { series, notify, onClose: () => setPracticeOpen(false) }) : null,
+        exportOpen ? h(ExportDialog, { series, notify, onClose: () => setExportOpen(false) }) : null,
       );
     }
 
@@ -2685,12 +3517,17 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [error, setError] = useState(null);
       const [saving, setSaving] = useState(false);
       const [trashBusy, setTrashBusy] = useState(false);
+      const [image, setImage] = useState(null);
+      const [imageBusy, setImageBusy] = useState(false);
+      const [imageMsg, setImageMsg] = useState('');
+      const [imageTestUrl, setImageTestUrl] = useState('');
 
       const loadSettings = useCallback(async () => {
-        const [settingsOut, voiceOut, diagOut] = await Promise.all([
+        const [settingsOut, voiceOut, diagOut, imageOut] = await Promise.all([
           api('/settings'),
           api('/voice'),
           api('/diagnostics').catch(() => null),
+          api('/image/config').catch(() => null),
         ]);
         setSettings(settingsOut);
         setVoice(voiceOut.voice || null);
@@ -2698,6 +3535,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         setModels(voiceOut.models || []);
         setQwenVoices(voiceOut.qwenVoices || []);
         setDiagnostics(diagOut);
+        setImage(imageOut && imageOut.ok ? imageOut : null);
         if (voiceOut.voice) {
           setForm({
             provider: voiceOut.voice.provider || 'browser',
@@ -2889,6 +3727,123 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const providerNote = (providers.find((item) => item.id === form.provider) || {}).note || (voice && voice.note) || '';
       const speechOk = speechSupported();
 
+      /* ------------------------------ 配图（FR-24） ------------------------------ */
+
+      const saveImageConfig = async (patch) => {
+        setImageBusy(true);
+        setImageMsg('');
+        try {
+          const out = await api('/image/config', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(patch || {}),
+          });
+          if (out.ok) {
+            setImage(out);
+            setImageMsg('配图配置已保存');
+          } else {
+            setImageMsg(out.message || '没保存下来');
+          }
+        } catch (err) {
+          setImageMsg(err.message);
+        } finally {
+          setImageBusy(false);
+        }
+      };
+
+      const probeImages = async () => {
+        setImageBusy(true);
+        setImageMsg('正在连接 ComfyUI…');
+        try {
+          const out = await api('/image/probe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+          if (!out.ok) setImageMsg((out.code || '') + '：' + (out.message || '连接失败'));
+          else if (out.missing && out.missing.length) setImageMsg('连接成功，但缺模型：' + out.missing.slice(0, 3).join('；'));
+          else setImageMsg('连接成功（ComfyUI ' + (out.version || '未知版本') + '）');
+        } catch (err) {
+          setImageMsg(err.message);
+        } finally {
+          setImageBusy(false);
+        }
+      };
+
+      const testImages = async () => {
+        setImageBusy(true);
+        setImageMsg('正在测试生图…');
+        try {
+          const res = await fetch(API + '/image/test', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          if (String(res.headers.get('content-type') || '').includes('image/')) {
+            const blob = await res.blob();
+            if (imageTestUrl) URL.revokeObjectURL(imageTestUrl);
+            setImageTestUrl(URL.createObjectURL(blob));
+            setImageMsg('测试生图成功（不落盘、不进缓存）');
+            return;
+          }
+          const out = await res.json().catch(() => ({}));
+          setImageMsg((out.code || '') + '：' + (out.message || out.error || '测试生图失败'));
+        } catch (err) {
+          setImageMsg(err.message);
+        } finally {
+          setImageBusy(false);
+        }
+      };
+
+      const importWorkflow = async (file) => {
+        if (!file) return;
+        setImageBusy(true);
+        setImageMsg('');
+        try {
+          const text = await file.text();
+          let workflow = null;
+          try {
+            workflow = JSON.parse(text);
+          } catch {
+            setImageMsg('工作流不是合法 JSON');
+            return;
+          }
+          const out = await api('/image/workflow', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workflow, name: file.name }),
+          });
+          if (!out.ok) {
+            setImageMsg((out.code || '') + '：' + (out.error || '工作流没导入') + (out.candidates && out.candidates.length ? '；可选提示词节点：' + out.candidates.map((item) => item.id).join('、') : ''));
+            return;
+          }
+          setImage(out);
+          setImageMsg('工作流已导入');
+        } catch (err) {
+          setImageMsg(err.message);
+        } finally {
+          setImageBusy(false);
+        }
+      };
+
+      const resetWorkflowCfg = async () => {
+        setImageBusy(true);
+        try {
+          const out = await api('/image/workflow', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ reset: true }),
+          });
+          if (out.ok) {
+            setImage(out);
+            setImageMsg('已恢复默认工作流');
+          }
+        } catch (err) {
+          setImageMsg(err.message);
+        } finally {
+          setImageBusy(false);
+        }
+      };
+
+      const imageForm = (image && image.image) || null;
+      const workflowInfo = (imageForm && imageForm.workflow) || {};
+
       return h(
         'div',
         { className: 'blm-body' },
@@ -3066,7 +4021,133 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             'section',
             { className: 'blm-group' },
             h('h3', null, '配图'),
-            h('div', { className: 'blm-dim', style: { fontSize: 12 } }, '配图（提示词占位 / 本地 ComfyUI）在 M5 提供；本版本播放器只显示配图位。'),
+            imageForm
+              ? h(
+                  React.Fragment,
+                  null,
+                  h(
+                    'div',
+                    { className: 'blm-field' },
+                    h('span', { className: 'label' }, '策略'),
+                    h(
+                      'select',
+                      {
+                        className: 'blm-select',
+                        value: imageForm.provider || 'prompt',
+                        disabled: imageBusy,
+                        'aria-label': '配图策略',
+                        onChange: (event) => saveImageConfig({ provider: event.target.value }),
+                      },
+                      (image.providers || [{ id: 'prompt', label: '提示词占位（默认）' }, { id: 'comfyui', label: '本地 ComfyUI' }]).map((item) =>
+                        h('option', { key: item.id, value: item.id }, item.label),
+                      ),
+                    ),
+                    h('span', { className: 'blm-dim', style: { fontSize: 11 } }, imageForm.provider === 'comfyui' ? '逐页异步出图；失败页留白，不阻塞文字与音频' : '只产出提示词，不联网、不产生图片文件'),
+                  ),
+                  imageForm.provider === 'comfyui'
+                    ? h(
+                        React.Fragment,
+                        null,
+                        h(
+                          'div',
+                          { className: 'blm-field' },
+                          h('span', { className: 'label' }, '地址'),
+                          h('input', {
+                            className: 'blm-input',
+                            style: { flex: '0 0 140px', minWidth: 100 },
+                            defaultValue: imageForm.host,
+                            placeholder: '127.0.0.1',
+                            'aria-label': 'ComfyUI 主机',
+                            onBlur: (event) => {
+                              const host = String(event.target.value || '').trim();
+                              if (host && host !== imageForm.host) saveImageConfig({ host });
+                            },
+                          }),
+                          h('input', {
+                            className: 'blm-input',
+                            style: { flex: '0 0 90px', minWidth: 70 },
+                            type: 'number',
+                            defaultValue: imageForm.port,
+                            'aria-label': 'ComfyUI 端口',
+                            onBlur: (event) => {
+                              const port = Number(event.target.value);
+                              if (port && port !== imageForm.port) saveImageConfig({ port });
+                            },
+                          }),
+                          h('span', { className: 'blm-dim', style: { fontSize: 11 } }, imageForm.baseUrl || ''),
+                        ),
+                        h(
+                          'div',
+                          { className: 'blm-field' },
+                          h('span', { className: 'label' }, '风格后缀'),
+                          h('input', {
+                            className: 'blm-input',
+                            defaultValue: imageForm.styleSuffix || '',
+                            maxLength: 60,
+                            placeholder: '拼在每页 image_prompt 后面，≤60 字',
+                            'aria-label': '配图风格后缀',
+                            onKeyDown: (event) => {
+                              if (event.key === 'Enter') saveImageConfig({ styleSuffix: event.target.value });
+                            },
+                            onBlur: (event) => {
+                              const value = String(event.target.value || '').trim();
+                              if (value !== String(imageForm.styleSuffix || '')) saveImageConfig({ styleSuffix: value });
+                            },
+                          }),
+                        ),
+                        h(
+                          'div',
+                          { className: 'blm-field' },
+                          h('span', { className: 'label' }, '工作流'),
+                          h('span', { className: 'blm-dim', style: { fontSize: 11 } }, (workflowInfo.source === 'custom' ? '自定义 · ' : '内置 · ') + (workflowInfo.name || '') + ' · ' + (workflowInfo.nodes || 0) + ' 节点'),
+                          h('button', {
+                            className: 'blm-btn',
+                            disabled: imageBusy,
+                            onClick: () => document.getElementById('blm-workflow-input')?.click(),
+                          }, '导入 API 工作流'),
+                          h('input', {
+                            id: 'blm-workflow-input',
+                            type: 'file',
+                            accept: '.json,application/json',
+                            style: { display: 'none' },
+                            onChange: (event) => {
+                              const file = event.target.files && event.target.files[0];
+                              event.target.value = '';
+                              importWorkflow(file);
+                            },
+                          }),
+                          h('button', { className: 'blm-btn', disabled: imageBusy, onClick: resetWorkflowCfg }, '恢复默认'),
+                        ),
+                        h(
+                          'div',
+                          { className: 'blm-field' },
+                          h('span', { className: 'label' }, '提示词节点'),
+                          h(
+                            'select',
+                            {
+                              className: 'blm-select',
+                              value: workflowInfo.promptNode || '',
+                              disabled: imageBusy,
+                              'aria-label': '提示词节点',
+                              onChange: (event) => saveImageConfig({ promptNode: event.target.value }),
+                            },
+                            (workflowInfo.candidates || []).map((item) => h('option', { key: item.id, value: item.id }, item.id + ' · ' + (item.title || ''))),
+                          ),
+                        ),
+                        h(
+                          'div',
+                          { className: 'blm-row' },
+                          h('button', { className: 'blm-btn', disabled: imageBusy, onClick: probeImages }, '测试连接'),
+                          h('button', { className: 'blm-btn', disabled: imageBusy, onClick: testImages }, '测试生图'),
+                          imageForm.provider === 'comfyui' && imageForm.error ? h('span', { className: 'blm-bad', style: { fontSize: 11 } }, imageForm.error) : null,
+                        ),
+                        imageTestUrl ? h('img', { className: 'blm-cover-thumb', src: imageTestUrl, alt: '测试生图结果' }) : null,
+                        h('div', { className: 'blm-dim', style: { fontSize: 11 } }, '配置存 image.json，工作流存 comfy-workflow.json；ComfyUI 只在用户配置后启用。'),
+                      )
+                    : null,
+                  imageMsg ? h('div', { className: 'blm-note' }, imageMsg) : null,
+                )
+              : h('div', { className: 'blm-dim' }, '正在读配图配置…'),
           ),
           h(
             'section',
@@ -3093,6 +4174,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 trashBusy ? '清理中…' : '清空回收站',
               ),
               h('span', { className: 'blm-dim', style: { fontSize: 11 } }, '回收站保留 7 天，不自动清理；清空后不可恢复。'),
+            ),
+            h(
+              'div',
+              { className: 'blm-row', style: { marginTop: 6 } },
+              h('button', { className: 'blm-btn', onClick: () => downloadUrl('/export?all=true', 'book-slides-书档.zip') }, '导出全部书档'),
+              h('span', { className: 'blm-dim', style: { fontSize: 11 } }, '书档含书/章/系列/讲/音频/配图/练习，不含语音 Key、缓存、回收站与临时文件。'),
             ),
             h('div', { className: 'blm-dim', style: { marginTop: 10, fontSize: 12 } }, '升级备份'),
             settings && settings.backups && settings.backups.length
@@ -3150,6 +4237,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [toast, setToast] = useState('');
       const [view, setView] = useState({ name: 'shelf' });
       const [trash, setTrash] = useState(false);
+      const [packageFile, setPackageFile] = useState(null);
       const [drag, setDrag] = useState(false);
       const toastTimer = useRef(null);
       const notify = useCallback((text) => {
@@ -3266,6 +4354,23 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               h('h1', null, '精讲'),
               h('button', { className: 'blm-btn', onClick: () => setTrash(true) }, '回收站'),
               h('button', { className: 'blm-btn', onClick: () => setView({ name: 'settings' }) }, '设置'),
+              h('button', { className: 'blm-btn', onClick: () => document.getElementById('blm-package-input')?.click() }, '导入书档'),
+              h('input', {
+                id: 'blm-package-input',
+                type: 'file',
+                accept: '.zip,application/zip',
+                style: { display: 'none' },
+                onChange: (event) => {
+                  const file = event.target.files && event.target.files[0];
+                  event.target.value = '';
+                  if (!file) return;
+                  if (!/\.zip$/i.test(file.name)) {
+                    notify('书档是 .zip 文件。');
+                    return;
+                  }
+                  setPackageFile(file);
+                },
+              }),
               h(
                 'button',
                 { className: 'blm-btn primary', disabled: busy, onClick: () => document.getElementById('blm-file-input')?.click() },
@@ -3298,6 +4403,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                         onRename: () => rename(book),
                         onDelete: () => remove(book),
                         onContinue: continueBook,
+                        onExport: (item) => {
+                          downloadUrl('/export?bookId=' + encodeURIComponent(item.id), String(item.title || 'book') + '.zip');
+                          notify('开始导出《' + item.title + '》的书档');
+                        },
                       }),
                     ))
                   : h(
@@ -3336,6 +4445,19 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                   onPlay: openPlayer,
                 }),
         trash ? h(Trash, { onClose: () => setTrash(false), onChanged: loadBooks, notify }) : null,
+        packageFile
+          ? h(ImportPackageDialog, {
+              file: packageFile,
+              notify,
+              onClose: () => setPackageFile(null),
+              onDone: (job) => {
+                const summary = (job && job.summary) || null;
+                notify(summary ? '书档导入完成：成功 ' + (summary.imported + summary.merged) + ' 本，跳过 ' + summary.skipped + ' 本，失败 ' + summary.failed + ' 本' : '书档导入完成');
+                setPackageFile(null);
+                loadBooks();
+              },
+            })
+          : null,
         h(Toast, { text: toast }),
         busy && shelf ? h('div', { className: 'blm-progress', style: { position: 'absolute', left: 0, right: 0, bottom: 0, margin: 0 } }, h('i', { style: { width: Math.round(progress * 100) + '%' } })) : null,
       );
@@ -3394,6 +4516,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         SeriesCard,
         SeriesDirectory,
         Settings,
+        PracticePanel,
+        ExportDialog,
+        ImportPackageDialog,
       },
       __helpers: {
         clampSplitValue,
@@ -3410,6 +4535,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         isRenderCancelled,
         formatSize,
         bindMenuDismiss,
+        downloadUrl,
+        uploadZip,
       },
     };
   },

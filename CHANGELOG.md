@@ -3,6 +3,69 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.0.0-alpha.3] - 2026-11-06
+
+M5（P1）完成：书档导入/导出、练习与复习、本地 ComfyUI 配图、按讲/整套导出 PPT。
+P0/P1 功能对等全部落地；**数据与 1.x 仍不兼容**，同根首次启动自动备份旧根。
+
+### 版本与环境
+
+- 包 `2.0.0-alpha.3`（tag `v2.0.0-alpha.3`）、产品 `2.0`、数据 schema `2`、文档 v1.0。
+- 数据布局新增 `books/<bookId>/practice/` 与 `series/<id>/lectures/<n>/images/`；根目录新增 `image.json`、`comfy-workflow.json`、`image-cache/`。
+- 1.x 同名路由 `/image*`、`/practice*`、`/export*`、`/import/package*` 全部由 2.0 接管；1.x 处理器不再注册。
+
+### 新增（M5 书档，FR-22 / AC-125、AC-133、AC-138）
+
+- `GET /export?bookId=|bookIds=|all`：流式 ZIP 书档（`manifest.json` + `books/<bookId>/…`），单本/批量；`GET /export/size` 预估体积。
+- 内容白名单：书/页/章/原文/封面/Part/briefs、系列/讲/音频/配图、`practice/`（题库、掌握度、场次）。
+  明确排除 `voice.json`（含 Key）、`audio-cache/`、`trash/`、`batches/`、`preference.json`、`progress.json`、`*.tmp`、`explain-cache/`。
+- 身份：书用 `book.json.sha256`；系列用 `contentKey = sha256(讲纲 + slides 去标识字段)`，讲另有 `lectureKey`。
+- 导入：`POST /import/package` 裸 ZIP → 立即返回 `jobId`；`GET /import/package/job` 逐本进度；`POST /import/package/cancel` 幂等取消。
+  解压到 `.import/<jobId>/`，整本校验 sha256/大小后 rename 进 `books/`；冲突策略 `merge/skip/copy`；同 `bookId` 不同 `sha256` 整本拒绝 `E_PKG_ID_CONFLICT`；单本坏包不影响同包其它本；1.x 包明确拒绝 `E_PKG_VERSION`。
+- 状态归一：非终态讲 → `interrupted`；`slides.json` 在但音频缺失 → `ready_degraded` + `audio_file=null`/`audio_provider="none"`；缺 `source.pdf` 整本拒绝。
+- 回收站恢复冲突（AC-138）：`POST /trash/restore` 遇同 `sha256` 返回 `E_BOOK_EXISTS` 与已有 `bookId`，不覆盖不复制。
+- 客户端：书架「导入书档」上传 + 进度/逐本结果/取消；卡片「⋯」导出书档；设置页「导出全部书档」。
+
+### 新增（M5 练习与复习，FR-19.1 / AC-110、AC-119、AC-134）
+
+- 题库作业：`POST /practice/bank {seriesId, chapters?, topup?, rounds?}` 异步按章出题（每章 4–6 题、单书 ≤300）；`GET /practice/job`、`POST /practice/cancel`。
+- 题库按章缓存（`sha256(bookId|章号|章标题|章字数|promptVersion|blueprintVersion)`）；二次准备命中缓存返回 `cached=true`，不调模型。
+- 补题：`topup=true` 每章 +5，单次 ≤30 题、最多 6 轮；先由 `/practice/summary` 给出计划，UI 二次确认后才调模型。
+- 组卷：`POST /practice/session {seriesId, mode, count}` 只读题库；`new/mixed/review`、到期 ≤40%、新题过半、同考点 ≤2、章覆盖；题库不足 `E_BANK_INSUFFICIENT`，不触发生成。
+- 断点续练（AC-134）：`GET /practice/session?seriesId=` 返回未完成场次与下一题；同系列再次 POST 复用；`sessions/<id>.json` 带 `series_id`。
+- 判题：`POST /practice/answer` 宿主本地判定，只返回 `{correct, answer, source_quote, source_anchor, explanation?}`；同 `qid` 重复提交幂等；答错进错题本并写 Leitner 掌握度。
+- 讲解（独立动作）：`POST /practice/explain` 只在用户点「查看讲解」时调模型（≤8s），成功写回题库、失败置 `failed` 并降级为正确答案 + 原文，不阻断下一题。
+- 复习：`POST /practice/review` 按到期/错题组卷；`GET /practice/summary` 给出题库/覆盖/到期/错题/补题计划；`POST /practice/flag` 标记后不再组卷。
+- 客户端：系列卡「练一练」；题库状态、准备/补题、模式与题量、作答、判题反馈、查看讲解、标记、结束总结、继续上次练习。
+
+### 新增（M5 配图，FR-24 / AC-120）
+
+- `GET/POST /image/config`（策略 `prompt|comfyui`、host/port、风格后缀 ≤60、提示词节点）、`POST /image/workflow`（导入 API 工作流/恢复默认）、`POST /image/probe`（测试连接）、`POST /image/test`（测试生图，不落盘、不进缓存）。
+- 逐页作业：`POST /image/regen {seriesId, lecture?, slide?, force?}`、`GET /image/status?seriesId=`、`POST /image/cancel`；只改 `slides.json` 的 `image_file/image_status/image_provider/image_seed`，不改文字/音频。
+- 失败页留白并保留 `image_prompt`；单页重试只替换该页；取消后作业 `cancelled`，已生成页保留；ComfyUI 不可用不阻塞文字/音频。
+- 生成阶段按当前策略写初始 `image_status`（ComfyUI → `pending`，占位 → `none`）；启动时把残留 `queued/running` 作业归一为 `interrupted`。
+- 图片由宿主中转：`GET /image?seriesId=&lecture=&i=` 返回 PNG；播放器配图位在 `image_status=ready` 时显示真图，否则回退提示词占位。
+- 设置页配图组：策略、地址、风格后缀、工作流导入/恢复默认、提示词节点、测试连接/测试生图。
+
+### 新增（M5 导出 PPT，FR-19.2 / AC-111、AC-121、AC-132）
+
+- `GET /export/pptx/plan`：页数/讲数/音频页/配图页/体积/文件名/warnings；`GET /export/pptx`：单讲或整套合并（讲间插过渡页：讲标题 + 接缝句）；`GET /export/pptx/batch`：每讲一个 `.pptx` + `manifest.json` 的 ZIP。
+- 页数与 `slides.length` 严格一致；cover/content_text/quote 三种版式复用舞台视觉；备注逐字等于 `audio_script`；仅真实存在的 WAV/MP3 与 `image_status=ready` 的 PNG 内嵌；`image_prompt` 不上页。
+- 文件名 `<书名>-精讲-<讲标题去掉「第 N 讲 · 」>.pptx`；`content-disposition` 同时给 ASCII fallback 与 `filename*=UTF-8''`。
+- 只读：不调 LLM/TTS/ComfyUI，不写 `slides.json`/`series.json`，`books/` 的 size+mtime 不变；150 MB 上限与「按讲导出」提示。
+- 客户端：系列卡「导出」对话框（范围/音频/配图/备注/计划/warning/下载/批量 ZIP）。
+
+### 测试与验证
+
+- `npm run test:v2`：20 个测试文件、**99 项**，**0 失败**；新增 `v2-practice`、`v2-pptx`、`v2-package`、`v2-images`、`v2-m5-client`、`v2-trash`、`v2-longtask`。
+- 全部用真 HTTP 路由 + 假模型 / 假 ComfyUI：书档往返/冲突/批量坏包/状态归一、练习组卷/判题/讲解/Leitner/续做、配图逐页/单页重试/失败兜底/取消、PPT 页序/过渡页/音频/配图/备注/批量 ZIP/只读。
+- 真书、真 Qwen、真 ComfyUI 与发布门（AC-92 ~ AC-141 全绿）留到 M6。
+
+### 已知未完成（M6）
+
+- `POST /series/replan`（`replanFrom(k)`，附录 B）仍未实现，手动改切点会走重建系列。
+- 真书 e2e（三种分章模式 + 文科/技术两本）、AC-136 全量 UI 反馈走查、版本/tag/meta 一致性（AC-141）与 §2.6 基线走查（AC-128）。
+
 ## [2.0.0-alpha.2] - 2026-11-06
 
 M1–M4（P0）完成的可安装构建：数据根与书籍体验、Part 与讲纲、逐讲生成与接缝、播放/设置/偏好/语音。

@@ -3,10 +3,10 @@
 DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认一个 **Part**，由讲纲规划成 N 讲，
 逐讲生成并做可机检的接缝；播放时左侧 PDF 原文、右侧讲稿连播。**2.0 与 1.x 数据不兼容。**
 
-**当前构建：包 `2.0.0-alpha.2` / 产品 `2.0` / 数据 schema `2`**（2026-11-06，M1–M4 完成；M5 的 P1 功能未开始）。
+**当前构建：包 `2.0.0-alpha.3` / 产品 `2.0` / 数据 schema `2`**（2026-11-06，M1–M5 完成；P0/P1 功能对等全部落地）。
 变更记录 [CHANGELOG.md](CHANGELOG.md) · 实现进度与验收 [doc/2.0-实现进度.md](doc/2.0-实现进度.md) · 需求 [doc/requirements/规范需求2.0.md](doc/requirements/规范需求2.0.md)。
 
-## 2.0 预发布（alpha.2）
+## 2.0 预发布（alpha.3）
 
 > 2.0 是**不兼容重写**：同包名覆盖安装 1.x，同数据根 `~/.dsh/book-slides/`，只认 `meta.json.schema=2`。
 > 检测到 1.x 数据时自动把整根备份到同父目录 `book-slides.backup-<时间>/`，随后初始化空书架；**不迁移、不导入**，请重新导入 PDF。
@@ -14,10 +14,10 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 
 | 项 | 内容 |
 |---|---|
-| 包版本 | `2.0.0-alpha.2`（tag `v2.0.0-alpha.2`） |
+| 包版本 | `2.0.0-alpha.3`（tag `v2.0.0-alpha.3`） |
 | 产品 / schema | 产品 `2.0`、数据 schema `2`、SRS 文档 v1.0 |
-| 已完成 | M1 数据根/导入/分章/书架 · M2 Part/briefs/讲纲 · M3 生成/预缝/后验缝/作业 · M4 播放器/连播/偏好/设置/语音 |
-| 未开始 | M5 书档、练习、配图、导出 PPT（P1）；M6 真书验收与发布 |
+| 已完成 | M1 数据根/导入/分章/书架 · M2 Part/briefs/讲纲 · M3 生成/预缝/后验缝/作业 · M4 播放器/连播/偏好/设置/语音 · M5 书档/练习/配图/导出 PPT |
+| 待完成 | M6 真书验收、发布门（AC-92 ~ AC-141）与正式版 `2.0.0` |
 | 兼容 | 不读 1.x 数据、不迁移、无独立单讲；1.x 最后版本仍是 1.4.0 |
 
 **2.0 流程（8 步）**
@@ -30,6 +30,8 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 6. 「保存为系列」→ 系列卡「开始生成讲义」：文本三阶段（不配音），进度可取消/续跑/重试/单讲重跑。
 7. 「缝合报告」：六项指标与一键确定性修复；`unstitched` 也可播放。
 8. 「继续听」进分屏播放器：左 PDF 视觉版式、右幻灯片，连播 / 系列目录 / 进度；系列卡「生成语音」独立配音（Qwen 或浏览器朗读）。
+9. 「练一练」：先准备题库（按章 4–6 题，异步、可取消），再开场（5–20 题）；判题在本地，答错可点「查看讲解」；错题按 Leitner 复习，关面板可续做。
+10. 「导出」：按讲或整套合并导出 PPTX（音频/配图/备注可选，过渡页含讲接缝句），或批量 ZIP；书架/设置可导出书档，换机导入后不需要重新生成。
 
 **2.0 数据布局（同根）**
 
@@ -38,23 +40,27 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 ├── meta.json                ← schema=2
 ├── preference.json          ← 分隔条/语速/静音/上次位置
 ├── voice.json               ← 语音配置（0600）
+├── image.json               ← 配图配置（策略/地址/风格后缀）
+├── comfy-workflow.json      ← ComfyUI 工作流
 ├── audio-cache/             ← TTS 缓存
+├── image-cache/             ← 配图缓存
 ├── trash/<bookId>/          ← 软删除（7 天可恢复）
 └── books/<bookId>/
     ├── book.json / pages.json / source.pdf / cover.svg
     ├── chapters.json / parts.json / briefs.json
+    ├── practice/{questions.json, mastery.json, sessions/}
     └── series/<seriesId>/
         ├── series.json / stitch.json / progress.json
-        └── lectures/<n>/{lecture.json, slides.json, audio/…}
+        └── lectures/<n>/{lecture.json, slides.json, audio/…, images/…}
 ```
 
 **2.0 验证**
 
 ```powershell
-npm run test:v2     # 13 个文件 / 70 项，0 失败
+npm run test:v2     # 20 个文件 / 99 项，0 失败
 ```
 
-覆盖 M1–M4：数据根与升级备份、导入/分章、Part/讲纲、逐讲生成/接缝、播放器、设置/偏好/诊断、语音与独立配音、系列删除、路由唯一注册。真书与真 Qwen 验收在 M6。
+覆盖 M1–M5：数据根与升级备份、导入/分章、Part/讲纲、逐讲生成/接缝、播放器、设置/偏好/诊断、语音与独立配音、书档往返/冲突/批量、练习组卷/判题/讲解/复习、ComfyUI 配图、按讲/整套/批量导出 PPT、长任务取消、回收站冲突。真书、真 Qwen、真 ComfyUI 验收在 M6。
 
 ## 1.x 使用说明（包 1.4.0 / 功能阶段 v1.6，冻结）
 
