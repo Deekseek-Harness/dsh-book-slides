@@ -532,7 +532,8 @@ export async function synthesizeVoicing(slides, config, options) {
         if (!text) throw new TtsError('E_TTS_FAIL', '这一页没有朗读稿', '');
         const cacheKey = audioCacheKey(voiceConfig, text);
         const cacheFile = path.join(cacheDir, cacheKey + '.wav');
-        let buffer = readCache(cacheFile);
+        // force 重配音（长按 3s）必须忽略缓存，否则「强制」与「重新配音」没有区别
+        let buffer = opts.ignoreCache ? null : readCache(cacheFile);
         if (!buffer) {
           const result = await synthesizeQwenWithRetry(text, voiceConfig, {
             fetchImpl: opts.fetchImpl,

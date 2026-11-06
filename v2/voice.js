@@ -157,7 +157,7 @@ function scopeLectures(series, lecture) {
  * 启动配音作业：同步建 job 立即返回，HTTP 不等配音完成。
  * 同一系列同时只允许一个配音作业（E_SERIES_BUSY）；文本作业不受影响。
  */
-export function startRevoiceJob({ seriesId, lecture = null, force = false, options = {} }) {
+export function startRevoiceJob({ seriesId, lecture = null, force = false, missingOnly = false, options = {} }) {
   const found = findSeries(String(seriesId || ''));
   if (!found) throw new TtsError('E_NOT_FOUND', '找不到这个系列', '刷新列表后再试。');
   if (activeRevoiceJob(found.series.id)) {
@@ -182,6 +182,7 @@ export function startRevoiceJob({ seriesId, lecture = null, force = false, optio
     error: null,
     scope,
     force: force === true,
+    missingOnly: missingOnly === true,
     startedAt: nowIso(),
     finishedAt: null,
     controller: new AbortController(),
@@ -209,7 +210,6 @@ async function runRevoiceJob(job, found, options) {
   const { series, dir } = found;
   const config = readVoiceConfig();
   const cacheDir = path.join(ROOT, 'audio-cache');
-  const touched = [];
   const failedLectures = [];
   try {
     if (config.provider === 'qwen3-tts' && !config.apiKey) {
@@ -225,47 +225,81 @@ async function runRevoiceJob(job, found, options) {
         continue;
       }
       job.lecture = n;
+      const original = doc.slidesDoc.slides;
+      const targets = job.missingOnly
+        ? original.filter((item) => !item.audio_file || String(item.audio_provider || 'none') === 'none')
+        : original;
       job.current = 0;
-      job.total = doc.slidesDoc.slides.length;
+      job.total = targets.length || original.length;
       job.message = '第 ' + n + ' 讲 · 正在配音';
-      const result =
-        config.provider === 'browser' || config.provider === 'off'
-          ? planVoicing(doc.slidesDoc.slides, config)
-          : await synthesizeVoicing(doc.slidesDoc.slides, config, {
-              moduleDir: doc.dir,
-              cacheDir,
-              signal: job.controller.signal,
-              fetchImpl: options.fetchImpl,
-              timeoutMs: options.timeoutMs,
-              onProgress: (done, total) => {
-                job.current = done;
-                job.total = total;
-                job.message = '第 ' + n + ' 讲 · 已配音 ' + done + '/' + total + ' 页';
-              },
-            });
-      assertActive(job);
 
-      const byIndex = new Map((result.slides || []).map((slide) => [Number(slide.slide_index), slide]));
-      const slides = doc.slidesDoc.slides.map((slide) => {
+      let result = null;
+      if (targets.length) {
+        result =
+          config.provider === 'browser' || config.provider === 'off'
+            ? planVoicing(targets, config)
+            : await synthesizeVoicing(targets, config, {
+                moduleDir: doc.dir,
+                cacheDir,
+                signal: job.controller.signal,
+                fetchImpl: options.fetchImpl,
+                timeoutMs: options.timeoutMs,
+                ignoreCache: job.force,
+                onProgress: (done, total) => {
+                  job.current = done;
+                  job.total = total;
+                  job.message = '第 ' + n + ' 讲 · 已配音 ' + done + '/' + total + ' 页';
+                },
+              });
+        assertActive(job);
+      }
+
+      const byIndex = new Map(((result && result.slides) || []).map((slide) => [Number(slide.slide_index), slide]));
+      const slides = original.map((slide) => {
         const hit = byIndex.get(Number(slide.slide_index));
-        if (!hit) {
-          return Object.assign({}, slide, { audio_file: null, audio_provider: 'none' });
-        }
+        if (!hit) return slide;
         return Object.assign({}, slide, {
           audio_file: hit.audio_file == null ? null : String(hit.audio_file),
           audio_provider: String(hit.audio_provider || 'none'),
           audio_ms: Number(hit.audio_ms) || 0,
         });
       });
-      const degraded = result.degraded === true;
-      const voiceStatus = result.mode === 'none' ? 'none' : degraded ? 'partial' : 'ready';
+
+      const previousMode =
+        (doc.slidesDoc.voice && doc.slidesDoc.voice.mode) ||
+        (config.provider === 'browser' ? 'browser' : config.provider === 'off' ? 'none' : 'file');
+      const mode = result ? result.mode : previousMode;
+      const errors = result && Array.isArray(result.errors) ? result.errors : [];
+      const pageTotal = slides.length;
+      const withAudio = slides.filter((slide) => Boolean(slide.audio_file)).length;
+      const missing = Math.max(0, pageTotal - withAudio);
+      let voiceStatus;
+      if (mode === 'none') voiceStatus = 'none';
+      else if (mode === 'browser') voiceStatus = 'ready';
+      else if (!errors.length && missing === 0) voiceStatus = 'ready';
+      else if (withAudio > 0) voiceStatus = 'partial';
+      else voiceStatus = 'failed';
+      if (!targets.length && voiceStatus !== 'ready' && String(doc.lecture.voice_status || '') === 'ready') {
+        voiceStatus = 'ready';
+      }
+      const code =
+        voiceStatus === 'ready'
+          ? null
+          : (errors[0] && errors[0].code) || (result && result.code) || 'E_TTS_FAIL';
+      const failedPages = mode === 'file' ? missing : 0;
+      const voiceError =
+        voiceStatus === 'ready'
+          ? null
+          : '第 ' + n + ' 讲' + (voiceStatus === 'failed' ? '配音失败' : '有页未配音') + '：' + code +
+            (failedPages ? '（' + failedPages + '/' + pageTotal + ' 页未配音）' : '');
+      const degraded = voiceStatus === 'partial' || voiceStatus === 'failed';
       const voiceMeta = {
-        provider: result.provider,
-        model: result.model || config.model || '',
+        provider: result ? result.provider : (doc.slidesDoc.voice && doc.slidesDoc.voice.provider) || '',
+        model: (result && result.model) || config.model || '',
         voice: config.voice || '',
         rate: Number(config.rate) || 1,
-        mode: result.mode,
-        degraded: degraded,
+        mode,
+        degraded,
       };
       const at = nowIso();
       writeJson(
@@ -274,6 +308,10 @@ async function runRevoiceJob(job, found, options) {
           slides,
           voice: voiceMeta,
           voice_status: voiceStatus,
+          voice_code: code,
+          voice_error: voiceError,
+          voice_pages: pageTotal,
+          voice_failed: failedPages,
           voiced_at: at,
         }),
       );
@@ -281,44 +319,60 @@ async function runRevoiceJob(job, found, options) {
         path.join(doc.dir, 'lecture.json'),
         Object.assign({}, doc.lecture, {
           voice_status: voiceStatus,
+          voice_code: code,
+          voice_error: voiceError,
+          voice_pages: pageTotal,
+          voice_failed: failedPages,
           voice: voiceMeta,
           voiced_at: at,
         }),
       );
       patchSeriesLecture(series, n, {
         voice_status: voiceStatus,
-        code: degraded ? result.code || 'E_TTS_FAIL' : null,
+        voice_code: code,
+        voice_error: voiceError,
+        voice_pages: pageTotal,
+        voice_failed: failedPages,
       });
-      touched.push(n);
-      if (degraded) failedLectures.push({ n, code: result.code || 'E_TTS_FAIL', message: result.message || '' });
+      if (degraded) {
+        failedLectures.push({ n, code, status: voiceStatus, failed: failedPages, pages: pageTotal, message: voiceError });
+      }
       job.current = job.total;
     }
 
     const readyLectures = (series.lectures || []).filter((item) => READY.includes(String(item.status)));
     const statuses = readyLectures.map((item) => String(item.voice_status || 'none'));
-    series.voice_status = statuses.every((item) => item === 'ready')
-      ? 'ready'
-      : statuses.some((item) => item === 'ready' || item === 'partial')
-        ? 'partial'
-        : 'none';
+    const countOf = (value) => statuses.filter((item) => item === value).length;
+    let status;
+    if (!statuses.length) status = 'none';
+    else if (countOf('ready') === statuses.length) status = 'ready';
+    else if (countOf('failed') === statuses.length) status = 'failed';
+    else if (countOf('none') === statuses.length) status = 'none';
+    else if (statuses.some((item) => item === 'ready' || item === 'partial')) status = 'partial';
+    else if (statuses.some((item) => item === 'failed')) status = 'failed';
+    else status = 'none';
+    series.voice_status = status;
     series.voiced_at = nowIso();
-    if (series.voice_status === 'partial') {
-      series.voice_code = 'E_TTS_FAIL';
-      series.voice_error = '有 ' + failedLectures.length + ' 讲存在未配音页，播放时会跳过或提示未配音';
-    } else {
+    series.voice_failed = failedLectures.reduce((sum, item) => sum + (item.failed || 0), 0);
+    if (status === 'ready' || !failedLectures.length) {
       delete series.voice_code;
       delete series.voice_error;
+    } else {
+      series.voice_code = failedLectures[0].code || 'E_TTS_FAIL';
+      series.voice_error = failedLectures.map((item) => item.message).join('；');
     }
     persistSeries(series);
 
     job.status = 'done';
     job.stage = 'done';
     job.message =
-      series.voice_status === 'ready'
+      status === 'ready'
         ? '配音完成'
-        : series.voice_status === 'none'
-          ? '未产生音频（语音供应商为关闭）'
-          : '部分页未配音';
+        : status === 'failed'
+          ? '配音失败'
+          : status === 'none'
+            ? '未产生音频（语音供应商为关闭）'
+            : '部分页未配音';
     job.error = failedLectures.length ? { failures: failedLectures } : null;
     job.finishedAt = nowIso();
   } catch (err) {
@@ -330,11 +384,11 @@ async function runRevoiceJob(job, found, options) {
     job.finishedAt = nowIso();
     if (!cancelled) {
       recordError(job.error.code, job.message);
-      // 整体失败（例如未配置 Key）：系列 voice_status=none，文本不受影响
+      // 未配置 Key 仍是「未配音」（none）；其它整体失败是「配音失败」（failed）
       try {
-        series.voice_status = 'none';
+        series.voice_status = job.error.code === 'E_TTS_UNCONFIGURED' ? 'none' : 'failed';
         series.voice_code = job.error.code;
-        series.voice_error = job.message;
+        series.voice_error = (job.error.code === 'E_TTS_UNCONFIGURED' ? '未配置语音：' : '配音失败：') + job.error.code + ' · ' + job.message;
         persistSeries(series);
       } catch {
         /* 系列文件可能已不存在 */

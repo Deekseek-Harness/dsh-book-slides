@@ -311,7 +311,8 @@ test('FR-18：配图位点击后显示 image_prompt，可复制、可收起', ()
     }),
   );
   assert.ok(empty.includes('（没有配图提示词）'));
-  assert.ok(empty.includes('disabled'), '没有提示词时复制按钮应禁用');
+  assert.equal(empty.includes('复制提示词'), false, '没有提示词时不渲染复制按钮');
+  assert.equal(empty.includes('disabled'), false);
 
   const copied = renderToString(
     React.createElement(components.StageFigure, {

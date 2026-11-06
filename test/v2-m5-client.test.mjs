@@ -36,8 +36,8 @@ globalThis.window = {
 };
 await import('../v2/client.js');
 
-function makeSeries() {
-  return {
+function makeSeries(patch) {
+  return Object.assign({
     id: 'sabcdefghij',
     book_id: 'babcdefghij',
     title: '函数',
@@ -48,18 +48,58 @@ function makeSeries() {
     chapters: [1, 2],
     images: { status: 'done', done: 8, total: 8 },
     lectures: [
-      { n: 1, title: '第 1 讲 · 机器', status: 'ready', pages: 6, chars: 3000 },
-      { n: 2, title: '第 2 讲 · 靠近', status: 'ready', pages: 6, chars: 3000 },
+      { n: 1, title: '第 1 讲 · 机器', status: 'ready', pages: 6, chars: 3000, voice_status: 'ready' },
+      { n: 2, title: '第 2 讲 · 靠近', status: 'ready', pages: 6, chars: 3000, voice_status: 'ready' },
     ],
-  };
+  }, patch || {});
 }
 
-test('系列卡：练一练 / 导出 / 补配图入口与配图徽标', () => {
+test('系列卡：练一练 / 导出 / 配图与语音四态入口', () => {
   const html = renderToString(
     React.createElement(clientModule.__components.SeriesCard, { series: makeSeries(), notify: () => {}, onReload: () => {}, onPlay: () => {} }),
   );
-  for (const text of ['练一练', '导出', '补配图', '配图 8 张', '已配音', '已衔接']) {
+  for (const text of ['练一练', '导出', '重新配图', '配图 8 张', '已配音', '已衔接', '重新配音', '长按 3s']) {
     assert.ok(html.includes(text), '系列卡应包含「' + text + '」');
+  }
+
+  const partial = renderToString(
+    React.createElement(clientModule.__components.SeriesCard, {
+      series: makeSeries({
+        voice_status: 'partial',
+        voice_code: 'E_TTS_QUOTA',
+        voice_error: '第 2 讲有页未配音：E_TTS_QUOTA（3/6 页未配音）',
+        images: { status: 'partial', done: 5, total: 8, failed: 2 },
+        lectures: [
+          { n: 1, title: '第 1 讲 · 机器', status: 'ready', pages: 6, chars: 3000, voice_status: 'ready' },
+          { n: 2, title: '第 2 讲 · 靠近', status: 'ready', pages: 6, chars: 3000, voice_status: 'partial', voice_error: 'E_TTS_QUOTA' },
+        ],
+      }),
+      notify: () => {},
+      onReload: () => {},
+      onPlay: () => {},
+    }),
+  );
+  for (const text of ['补配音', '补配图', 'E_TTS_QUOTA', '1 讲未完成', '部分未配']) {
+    assert.ok(partial.includes(text), '部分状态卡应包含「' + text + '」');
+  }
+
+  const fresh = renderToString(
+    React.createElement(clientModule.__components.SeriesCard, {
+      series: makeSeries({
+        voice_status: 'none',
+        images: { status: 'none' },
+        lectures: [
+          { n: 1, title: '第 1 讲 · 机器', status: 'ready', pages: 6, chars: 3000, voice_status: 'none' },
+          { n: 2, title: '第 2 讲 · 靠近', status: 'ready', pages: 6, chars: 3000, voice_status: 'none' },
+        ],
+      }),
+      notify: () => {},
+      onReload: () => {},
+      onPlay: () => {},
+    }),
+  );
+  for (const text of ['生成配音', '生成配图']) {
+    assert.ok(fresh.includes(text), '未开始状态卡应包含「' + text + '」');
   }
 });
 
@@ -134,6 +174,126 @@ test('播放器配图：image_status=ready 时渲染 img，占位时渲染提示
   );
   assert.ok(placeholder.includes('配图位'));
   assert.ok(placeholder.includes('点击查看提示词'));
+});
+
+test('AC-147：ready 页出「换一张」、failed 页出「重试配图」、占位页没有入口', () => {
+  const stage = (slide) =>
+    renderToString(
+      React.createElement(clientModule.__components.SlideStage, {
+        seriesId: 'sabcdefghij',
+        lecture: 1,
+        imageBusy: false,
+        onRegenImage: () => {},
+        slide: Object.assign(
+          { slide_index: 2, layout: 'content_text', title: '页面', bullet_points: ['要点'], image_prompt: '一台机器' },
+          slide,
+        ),
+      }),
+    );
+  const ready = stage({ image_status: 'ready', image_file: 'images/002.png', image_seed: 7 });
+  assert.ok(ready.includes('换一张'));
+  assert.ok(ready.includes('blm-stage-figure-tools'));
+
+  const failed = stage({ image_status: 'failed', image_file: null, image_error: 'E_IMG_CONNECT' });
+  assert.ok(failed.includes('重试配图'));
+
+  const none = stage({ image_status: 'none', image_file: null });
+  assert.equal(none.includes('换一张'), false);
+  assert.equal(none.includes('重试配图'), false);
+});
+
+test('AC-142：底部缩略图按 cover/content_text/quote 渲染迷你版式', () => {
+  const thumb = (slide, index, active) =>
+    renderToString(
+      React.createElement(clientModule.__components.SlideThumb, { slide, index, active, onClick: () => {} }),
+    );
+  const cover = thumb({ slide_index: 1, layout: 'cover', title: '函数', subtitle: '从机器说起', bullet_points: [] }, 0, true);
+  assert.ok(cover.includes('blm-thumb-cover'));
+  assert.ok(cover.includes('aria-current="page"'));
+  assert.ok(cover.includes('从机器说起'));
+
+  const body = thumb({ slide_index: 2, layout: 'content_text', title: '机器', bullet_points: ['一', '二', '三'] }, 1, false);
+  assert.ok(body.includes('blm-thumb-content_text'));
+  assert.ok((body.match(/blm-thumb-line/g) || []).length >= 3, '要点应渲染成缩略线条');
+
+  const quote = thumb({ slide_index: 3, layout: 'quote', title: '引文', quote_text: '极限是靠近的艺术' }, 2, false);
+  assert.ok(quote.includes('blm-thumb-quote'));
+  assert.ok(quote.includes('极限是靠近的艺术'));
+});
+
+test('AC-143：无提示词不渲染复制按钮；点外部/按 Esc 关闭并拦住这次 Esc', () => {
+  const empty = renderToString(
+    React.createElement(clientModule.__components.StageFigure, {
+      prompt: '',
+      open: true,
+      copied: false,
+      onToggle: () => {},
+      onCopy: () => {},
+    }),
+  );
+  assert.ok(empty.includes('（没有配图提示词）'));
+  assert.equal(empty.includes('复制提示词'), false);
+
+  const listeners = new Map();
+  const doc = {
+    addEventListener(type, fn, capture) {
+      const key = type + ':' + String(capture);
+      listeners.set(key, (listeners.get(key) || []).concat(fn));
+    },
+    removeEventListener(type, fn, capture) {
+      const key = type + ':' + String(capture);
+      listeners.set(key, (listeners.get(key) || []).filter((item) => item !== fn));
+    },
+  };
+  const figure = { contains: (target) => target === 'inside' };
+  const calls = [];
+  const cleanup = clientModule.__helpers.bindMenuDismiss(doc, {
+    menu: figure,
+    onDismiss: (why) => calls.push(why),
+    stopEscape: true,
+  });
+  const clicks = listeners.get('click:true') || [];
+  clicks.forEach((fn) => fn({ target: 'inside' }));
+  clicks.forEach((fn) => fn({ target: 'outside' }));
+  assert.deepEqual(calls, ['outside'], '点面板内不关，点面板外关闭');
+
+  let stopped = 0;
+  const keys = listeners.get('keydown:true') || [];
+  keys.forEach((fn) => fn({ key: 'Escape', stopPropagation: () => { stopped += 1; }, preventDefault: () => {} }));
+  assert.ok(calls.includes('escape'));
+  assert.equal(stopped, 1, 'Esc 应被拦住，避免又退全屏/返回');
+  cleanup();
+});
+
+test('二次确认：插件内居中弹窗（blm-modal-mask），不是浏览器原生 confirm', async () => {
+  const pending = clientModule.__helpers.confirmAction('会重跑 12 页；命中缓存不产生费用。', {
+    title: '重新配音',
+    okText: '重新配音',
+  });
+  const html = renderToString(React.createElement(clientModule.__components.ConfirmHost));
+  assert.ok(html.includes('blm-modal-mask'), '应复用插件遮罩（flex 居中）');
+  assert.ok(html.includes('role="dialog"'));
+  assert.ok(html.includes('重新配音'));
+  assert.ok(html.includes('取消'));
+  assert.ok(html.includes('命中缓存不产生费用'));
+
+  assert.equal(clientModule.__helpers.cancelPendingConfirm(), true);
+  assert.equal(await pending, false);
+  const closed = renderToString(React.createElement(clientModule.__components.ConfirmHost));
+  assert.equal(closed.includes('blm-modal-mask'), false);
+
+  const pendingPrompt = clientModule.__helpers.promptAction('输入新的书名', '旧书名', { title: '重命名' });
+  const promptHtml = renderToString(React.createElement(clientModule.__components.ConfirmHost));
+  assert.ok(promptHtml.includes('blm-confirm-input'), '重命名也用同一弹窗');
+  assert.ok(promptHtml.includes('旧书名'));
+  assert.equal(clientModule.__helpers.cancelPendingConfirm(), true);
+  assert.equal(await pendingPrompt, null);
+});
+
+test('AC-145：长按期间有进度条与剩余秒数（源码入口）', () => {
+  for (const token of ['blm-hold-bar', 'blm-hold-count', 'blm-btn holdable', 'setPointerCapture', 'secondsLeft']) {
+    assert.ok(source.includes(token), '长按反馈应包含「' + token + '」');
+  }
 });
 
 test('客户端导出 M5 组件与上传/下载辅助', () => {

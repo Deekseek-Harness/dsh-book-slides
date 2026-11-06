@@ -993,6 +993,7 @@ async function handleRevoice(req, res, options) {
       seriesId: String(body.seriesId || ''),
       lecture: body.lecture == null || body.lecture === 'all' ? null : Number(body.lecture),
       force: body.force === true,
+      missingOnly: body.missingOnly === true,
       options: options || {},
     });
     sendJson(res, 200, { ok: true, jobId: out.jobId, scope: out.job.scope });
@@ -1313,6 +1314,7 @@ async function handleImageRegen(req, res, options) {
       lecture: body.lecture == null || body.lecture === 'all' ? null : Number(body.lecture),
       slide: body.slide == null ? null : Number(body.slide),
       force: body.force === true,
+      reset: body.reset === true,
       options: { fetchImpl: options.imageFetch },
     });
     sendJson(res, 200, job);

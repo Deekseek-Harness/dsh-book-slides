@@ -228,8 +228,56 @@ test('AC-120：逐页生成、单页重试只替换该页、文本字段不变',
   assert.equal(nothing.code, 'E_IMG_NOTHING');
 });
 
+test('AC-147：单页换一张只改该页 nonce/seed；非正文页返回 E_NOT_FOUND', async () => {
+  ctl.failSubmit = false;
+  const before = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'lectures', '1', 'slides.json'), 'utf8'));
+  const otherSeed = before.slides[1].image_seed;
+  const otherNonce = before.slides[1].image_nonce;
+  const out = await post('/dsh-book-slides/image/regen', { seriesId: fixture.series.id, lecture: 1, slide: 3, force: true });
+  assert.equal(out.ok, true);
+  assert.equal(out.total, 1);
+  await waitImage(fixture.series.id, (job) => ['done', 'failed', 'cancelled'].includes(job.status));
+
+  const after = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'lectures', '1', 'slides.json'), 'utf8'));
+  assert.equal(after.slides[2].image_nonce, (before.slides[2].image_nonce || 0) + 1);
+  assert.notEqual(after.slides[2].image_seed, before.slides[2].image_seed);
+  assert.equal(after.slides[1].image_nonce, otherNonce, '其它页 nonce 不变');
+  assert.equal(after.slides[1].image_seed, otherSeed, '其它页 seed 不变');
+
+  const cover = await post('/dsh-book-slides/image/regen', { seriesId: fixture.series.id, lecture: 1, slide: 1, force: true });
+  assert.equal(cover.ok, false);
+  assert.equal(cover.code, 'E_NOT_FOUND');
+});
+
+test('AC-146：强制重新配图（reset）清空旧图、nonce 归零后全量重出', async () => {
+  ctl.failSubmit = false;
+  const slidesPath = path.join(fixture.dir, 'lectures', '1', 'slides.json');
+  const before = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  before.slides[1].image_nonce = 7;
+  before.slides[2].image_nonce = 5;
+  fs.writeFileSync(slidesPath, JSON.stringify(before, null, 2));
+
+  const out = await post('/dsh-book-slides/image/regen', { seriesId: fixture.series.id, force: true, reset: true });
+  assert.equal(out.ok, true);
+  assert.equal(out.total, 3);
+  const done = await waitImage(fixture.series.id, (job) => ['done', 'failed', 'cancelled'].includes(job.status));
+  assert.equal(done.status, 'done');
+
+  const after = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  for (let index = 1; index < after.slides.length; index += 1) {
+    assert.equal(after.slides[index].image_status, 'ready');
+    assert.equal(after.slides[index].image_nonce, 1, 'reset 后 nonce 从 0 重新 +1');
+  }
+  const seriesOut = await json('/dsh-book-slides/series?seriesId=' + fixture.series.id);
+  assert.equal(seriesOut.series.images.status, 'done');
+  assert.equal(seriesOut.series.images.done, 3);
+  assert.equal(seriesOut.series.images.total, 3, '单页/强制作业不能把汇总 total 算成 1');
+});
+
 test('AC-120：ComfyUI 不可用时该页留白并给 warning，失败页可单页重试', async () => {
   ctl.failSubmit = true;
+  // 清掉图片缓存：本用例要验证「真的去请求 ComfyUI 且失败」，不能被旧图缓存短路
+  fs.rmSync(path.join(ROOT, 'image-cache'), { recursive: true, force: true });
   const failed = await post('/dsh-book-slides/image/regen', { seriesId: fixture.series.id, lecture: 1, slide: 3, force: true });
   assert.equal(failed.ok, true);
   const done = await waitImage(fixture.series.id, (job) => ['done', 'failed', 'cancelled'].includes(job.status));

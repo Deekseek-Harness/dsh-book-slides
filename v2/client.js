@@ -94,6 +94,17 @@ body[data-ds-dark-theme] .blm-root{color-scheme:dark}
 .blm-bad{color:#e55353}
 .blm-modal-mask{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.32);display:flex;align-items:center;justify-content:center;padding:18px}
 .blm-modal{width:100%;max-width:420px;background:var(--blm-card);color:var(--blm-text);border:1px solid var(--blm-line);border-radius:12px;padding:14px;box-shadow:0 18px 44px rgba(0,0,0,.32)}
+.blm-confirm{max-width:420px}
+.blm-confirm-title{display:block;font-size:13px;font-weight:650;margin-bottom:6px}
+.blm-confirm-text{margin:0;font-size:12px;line-height:1.65;color:var(--blm-dim);white-space:pre-wrap}
+.blm-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.blm-confirm-input{margin-top:10px;width:100%;box-sizing:border-box}
+.blm-btn.primary.danger{background:#c62828;border-color:#c62828}
+.blm-btn.holding{position:relative;overflow:hidden}
+.blm-btn.holdable{min-width:112px}
+.blm-hold-count{position:absolute;right:6px;bottom:4px;font-size:9px;line-height:1;color:var(--blm-dim);font-variant-numeric:tabular-nums}
+.blm-hold-bar{position:absolute;left:6px;right:6px;bottom:1px;height:2px;border-radius:99px;background:var(--blm-line);overflow:hidden}
+.blm-hold-bar i{display:block;height:100%;background:var(--blm-accent);transition:width .06s linear}
 .blm-chapter:last-child{border-bottom:0}
 .blm-chapter input{width:100%;box-sizing:border-box;border:1px solid var(--blm-line);border-radius:5px;padding:3px 5px;font:inherit;background:var(--blm-card);color:inherit;color-scheme:inherit}
 .blm-chapter .t{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
@@ -141,7 +152,7 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-stage-quote{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px}
 .blm-stage-quote blockquote{margin:0;font-size:18px;line-height:1.7;font-weight:600}
 .blm-stage-quote cite{font-style:normal;font-size:12px;color:#7a6c50}
-.blm-stage-figure{flex:0 0 34%;border:1px dashed #c9bda0;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:10px;color:#8a7b5a;text-align:center;padding:8px;background:rgba(255,255,255,.35);cursor:pointer}
+.blm-stage-figure{position:relative;flex:0 0 34%;border:1px dashed #c9bda0;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:10px;color:#8a7b5a;text-align:center;padding:8px;background:rgba(255,255,255,.35);cursor:pointer}
 .blm-stage-figure:hover,.blm-stage-figure:focus-visible{border-color:#a8986f;background:rgba(255,255,255,.62);outline:none}
 .blm-stage-figure.prompt-open{align-items:stretch;justify-content:flex-start;text-align:left;cursor:default;background:rgba(255,255,255,.78);overflow:auto}
 .blm-stage-figure.has-img{border-style:solid;padding:0;background:transparent;cursor:zoom-in;overflow:hidden}
@@ -156,11 +167,27 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-pagebar{width:120px;height:4px;border-radius:99px;background:var(--blm-line);overflow:hidden}
 .blm-pagebar i{display:block;height:100%;background:var(--blm-accent)}
 .blm-noaudio{font-size:11px;color:#c62828}
-.blm-thumbs{display:flex;gap:4px;overflow-x:auto;padding-bottom:2px}
-.blm-thumb{flex:0 0 auto;min-width:54px;border:1px solid var(--blm-line);background:transparent;color:var(--blm-dim);border-radius:5px;padding:3px 6px;font:inherit;font-size:10px;cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:1px}
-.blm-thumb.on{border-color:var(--blm-accent);color:var(--blm-text)}
-.blm-thumb b{font-size:10px}
-.blm-thumb-title{max-width:86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.blm-player-alert{display:flex;align-items:flex-start;gap:8px;padding:6px 12px;font-size:12px;color:#8a5a00;background:color-mix(in oklab,#f0b400 14%,transparent);border-bottom:1px solid color-mix(in oklab,#f0b400 32%,transparent)}
+.blm-player-alert .grow{flex:1;min-width:0}
+body[data-ds-dark-theme] .blm-player-alert{color:#ffd27a}
+.blm-stage-figure-tools{position:absolute;right:4px;bottom:4px;display:flex;gap:4px;z-index:2}
+.blm-stage-figure-tools .blm-btn{font-size:9px;padding:1px 5px;color:#4a4030;border-color:#c9bda0;background:rgba(255,255,255,.88)}
+.blm-thumbs{display:flex;gap:6px;overflow-x:auto;padding:2px 0 4px}
+.blm-thumb{flex:0 0 108px;aspect-ratio:16/9;border:1px solid var(--blm-line);border-radius:6px;background:#f5f0e4;color:#2b2418;padding:6px 7px 7px;font:inherit;cursor:pointer;position:relative;overflow:hidden;text-align:left;display:flex;flex-direction:column;gap:3px;font-family:"Songti SC","SimSun",serif;opacity:.76}
+.blm-thumb:hover{opacity:1}
+.blm-thumb.on{opacity:1;border-color:var(--blm-accent);box-shadow:0 0 0 1px var(--blm-accent)}
+.blm-thumb-no{position:absolute;right:4px;bottom:2px;font:10px/1 system-ui,sans-serif;color:#a4977a}
+.blm-thumb-kicker{font:7px/1.2 system-ui,sans-serif;letter-spacing:.16em;color:#8a7b5a}
+.blm-thumb-title{font-size:9px;line-height:1.3;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.blm-thumb-sub{font-size:7px;line-height:1.2;color:#6b5f47;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.blm-thumb-lines{display:flex;flex-direction:column;gap:2px;flex:1;min-height:4px;overflow:hidden}
+.blm-thumb-line{height:2px;border-radius:1px;background:#c9bda0}
+.blm-thumb-line:nth-child(2){width:78%}
+.blm-thumb-line:nth-child(3){width:90%}
+.blm-thumb-quote-text{flex:1;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-align:center;font-style:italic;font-size:8px;line-height:1.4;color:#4a4030;padding:0 2px}
+.blm-thumb-cover{background:#efe5d0}
+.blm-thumb-cover .blm-thumb-title{font-size:11px;line-height:1.25}
+.blm-thumb-quote{background:#f8f2e4}
 .blm-transition{position:absolute;inset:0;z-index:15;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(0,0,0,.72);color:#fff;text-align:center;padding:24px}
 .blm-transition h2{margin:0;font-size:20px;font-weight:600}
 .blm-transition .count{font-size:12px;opacity:.75}
@@ -527,9 +554,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
     }
 
     /**
-     * 书架卡片「⋯」菜单的关闭规则（FR-21.1 / AC-117）：
-     * 点菜单内部或再点「⋯」交给按钮自己；点其它任何区域、按 Esc 都关闭。
-     * 只关菜单、不拦这次点击——点卡片本体照常打开书，点别的卡片照常响应。
+     * 书架卡片「⋯」菜单 / 播放器配图提示词面板的关闭规则（FR-21.1 / AC-117 / AC-143）：
+     * 点内部或再点触发按钮交给元素自己；点其它任何区域、按 Esc 都关闭。
+     * 只关面板、不拦这次点击——点卡片/播放按钮照常响应。
+     * `stopEscape` 用于「Esc 先收面板」：拦住这次 Esc，别再退全屏/返回。
      * 返回清理函数，反复开关不堆监听。
      */
     function bindMenuDismiss(doc, options) {
@@ -546,6 +574,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
       const closeOnEscape = (event) => {
         if (!event || event.key !== 'Escape') return;
+        if (opts.stopEscape) {
+          if (typeof event.stopPropagation === 'function') event.stopPropagation();
+          if (typeof event.preventDefault === 'function') event.preventDefault();
+        }
         dismiss('escape');
       };
       doc.addEventListener('click', closeIfOutside, true);
@@ -554,6 +586,247 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         doc.removeEventListener('click', closeIfOutside, true);
         doc.removeEventListener('keydown', closeOnEscape, true);
       };
+    }
+
+    /**
+     * 长按（默认 3s）触发强制动作（AC-145/AC-146）：
+     * 按住期间给出进度与剩余秒数，触发后把这次点击吃掉，避免又执行一次普通点击。
+     */
+    function useLongPress(onLongPress, ms = 3000) {
+      const [hold, setHold] = useState({ active: false, progress: 0 });
+      const timerRef = useRef(null);
+      const tickRef = useRef(null);
+      const startedAtRef = useRef(0);
+      const firedRef = useRef(false);
+      const capturedRef = useRef(false);
+      const mountedRef = useRef(true);
+      const stop = useCallback(() => {
+        if (timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        if (tickRef.current) {
+          clearInterval(tickRef.current);
+          tickRef.current = null;
+        }
+      }, []);
+      const clear = useCallback(() => {
+        stop();
+        if (!mountedRef.current) return;
+        setHold((prev) => (prev.active || prev.progress ? { active: false, progress: 0 } : prev));
+      }, [stop]);
+      useEffect(
+        () => () => {
+          mountedRef.current = false;
+          stop();
+        },
+        [stop],
+      );
+      const start = useCallback(() => {
+        firedRef.current = false;
+        stop();
+        startedAtRef.current = Date.now();
+        setHold({ active: true, progress: 0 });
+        tickRef.current = setInterval(() => {
+          const progress = Math.min(0.985, (Date.now() - startedAtRef.current) / ms);
+          if (mountedRef.current) setHold({ active: true, progress });
+        }, 60);
+        timerRef.current = setTimeout(() => {
+          timerRef.current = null;
+          if (tickRef.current) {
+            clearInterval(tickRef.current);
+            tickRef.current = null;
+          }
+          firedRef.current = true;
+          if (mountedRef.current) setHold({ active: false, progress: 0 });
+          if (typeof onLongPress === 'function') onLongPress();
+        }, ms);
+      }, [ms, onLongPress, stop]);
+      return {
+        props: {
+          onPointerDown: (event) => {
+            if (event && event.button != null && event.button !== 0) return;
+            const element = event && event.currentTarget;
+            capturedRef.current = false;
+            if (element && typeof element.setPointerCapture === 'function' && event.pointerId != null) {
+              try {
+                element.setPointerCapture(event.pointerId);
+                capturedRef.current = true;
+              } catch {
+                /* 捕获失败不影响计时 */
+              }
+            }
+            start();
+          },
+          onPointerUp: () => {
+            capturedRef.current = false;
+            clear();
+          },
+          onPointerLeave: () => {
+            // 指针捕获后指针仍算在按钮上，只有没捕获成功时才按“移出即取消”
+            if (!capturedRef.current) clear();
+          },
+          onPointerCancel: () => {
+            capturedRef.current = false;
+            clear();
+          },
+          onLostPointerCapture: () => {
+            capturedRef.current = false;
+            clear();
+          },
+          onKeyDown: () => {
+            firedRef.current = false;
+          },
+          onContextMenu: (event) => {
+            if (event && typeof event.preventDefault === 'function') event.preventDefault();
+          },
+        },
+        active: hold.active,
+        progress: hold.progress,
+        secondsLeft: Math.max(1, Math.ceil((1 - hold.progress) * (ms / 1000))),
+        wasLongPress: () => {
+          const hit = firedRef.current;
+          firedRef.current = false;
+          return hit;
+        },
+      };
+    }
+
+    /**
+     * 统一二次确认（AC-145/146 与删除类操作）：不用浏览器原生 confirm，
+     * 改由面板内的 ConfirmHost 居中渲染；返回 Promise<boolean>。
+     */
+    const confirmStore = { current: null, listeners: new Set() };
+
+    function pushDialog(request) {
+      const previous = confirmStore.current;
+      if (previous && typeof previous.resolve === 'function') {
+        previous.resolve(previous.kind === 'prompt' ? null : false);
+      }
+      confirmStore.current = request;
+      for (const listener of confirmStore.listeners) listener(request);
+    }
+
+    function confirmAction(message, options = {}) {
+      if (typeof window === 'undefined') return Promise.resolve(true);
+      return new Promise((resolve) => {
+        pushDialog({
+          kind: 'confirm',
+          message: String(message || ''),
+          title: String(options.title || '请确认'),
+          okText: String(options.okText || '继续'),
+          cancelText: String(options.cancelText || '取消'),
+          danger: options.danger === true,
+          resolve: (value) => resolve(value === true),
+        });
+      });
+    }
+
+    /** 插件内输入弹窗：返回输入值；取消返回 null。 */
+    function promptAction(message, defaultValue, options = {}) {
+      if (typeof window === 'undefined') return Promise.resolve(String(defaultValue || ''));
+      return new Promise((resolve) => {
+        pushDialog({
+          kind: 'prompt',
+          message: String(message || ''),
+          value: String(defaultValue || ''),
+          title: String(options.title || '输入'),
+          okText: String(options.okText || '保存'),
+          cancelText: String(options.cancelText || '取消'),
+          danger: false,
+          resolve: (value) => resolve(typeof value === 'string' ? value : null),
+        });
+      });
+    }
+
+    function ConfirmHost() {
+      const [request, setRequest] = useState(confirmStore.current);
+      const [draft, setDraft] = useState(() => {
+        const current = confirmStore.current;
+        return current && current.kind === 'prompt' ? String(current.value || '') : '';
+      });
+      useEffect(() => {
+        const listener = (next) => setRequest(next);
+        confirmStore.listeners.add(listener);
+        if (confirmStore.current) setRequest(confirmStore.current);
+        return () => confirmStore.listeners.delete(listener);
+      }, []);
+      useEffect(() => {
+        setDraft(request && request.kind === 'prompt' ? String(request.value || '') : '');
+      }, [request]);
+      useEffect(() => {
+        if (!request) return undefined;
+        const onKey = (event) => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeConfirm(request, request.kind === 'prompt' ? null : false);
+        };
+        document.addEventListener('keydown', onKey, true);
+        return () => document.removeEventListener('keydown', onKey, true);
+      }, [request]);
+      if (!request) return null;
+      const prompt = request.kind === 'prompt';
+      const cancelValue = prompt ? null : false;
+      const confirmValue = prompt ? draft : true;
+      return h(
+        'div',
+        {
+          className: 'blm-modal-mask',
+          style: { zIndex: 60 },
+          onMouseDown: (event) => {
+            if (event.target === event.currentTarget) closeConfirm(request, cancelValue);
+          },
+        },
+        h(
+          'div',
+          { className: 'blm-modal blm-confirm', role: 'dialog', 'aria-modal': 'true', 'aria-label': request.title },
+          h('strong', { className: 'blm-confirm-title' }, request.title),
+          h('p', { className: 'blm-confirm-text' }, request.message),
+          prompt
+            ? h('input', {
+                className: 'blm-input blm-confirm-input',
+                value: draft,
+                autoFocus: true,
+                'aria-label': request.title,
+                onChange: (event) => setDraft(event.target.value),
+                onKeyDown: (event) => {
+                  if (event.key !== 'Enter') return;
+                  event.preventDefault();
+                  closeConfirm(request, draft);
+                },
+              })
+            : null,
+          h(
+            'div',
+            { className: 'blm-confirm-actions' },
+            h(
+              'button',
+              { className: 'blm-btn', autoFocus: !prompt, onClick: () => closeConfirm(request, cancelValue) },
+              request.cancelText,
+            ),
+            h(
+              'button',
+              { className: 'blm-btn primary' + (request.danger ? ' danger' : ''), onClick: () => closeConfirm(request, confirmValue) },
+              request.okText,
+            ),
+          ),
+        ),
+      );
+    }
+
+    function closeConfirm(request, value) {
+      if (confirmStore.current === request) confirmStore.current = null;
+      for (const listener of confirmStore.listeners) listener(null);
+      if (request && typeof request.resolve === 'function') request.resolve(value);
+    }
+
+    /** 关闭当前未决确认（取消 = false / null）；主要给测试与异常收口用。 */
+    function cancelPendingConfirm() {
+      const current = confirmStore.current;
+      if (!current) return false;
+      closeConfirm(current, current.kind === 'prompt' ? null : false);
+      return true;
     }
 
     /* ------------------------------ 浏览器朗读 ------------------------------ */
@@ -775,7 +1048,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         }
       };
       const clear = async () => {
-        if (!window.confirm('清空回收站？此操作不可撤销。')) return;
+        if (!(await confirmAction('清空回收站？此操作不可撤销。', { title: '清空回收站', okText: '清空', danger: true }))) return;
         setBusy(true);
         try {
           const data = await api('/trash/clear', { method: 'POST' });
@@ -1040,9 +1313,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
     /**
      * 配图位：默认显示占位，点一下（或 Enter/空格）展开 image_prompt，
-     * 再点「收起」回占位；有复制按钮。配图本身在 M5 才生成，这里只承载提示词。
+     * 再点「收起」/点面板外/按 Esc 回占位（AC-143）；有复制按钮。
+     * 有图时右下角给「换一张」/「重试配图」（AC-147）。
      */
-    function StageFigure({ prompt, src, open, copied, onToggle, onCopy }) {
+    function StageFigure({ prompt, src, open, copied, onToggle, onCopy, rootRef, tools }) {
       const text = String(prompt || '');
       const hasImage = Boolean(src && !open);
       const panel = h(
@@ -1052,13 +1326,14 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         h(
           'div',
           { className: 'blm-stage-figure-prompt-actions' },
-          h('button', { className: 'blm-btn', onClick: onCopy, disabled: !text }, copied ? '已复制' : '复制提示词'),
+          text ? h('button', { className: 'blm-btn', onClick: onCopy }, copied ? '已复制' : '复制提示词') : null,
           h('button', { className: 'blm-btn', onClick: onToggle }, '收起'),
         ),
       );
       return h(
         'div',
         {
+          ref: rootRef,
           className: 'blm-stage-figure' + (open ? ' prompt-open' : '') + (hasImage ? ' has-img' : ''),
           role: 'button',
           tabIndex: 0,
@@ -1084,19 +1359,30 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 h('b', null, '配图位'),
                 h('span', null, text ? '点击查看提示词' : '本页无配图'),
               ),
+        !open && tools ? h('div', { className: 'blm-stage-figure-tools' }, tools) : null,
       );
     }
 
     /** 幻灯片舞台：沿用 1.x 的米色底 / 宋体标题 / 要点 / 引文 / 右下页码。 */
-    function SlideStage({ slide, seriesId, lecture }) {
+    function SlideStage({ slide, seriesId, lecture, onRegenImage, imageBusy }) {
       const slideKey = slide ? Number(slide.slide_index) || 0 : 0;
       const [showPrompt, setShowPrompt] = useState(false);
       const [copied, setCopied] = useState(false);
+      const figureRef = useRef(null);
       // 翻页后提示词要收起来，否则会把上一页的展开状态带到下一页
       useEffect(() => {
         setShowPrompt(false);
         setCopied(false);
       }, [slideKey]);
+      // AC-143：点面板外任意区域 / 按 Esc 收起；Esc 只收面板，不再退全屏/返回
+      useEffect(() => {
+        if (!showPrompt) return undefined;
+        return bindMenuDismiss(typeof document === 'undefined' ? null : document, {
+          menu: figureRef.current,
+          onDismiss: () => setShowPrompt(false),
+          stopEscape: true,
+        });
+      }, [showPrompt]);
       if (!slide) return null;
       const layout = String(slide.layout || 'content_text');
       const imageSrc =
@@ -1116,6 +1402,26 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           setCopied(false);
         }
       };
+      const regenButton = (label) =>
+        h(
+          'button',
+          {
+            className: 'blm-btn',
+            disabled: imageBusy === true,
+            onClick: (event) => {
+              if (event && event.stopPropagation) event.stopPropagation();
+              if (typeof onRegenImage === 'function') onRegenImage(slide);
+            },
+          },
+          label,
+        );
+      const figureTools = !onRegenImage
+        ? null
+        : slide.image_status === 'ready' && slide.image_file
+          ? regenButton('换一张')
+          : slide.image_status === 'failed'
+            ? regenButton('重试配图')
+            : null;
       if (layout === 'cover') {
         return h(
           'div',
@@ -1177,10 +1483,53 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               copied: copied,
               onToggle: () => setShowPrompt((value) => !value),
               onCopy: copyPrompt,
+              rootRef: figureRef,
+              tools: figureTools,
             }),
           ),
           foot,
         ),
+      );
+    }
+
+    /** 底部逐页缩略图：16:9 迷你版式（AC-142），不是纯文字页码条。 */
+    function SlideThumb({ slide, index, active, onClick }) {
+      const layout = String((slide && slide.layout) || 'content_text');
+      const title = (slide && slide.title) || '';
+      const bullets = (slide && Array.isArray(slide.bullet_points)) ? slide.bullet_points : [];
+      const body =
+        layout === 'cover'
+          ? h(
+              React.Fragment,
+              null,
+              h('span', { className: 'blm-thumb-kicker' }, '精讲'),
+              h('span', { className: 'blm-thumb-title' }, title),
+              slide && slide.subtitle ? h('span', { className: 'blm-thumb-sub' }, slide.subtitle) : null,
+            )
+          : layout === 'quote'
+            ? h('span', { className: 'blm-thumb-quote-text' }, (slide && slide.quote_text) || title)
+            : h(
+                React.Fragment,
+                null,
+                h('span', { className: 'blm-thumb-title' }, title),
+                h(
+                  'span',
+                  { className: 'blm-thumb-lines', 'aria-hidden': 'true' },
+                  bullets.slice(0, 3).map((bullet, i) => h('span', { className: 'blm-thumb-line', key: i })),
+                ),
+              );
+      return h(
+        'button',
+        {
+          type: 'button',
+          className: 'blm-thumb blm-thumb-' + layout + (active ? ' on' : ''),
+          title,
+          'aria-label': '跳到第 ' + (index + 1) + ' 页',
+          'aria-current': active ? 'page' : undefined,
+          onClick,
+        },
+        h('span', { className: 'blm-thumb-no' }, index + 1),
+        body,
       );
     }
 
@@ -1267,9 +1616,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [fullscreen, setFullscreen] = useState(false);
       const [directory, setDirectory] = useState(false);
       const [transition, setTransition] = useState(null);
+      const [imageBusy, setImageBusy] = useState(false);
+      const [voiceNoticeClosed, setVoiceNoticeClosed] = useState(false);
 
       const rootRef = useRef(null);
       const mainRef = useRef(null);
+      const aliveRef = useRef(true);
       const audioRef = useRef(null);
       const preloadRef = useRef(null);
       const skipTimerRef = useRef(null);
@@ -1395,9 +1747,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         };
       }, [series, seriesId, lectureN, slidesByLecture]);
 
-      /* 换讲/首次加载后决定起始页 */
+      /* 换讲/首次加载后决定起始页（同一讲内更新图片不重置页码） */
+      const startLectureRef = useRef(0);
       useEffect(() => {
         if (!slides.length) return;
+        if (startLectureRef.current === lectureN) return;
+        startLectureRef.current = lectureN;
         const start = startRef.current;
         if (!start.used && Number(start.lecture) === Number(lectureN)) {
           setIndex(resolveInitialSlide(slides, start.slide));
@@ -1693,6 +2048,59 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         setIndex(Math.max(0, Math.min(slidesRef.current.length - 1, Math.round(Number(target) || 0))));
       }, []);
 
+      useEffect(() => {
+        aliveRef.current = true;
+        return () => {
+          aliveRef.current = false;
+        };
+      }, []);
+
+      /** 单页换一张（AC-147）：只重出该页，轮询到 ready/failed 后刷新本讲。 */
+      const regenImage = useCallback(
+        async (targetSlide) => {
+          const slideIndex = Number(targetSlide && targetSlide.slide_index) || 0;
+          if (!slideIndex || imageBusy) return;
+          setImageBusy(true);
+          try {
+            await api('/image/regen', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ seriesId, lecture: lectureN, slide: slideIndex, force: true }),
+            });
+            notify('已开始重出第 ' + slideIndex + ' 页配图');
+            const startedAt = Date.now();
+            while (Date.now() - startedAt < 180000) {
+              await new Promise((resolve) => setTimeout(resolve, 1200));
+              if (!aliveRef.current) return;
+              const doc = await api('/lecture?seriesId=' + encodeURIComponent(seriesId) + '&n=' + lectureN);
+              if (!aliveRef.current) return;
+              const list = (doc.slides && doc.slides.slides) || [];
+              setSlidesByLecture((prev) => Object.assign({}, prev, { [lectureN]: list }));
+              const hit = list.find((item) => Number(item.slide_index) === slideIndex);
+              if (!hit) return;
+              if (hit.image_status === 'ready') {
+                notify('第 ' + slideIndex + ' 页配图已更新');
+                return;
+              }
+              if (hit.image_status === 'failed') {
+                notify('第 ' + slideIndex + ' 页配图失败：' + (hit.image_error || 'E_IMG_FAIL'));
+                return;
+              }
+            }
+          } catch (err) {
+            if (!aliveRef.current) return;
+            notify(
+              err.code === 'E_IMG_DISABLED'
+                ? '当前配图策略是「提示词占位」：到设置 → 配图切到「本地 ComfyUI」。'
+                : err.message,
+            );
+          } finally {
+            if (aliveRef.current) setImageBusy(false);
+          }
+        },
+        [imageBusy, lectureN, notify, seriesId],
+      );
+
       const nextPage = useCallback(() => {
         if (indexRef.current >= slidesRef.current.length - 1) {
           setPlaying(false);
@@ -1782,6 +2190,22 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         heardPages: progress ? progress.heardPages : 0,
         totalPages: progress ? progress.totalPages : (series && series.total_pages) || 0,
       });
+      // AC-144：配音失败/部分失败必须在播放入口可见，且能一眼看到错误码
+      const voiceNotice = (() => {
+        if (!series || voiceNoticeClosed) return '';
+        const status = String(series.voice_status || 'none');
+        const code = series.voice_code ? String(series.voice_code) : '';
+        if (status === 'partial') {
+          return '系列配音未完成：' + (code || 'E_TTS_FAIL') + (series.voice_error ? ' · ' + series.voice_error : '') + '。到系列卡点「补配音」补齐。';
+        }
+        if (status === 'failed') {
+          return '系列配音失败：' + (code || 'E_TTS_FAIL') + (series.voice_error ? ' · ' + series.voice_error : '') + '。到系列卡点「补配音」重试。';
+        }
+        if (code) {
+          return '系列还没配音：' + code + (series.voice_error ? ' · ' + series.voice_error : '') + '。到系列卡点「生成配音」。';
+        }
+        return '';
+      })();
 
       if (loadError) {
         return h(
@@ -1822,6 +2246,18 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             '打开 PDF',
           ),
         ),
+        voiceNotice
+          ? h(
+              'div',
+              { className: 'blm-player-alert' },
+              h('span', { className: 'grow' }, voiceNotice),
+              h(
+                'button',
+                { className: 'blm-btn', onClick: () => setVoiceNoticeClosed(true), 'aria-label': '关闭配音提示' },
+                '关闭',
+              ),
+            )
+          : null,
         h(
           'div',
           { className: 'blm-player-main', ref: mainRef },
@@ -1848,7 +2284,14 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               }
             },
           }),
-          h('div', { className: 'blm-pane-stage' }, h(SlideStage, { key: lectureN + '-' + (slide ? slide.slide_index : 0), slide, seriesId, lecture: lectureN })),
+          h('div', { className: 'blm-pane-stage' }, h(SlideStage, {
+            key: lectureN + '-' + (slide ? slide.slide_index : 0),
+            slide,
+            seriesId,
+            lecture: lectureN,
+            onRegenImage: regenImage,
+            imageBusy,
+          })),
         ),
         transition
           ? h(TransitionCard, {
@@ -1872,11 +2315,6 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         h(
           'div',
           { className: 'blm-player-foot' },
-          series.voice_status === 'partial'
-            ? h('div', { className: 'blm-note warn' }, '部分页没有音频：播放时会跳过，或停在本页提示「本页未配音」。')
-            : series.voice_status === 'none'
-              ? h('div', { className: 'blm-note' }, '本系列还没有生成音频：可用浏览器朗读，或到系列卡点「生成语音」。')
-              : null,
           h(
             'div',
             { className: 'blm-controls' },
@@ -1924,20 +2362,15 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           ),
           h(
             'div',
-            { className: 'blm-thumbs' },
+            { className: 'blm-thumbs', role: 'tablist', 'aria-label': '逐页缩略图' },
             slides.map((item, itemIndex) =>
-              h(
-                'button',
-                {
-                  key: item.slide_index,
-                  className: 'blm-thumb' + (itemIndex === index ? ' on' : ''),
-                  title: item.title || '',
-                  'aria-label': '跳到第 ' + (itemIndex + 1) + ' 页',
-                  onClick: () => goTo(itemIndex),
-                },
-                h('b', null, itemIndex + 1),
-                h('span', { className: 'blm-thumb-title' }, item.title || '未命名'),
-              ),
+              h(SlideThumb, {
+                key: item.slide_index,
+                slide: item,
+                index: itemIndex,
+                active: itemIndex === index,
+                onClick: () => goTo(itemIndex),
+              }),
             ),
           ),
         ),
@@ -2638,15 +3071,27 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const voiceActive = voiceJob != null && ['queued', 'voicing', 'cancelling'].includes(String(voiceJob.status || ''));
       const imageActive = imageJob != null && ['queued', 'running', 'cancelling'].includes(String(imageJob.status || ''));
       const playable = lectures.filter((lec) => READY_LECTURE.includes(String(lec.status)));
+      const voicePending = playable.filter((lec) => String(lec.voice_status || 'none') !== 'ready');
+      const voiceAllReady = playable.length > 0 && voicePending.length === 0;
+      const voiceStarted = ['ready', 'partial', 'failed'].includes(String(series.voice_status || ''));
+      const voiceState = voiceAllReady ? 'ready' : voiceStarted ? 'partial' : 'none';
+      const voiceFailedLectures = playable.filter((lec) => ['failed', 'partial'].includes(String(lec.voice_status || '')));
+      const voicePages = playable.reduce((sum, lec) => sum + (Number(lec.pages) || 0), 0) || Number(series.total_pages) || 0;
+      const voiceLabel = voiceState === 'ready' ? '重新配音' : voiceState === 'partial' ? '补配音' : '生成配音';
       const voiceText = (() => {
         const status = String(series.voice_status || 'none');
-        if (status === 'ready') return '已配音';
+        if (status === 'ready' || voiceAllReady) return '已配音';
         if (status === 'partial') return '部分配音';
-        if (series.voice_status === 'none' && series.voice_code) return '配音失败';
+        if (status === 'failed') return '配音失败';
+        if (status === 'none' && series.voice_code) return '配音失败';
         return '未配音';
       })();
+      const images = series.images || null;
+      const imageStatus = String((images && images.status) || 'none');
+      const imageAllReady = imageStatus === 'done' && Number(images.failed || 0) === 0;
+      const imageState = imageAllReady ? 'done' : ['partial', 'failed', 'interrupted'].includes(imageStatus) ? 'partial' : 'none';
+      const imageLabel = imageState === 'done' ? '重新配图' : imageState === 'partial' ? '补配图' : '生成配图';
       const imageText = (() => {
-        const images = series.images || null;
         if (!images || !images.status || images.status === 'none') return '配图占位';
         if (images.status === 'done') return '配图 ' + (images.done || 0) + ' 张';
         if (images.status === 'partial') return '配图 ' + (images.done || 0) + '/' + (images.total || 0);
@@ -2654,6 +3099,48 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         if (images.status === 'interrupted') return '配图中断';
         return '配图中…';
       })();
+      const voiceLongPress = useLongPress(() => {
+        void (async () => {
+          const ok = await confirmAction(
+            '忽略缓存，把 ' + voicePages + ' 页全部重跑并覆盖音频，可能消耗额度。',
+            { title: '强制重新配音', okText: '强制重配', danger: true },
+          );
+          if (ok) revoice({ force: true });
+        })();
+      }, 3000);
+      const imageLongPress = useLongPress(() => {
+        void (async () => {
+          const ok = await confirmAction(
+            '清空图片并重置种子后全量重出（' + (images ? images.total : 0) + ' 页）。',
+            { title: '强制重新配图', okText: '强制重配', danger: true },
+          );
+          if (ok) regenImages({ force: true, reset: true });
+        })();
+      }, 3000);
+      const runVoice = async () => {
+        if (voiceState === 'ready') {
+          const ok = await confirmAction('会重跑 ' + voicePages + ' 页；命中缓存不产生费用。', {
+            title: '重新配音',
+            okText: '重新配音',
+          });
+          if (!ok) return;
+          revoice({});
+          return;
+        }
+        revoice({ missingOnly: true });
+      };
+      const runImages = async () => {
+        if (imageState === 'done') {
+          const ok = await confirmAction('会把 ' + (images ? images.total : 0) + ' 页全部重出（换种子）。', {
+            title: '重新配图',
+            okText: '重新配图',
+          });
+          if (!ok) return;
+          regenImages({ force: true });
+          return;
+        }
+        regenImages({});
+      };
 
       const pollVoice = useCallback(async () => {
         if (!voiceJob || !voiceJob.jobId) return;
@@ -2694,22 +3181,26 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       }, [imageActive, pollImage]);
 
       /** 配图是独立动作（FR-24）：只补图片字段，不动文字与音频。 */
-      const regenImages = async () => {
+      const regenImages = async (opts = {}) => {
         setBusy(true);
         try {
+          const body = { seriesId: series.id };
+          if (opts.force) body.force = true;
+          if (opts.reset) body.reset = true;
+          if (opts.lecture != null) body.lecture = opts.lecture;
           const out = await api('/image/regen', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ seriesId: series.id }),
+            body: JSON.stringify(body),
           });
-          if (!out.ok) {
-            notify(out.code === 'E_IMG_DISABLED' ? '当前配图策略是「提示词占位」：到设置 → 配图切到「本地 ComfyUI」。' : out.message || '配图没启动');
-            return;
-          }
           setImageJob(out);
-          notify('已开始补配图（' + out.total + ' 页）');
+          notify((opts.reset ? '已开始强制重新配图（' : opts.force ? '已开始重新配图（' : '已开始补配图（') + out.total + ' 页）');
         } catch (err) {
-          notify(err.message);
+          notify(
+            err.code === 'E_IMG_DISABLED'
+              ? '当前配图策略是「提示词占位」：到设置 → 配图切到「本地 ComfyUI」。'
+              : err.message,
+          );
         } finally {
           setBusy(false);
         }
@@ -2790,16 +3281,20 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const generateOne = (n) => startJob('/series/lecture/generate', { seriesId: series.id, n });
 
       /** 配音是独立动作（FR-23）：只调 /revoice，等它自己跑完；文本状态不受影响。 */
-      const revoice = async (lecture) => {
+      const revoice = async (opts = {}) => {
         setBusy(true);
         try {
+          const body = { seriesId: series.id };
+          if (opts.force) body.force = true;
+          if (opts.missingOnly) body.missingOnly = true;
+          if (opts.lecture != null) body.lecture = opts.lecture;
           const out = await api('/revoice', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ seriesId: series.id, lecture: lecture == null ? 'all' : lecture }),
+            body: JSON.stringify(body),
           });
           setVoiceJob({ jobId: out.jobId, status: 'queued', current: 0, total: 0, message: '已排队' });
-          notify('已开始配音' + (lecture == null ? '（全部讲）' : '（第 ' + lecture + ' 讲）'));
+          notify((opts.force ? '已开始强制重新配音' : opts.missingOnly ? '已开始补配音' : '已开始重新配音') + '（' + (out.scope ? out.scope.length : 0) + ' 讲）');
         } catch (err) {
           notify(
             err.code === 'E_TTS_UNCONFIGURED'
@@ -2828,9 +3323,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
       /** 删除系列（AC-130）：先取消作业，再删系列目录；书与 Part 保留。 */
       const removeSeries = async () => {
-        if (typeof window !== 'undefined' && !window.confirm('删除系列《' + series.title + '》？运行中的作业会先取消，书与 Part 不受影响。')) {
-          return;
-        }
+        const confirmed = await confirmAction('删除系列《' + series.title + '》？运行中的作业会先取消，书与 Part 不受影响。', {
+          title: '删除系列',
+          okText: '删除',
+          danger: true,
+        });
+        if (!confirmed) return;
         setBusy(true);
         try {
           const out = await api('/series?seriesId=' + encodeURIComponent(series.id), { method: 'DELETE' });
@@ -2931,8 +3429,35 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             playable.length
               ? h(
                   'button',
-                  { className: 'blm-btn', disabled: busy || voiceActive || isActive, onClick: () => revoice(null), title: '只补音频，不改文字' },
-                  voiceActive ? '配音中…' : series.voice_status === 'ready' ? '重新配音' : '生成语音',
+                  Object.assign(
+                    {
+                      className: 'blm-btn holdable' + (voiceLongPress.active ? ' holding' : ''),
+                      disabled: busy || voiceActive || isActive,
+                      title: voiceState === 'ready'
+                        ? '重新配音（二次确认，命中缓存不产生费用）；长按 3s 强制重配'
+                        : voiceState === 'partial'
+                          ? '只补缺失页，不改文字；长按 3s 强制重配'
+                          : '全部页生成音频；长按 3s 强制重配',
+                    },
+                    voiceLongPress.props,
+                    {
+                      onClick: () => {
+                        if (voiceLongPress.wasLongPress()) return;
+                        runVoice();
+                      },
+                    },
+                  ),
+                  h('span', null, voiceActive ? '配音中…' : voiceLabel),
+                  voiceLongPress.active
+                    ? h('span', { className: 'blm-hold-count' }, voiceLongPress.secondsLeft + 's')
+                    : null,
+                  voiceLongPress.active
+                    ? h(
+                        'span',
+                        { className: 'blm-hold-bar', 'aria-hidden': 'true' },
+                        h('i', { style: { width: Math.round(voiceLongPress.progress * 100) + '%' } }),
+                      )
+                    : null,
                 )
               : null,
             voiceActive
@@ -2947,8 +3472,35 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             playable.length
               ? h(
                   'button',
-                  { className: 'blm-btn', disabled: busy || isActive || imageActive, onClick: regenImages, title: '只补图片，不改文字与音频' },
-                  imageActive ? '配图中…' : '补配图',
+                  Object.assign(
+                    {
+                      className: 'blm-btn holdable' + (imageLongPress.active ? ' holding' : ''),
+                      disabled: busy || isActive || imageActive,
+                      title: imageState === 'done'
+                        ? '重新配图（二次确认，全部换种子）；长按 3s 清空后强制重出'
+                        : imageState === 'partial'
+                          ? '只补缺失页，不改文字与音频；长按 3s 强制重出'
+                          : '生成配图；长按 3s 强制重出',
+                    },
+                    imageLongPress.props,
+                    {
+                      onClick: () => {
+                        if (imageLongPress.wasLongPress()) return;
+                        runImages();
+                      },
+                    },
+                  ),
+                  h('span', null, imageActive ? '配图中…' : imageLabel),
+                  imageLongPress.active
+                    ? h('span', { className: 'blm-hold-count' }, imageLongPress.secondsLeft + 's')
+                    : null,
+                  imageLongPress.active
+                    ? h(
+                        'span',
+                        { className: 'blm-hold-bar', 'aria-hidden': 'true' },
+                        h('i', { style: { width: Math.round(imageLongPress.progress * 100) + '%' } }),
+                      )
+                    : null,
                 )
               : null,
             imageActive ? h('button', { className: 'blm-btn', disabled: busy, onClick: cancelImages }, '取消配图') : null,
@@ -2970,8 +3522,23 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             ? h('span', { className: 'blm-badge' + (['stitched', 'verified'].includes(series.stitch) ? ' ok' : '') },
                 series.stitch === 'verified' ? '已验收' : series.stitch === 'stitched' ? '已衔接' : '未衔接')
             : null,
-          series.voice_error ? h('span', { className: 'blm-dim' }, series.voice_error) : null,
         ),
+        series.voice_code || series.voice_error
+          ? h(
+              'div',
+              { className: 'blm-note warn' },
+              '配音：' + (series.voice_code || 'E_TTS_FAIL') +
+                (voiceFailedLectures.length ? ' · ' + voiceFailedLectures.length + ' 讲未完成' : '') +
+                (series.voice_error ? ' · ' + series.voice_error : ''),
+            )
+          : null,
+        images && (images.code || images.error) && !imageActive
+          ? h(
+              'div',
+              { className: 'blm-note warn' },
+              '配图：' + (images.code || 'E_IMG_FAIL') + (images.error ? ' · ' + images.error : ''),
+            )
+          : null,
         stageText ? h('div', { className: 'blm-dim', style: { fontSize: 12 } }, stageText) : null,
         progress ? h('div', { className: 'blm-progress' }, h('i', { style: { width: progress + '%' } })) : null,
         series.error && ['failed', 'partial'].includes(series.status)
@@ -2992,6 +3559,13 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                   h('span', { className: 'blm-dim' }, '第 ' + lec.n + ' 讲'),
                   h('span', { className: 'grow', title: lec.title }, lec.title),
                   h('span', { className: 'blm-badge' + (['ready', 'ready_degraded'].includes(lec.status) ? ' ok' : '') }, lec.status),
+                  ['failed', 'partial'].includes(String(lec.voice_status || ''))
+                    ? h(
+                        'span',
+                        { className: 'blm-badge blm-bad', title: lec.voice_error || '' },
+                        lec.voice_status === 'failed' ? '配音失败' : '部分未配',
+                      )
+                    : null,
                   h('span', { className: 'blm-dim' }, text),
                   ['failed', 'cancelled', 'interrupted'].includes(lec.status)
                     ? h('button', { className: 'blm-btn', disabled: busy || isActive, onClick: () => retry(lec.n) }, '重试')
@@ -3298,7 +3872,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
 
       const removePart = async (part) => {
-        if (!window.confirm('删除 Part《' + part.title + '》？系列会保留章快照。')) return;
+        if (!(await confirmAction('删除 Part《' + part.title + '》？系列会保留章快照。', { title: '删除 Part', okText: '删除', danger: true }))) return;
         try {
           await api('/part?bookId=' + encodeURIComponent(bookId) + '&partId=' + encodeURIComponent(part.id), { method: 'DELETE' });
           notify('Part 已删除');
@@ -3627,7 +4201,11 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
 
       const clearApiKey = async () => {
-        const ok = typeof window === 'undefined' || window.confirm('清除已保存的 Qwen API Key？清除后配音会停用。');
+        const ok = await confirmAction('清除已保存的 Qwen API Key？清除后配音会停用。', {
+          title: '清除 API Key',
+          okText: '清除',
+          danger: true,
+        });
         if (!ok) return;
         const saved = await save({ clearApiKey: true });
         if (saved) {
@@ -3680,7 +4258,11 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
 
       const clearTrashNow = async () => {
-        const ok = typeof window === 'undefined' || window.confirm('清空回收站？删除的书会真正被删掉，不能再恢复。');
+        const ok = await confirmAction('清空回收站？删除的书会真正被删掉，不能再恢复。', {
+          title: '清空回收站',
+          okText: '清空',
+          danger: true,
+        });
         if (!ok) return;
         setTrashBusy(true);
         setMessage('');
@@ -3696,7 +4278,11 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
 
       const removeBackup = async (item) => {
-        const ok = typeof window === 'undefined' || window.confirm('删除备份「' + item.name + '」？删除后旧数据无法恢复。');
+        const ok = await confirmAction('删除备份「' + item.name + '」？删除后旧数据无法恢复。', {
+          title: '删除备份',
+          okText: '删除',
+          danger: true,
+        });
         if (!ok) return;
         try {
           await api('/backups/delete', {
@@ -4289,13 +4875,15 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
 
       const rename = async (book) => {
-        const next = window.prompt('新的书名', book.title);
+        const next = await promptAction('输入新的书名', book.title, { title: '重命名', okText: '保存' });
         if (next == null) return;
+        const title = next.trim();
+        if (!title) return;
         try {
           await api('/rename', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ bookId: book.id, title: next }),
+            body: JSON.stringify({ bookId: book.id, title }),
           });
           notify('已重命名');
           await loadBooks();
@@ -4305,7 +4893,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
 
       const remove = async (book) => {
-        if (!window.confirm('删除《' + book.title + '》？会进回收站，7 天内可恢复。')) return;
+        if (!(await confirmAction('删除《' + book.title + '》？会进回收站，7 天内可恢复。', { title: '删除书籍', okText: '移入回收站' }))) return;
         try {
           await fetch(API + '/book?bookId=' + encodeURIComponent(book.id), { method: 'DELETE' }).then((r) => r.json());
           notify('已移入回收站');
@@ -4459,6 +5047,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             })
           : null,
         h(Toast, { text: toast }),
+        h(ConfirmHost),
         busy && shelf ? h('div', { className: 'blm-progress', style: { position: 'absolute', left: 0, right: 0, bottom: 0, margin: 0 } }, h('i', { style: { width: Math.round(progress * 100) + '%' } })) : null,
       );
     }
@@ -4512,6 +5101,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         SourcePane,
         SlideStage,
         StageFigure,
+        SlideThumb,
+        ConfirmHost,
         TransitionCard,
         SeriesCard,
         SeriesDirectory,
@@ -4535,6 +5126,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         isRenderCancelled,
         formatSize,
         bindMenuDismiss,
+        useLongPress,
+        confirmAction,
+        promptAction,
+        cancelPendingConfirm,
         downloadUrl,
         uploadZip,
       },

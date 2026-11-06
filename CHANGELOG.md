@@ -3,6 +3,32 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.0.0-alpha.4] - 2026-11-06
+
+对齐 SRS `规范需求2.0.md` v1.1（AC-142 ~ AC-147）：播放器缩略图与配图提示词面板、配音失败可见与四态按钮、配图四态按钮与单页换一张。**不改数据 schema**。
+
+### 版本与环境
+
+- 包 `2.0.0-alpha.4`（tag `v2.0.0-alpha.4`）、产品 `2.0`、数据 schema `2`、文档 v1.1。
+- 2.0 预发布之间仍不承诺数据兼容；升级到正式版前保留备份（FR-20）。
+
+### 新增
+
+- 播放器底部逐页缩略图改为 16:9 迷你版式（cover / content_text / quote），当前页高亮；点缩略图切换页面并停掉旧音频、原文同步（AC-142）。
+- 配图提示词面板：点面板外任意区域、按 `Esc`、翻页都能收起；`Esc` 只收面板，不退全屏/返回；无 `image_prompt` 时不渲染复制按钮（AC-143）。
+- 配音失败可见：`voice_status` 扩为 `none|voicing|ready|partial|failed`；系列/讲落 `voice_code`、`voice_error`、`voice_failed`、`voice_pages`；系列卡显示错误码、失败讲数与「补配音」，播放器顶部给可关闭提示（AC-144）。
+- 配音按钮四态：生成配音 / 补配音（`missingOnly` 只跑缺失页）/ 重新配音（二次确认）/ 长按 3s 强制重配音（`force` 忽略缓存）（AC-145）。
+- 配图按钮四态：生成配图 / 补配图 / 重新配图（二次确认）/ 长按 3s 强制重新配图（`force+reset` 清空图片并重置种子）（AC-146）。
+- 播放器单页「换一张」/「重试配图」：`POST /image/regen {seriesId, lecture, slide, force}`，只替换该页（AC-147）。
+- 所有二次确认（配音/配图重跑、删除系列/Part/书、清空回收站、清 Key、删备份）与重命名输入改为**插件内居中弹窗**（复用遮罩，`Esc`/点遮罩取消），不再使用浏览器原生 `confirm`/`prompt`。
+- 配音/配图长按 3s 期间显示**进度条与剩余秒数**（3→2→1），松开即取消；按住时禁用上下文菜单。
+
+### 修复
+
+- 配图汇总改为扫描全部正文页统计，单页作业不再把 `series.images.total/done` 覆盖成 1。
+- `force` 重配音忽略音频缓存；`reset` 重配图删除对应种子缓存，确保真的重跑 ComfyUI。
+- `voice_error` 保留具体错误码与失败页数（如 `E_TTS_QUOTA`），不再只有一句“有 N 讲存在未配音页”。
+
 ## [2.0.0-alpha.3] - 2026-11-06
 
 M5（P1）完成：书档导入/导出、练习与复习、本地 ComfyUI 配图、按讲/整套导出 PPT。

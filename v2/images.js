@@ -23,6 +23,7 @@ import {
   TEST_PROMPT_MAX,
   generateImage,
   imageCacheKey,
+  imageCachePath,
   probeComfy,
   publicImageConfig,
   readImageCache,
@@ -239,13 +240,45 @@ function writeJobFile(job, patch) {
   }
 }
 
+/** 扫已就绪讲的全部正文页，得到真实的配图汇总（单页作业不能把 total 算成 1）。 */
+function summarizeImages(found) {
+  let total = 0;
+  let ready = 0;
+  let failed = 0;
+  for (const lecture of found.series.lectures || []) {
+    if (!READY.includes(String(lecture.status))) continue;
+    const doc = loadSlides(found, lecture.n);
+    if (!doc) continue;
+    for (const item of doc.slidesDoc.slides) {
+      if (String(item.layout || '') !== 'content_text') continue;
+      total += 1;
+      if (item.image_status === 'ready' && item.image_file) ready += 1;
+      else if (item.image_status === 'failed') failed += 1;
+    }
+  }
+  return { total, ready, failed };
+}
+
 function saveSummary(found, job) {
   try {
+    const counts = summarizeImages(found);
+    const active = ['queued', 'running', 'cancelling'].includes(String(job.status || ''));
+    let status;
+    if (active) status = job.status === 'queued' ? 'queued' : 'running';
+    else if (!counts.total) status = 'none';
+    else if (counts.ready === counts.total) status = 'done';
+    else if (counts.ready > 0) status = 'partial';
+    else if (counts.failed > 0) status = 'failed';
+    else status = 'none';
     found.series.images = Object.assign(
-      { provider: 'comfyui', total: job.total, done: job.done, failed: job.failed },
+      {},
       found.series.images && typeof found.series.images === 'object' ? found.series.images : {},
       {
-        status: job.status,
+        provider: 'comfyui',
+        total: counts.total,
+        done: counts.ready,
+        failed: counts.failed,
+        status,
         code: job.code || null,
         error: job.error ? job.error.message : null,
         updatedAt: nowIso(),
@@ -339,9 +372,12 @@ export function cancelImageJobsForBook(bookId) {
 
 /**
  * 启动（或续跑）一个系列的配图作业。
- * @param {{seriesId:string, lecture?:number, slide?:number, force?:boolean, options?:object}} input
+ * - force：忽略「已 ready 跳过」，全部重出；
+ * - reset：先清空该讲 images/ 并把 image_nonce 归零，再重出（长按 3s 的「强制」）；
+ * - slide：只跑该页（单页「换一张」）。
+ * @param {{seriesId:string, lecture?:number, slide?:number, force?:boolean, reset?:boolean, options?:object}} input
  */
-export function startImageJob({ seriesId, lecture = null, slide = null, force = false, options = {} }) {
+export function startImageJob({ seriesId, lecture = null, slide = null, force = false, reset = false, options = {} }) {
   const found = findSeries(String(seriesId || ''));
   if (!found) throw new ImageError('E_NOT_FOUND', '找不到这个系列', '刷新列表后再试。');
   const config = readImageConfig();
@@ -367,9 +403,44 @@ export function startImageJob({ seriesId, lecture = null, slide = null, force = 
     .filter((n) => (lecture == null ? true : Number(n) === Number(lecture)));
   if (!scope.length) throw new ImageError('E_LECTURE_EMPTY', '这个系列还没有就绪的讲', '先生成讲义。');
 
+  const only = slide == null ? null : Number(slide);
+  if (only != null) {
+    let hit = false;
+    for (const n of scope) {
+      const doc = loadSlides(found, n);
+      if (!doc) continue;
+      if (doc.slidesDoc.slides.some((item) => Number(item.slide_index) === only && String(item.layout || '') === 'content_text')) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) {
+      throw new ImageError('E_NOT_FOUND', '这一页不是正文页，或不属于该讲', '确认讲次与页码后再试。');
+    }
+  }
+
+  // 「强制重新配图」：清掉旧图、种子归零，再全量重出
+  if (reset) {
+    for (const n of scope) {
+      const doc = loadSlides(found, n);
+      if (!doc) continue;
+      try {
+        fs.rmSync(path.join(doc.dir, 'images'), { recursive: true, force: true });
+      } catch {
+        /* 目录不存在或删不掉：交给覆盖写 */
+      }
+      for (const item of doc.slidesDoc.slides) {
+        item.image_nonce = 0;
+        item.image_file = null;
+        item.image_status = 'none';
+        item.image_error = null;
+      }
+      saveSlides(doc);
+    }
+  }
+
   const docs = new Map();
   const targets = [];
-  const only = slide == null ? null : Number(slide);
   for (const n of scope) {
     const doc = loadSlides(found, n);
     if (!doc) continue;
@@ -397,11 +468,22 @@ export function startImageJob({ seriesId, lecture = null, slide = null, force = 
     throw new ImageError('E_IMG_NOTHING', '没有需要补的配图', '正文页都已就绪，或这一页不是正文页。');
   }
 
+  const workflowHash = workflowHashOf(ctx.store.workflow);
   for (const target of targets) {
     const doc = docs.get(target.n);
     const item = doc.slidesDoc.slides.find((slideItem) => Number(slideItem.slide_index) === target.i);
     if (!item) continue;
     if (only != null || force) item.image_nonce = (Number(item.image_nonce) || 0) + 1;
+    // 「强制重新配图」必须真的重跑 ComfyUI：删掉该种子对应的缓存，否则 reset 会命中旧图
+    if (reset) {
+      try {
+        const prompt = stylePrompt(item.image_prompt, config.styleSuffix);
+        const seed = seedFor(prompt, workflowHash, item.image_nonce);
+        fs.rmSync(imageCachePath(imageCacheKey(prompt, workflowHash, seed)), { force: true });
+      } catch {
+        /* 缓存删不掉不影响重出 */
+      }
+    }
     item.image_status = 'queued';
     item.image_provider = 'comfyui';
     item.image_error = null;

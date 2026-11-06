@@ -349,18 +349,22 @@ test('AC-126：配音写 001–006.wav，只改音频字段，/audio 支持 Rang
   assert.equal((await ranged.arrayBuffer()).byteLength, 16);
 });
 
-test('FR-23：同文本同音色二次配音命中缓存，不再请求 API（幂等）', async () => {
+test('FR-23：默认重配音命中缓存；force 忽略缓存并全部重跑（AC-145）', async () => {
   resetFake();
   const { found } = makeSeries('cache');
   const first = await post('/dsh-book-slides/revoice', { seriesId: found.series.id });
   await waitJob(first.jobId, (item) => item.status === 'done');
   const firstCount = qwen.requests.length;
   assert.ok(firstCount > 0);
-  const second = await post('/dsh-book-slides/revoice', { seriesId: found.series.id, force: true });
-  assert.equal(second.ok, true);
-  const job = await waitJob(second.jobId, (item) => item.status === 'done');
-  assert.equal(job.error, null);
+
+  const cached = await post('/dsh-book-slides/revoice', { seriesId: found.series.id });
+  await waitJob(cached.jobId, (item) => item.status === 'done');
   assert.equal(qwen.requests.length, firstCount, '缓存命中不应再打 Qwen');
+
+  const forced = await post('/dsh-book-slides/revoice', { seriesId: found.series.id, force: true });
+  const job = await waitJob(forced.jobId, (item) => item.status === 'done');
+  assert.equal(job.error, null);
+  assert.equal(qwen.requests.length, firstCount * 2, 'force 应忽略缓存并全部重跑');
 });
 
 test('AC-126：单页 500 时该页 audio_provider=none，其余页正常，系列 partial', async () => {
@@ -385,6 +389,67 @@ test('AC-126：单页 500 时该页 audio_provider=none，其余页正常，系�
   assert.equal(lecture1.voice_status, 'ready');
   const seriesOut = await json('/dsh-book-slides/series?seriesId=' + found.series.id);
   assert.equal(seriesOut.series.voice_status, 'partial');
+});
+
+test('AC-144：429 额度耗尽 → 系列 failed + E_TTS_QUOTA，voice_error 带错误码与页数', async () => {
+  resetFake();
+  await post('/dsh-book-slides/voice', {
+    provider: 'qwen3-tts',
+    model: 'qwen3-tts-flash',
+    voice: 'Cherry',
+    apiKey: 'sk-test-abcdef1234',
+  });
+  const { found } = makeSeries('quota');
+  qwen.statusFail = 429;
+  const out = await post('/dsh-book-slides/revoice', { seriesId: found.series.id });
+  const job = await waitJob(out.jobId, (item) => item.status === 'done');
+  qwen.statusFail = 0;
+  assert.ok(job.error && job.error.failures.length === 2);
+
+  const seriesOut = await json('/dsh-book-slides/series?seriesId=' + found.series.id);
+  assert.equal(seriesOut.series.voice_status, 'failed');
+  assert.equal(seriesOut.series.voice_code, 'E_TTS_QUOTA');
+  assert.match(seriesOut.series.voice_error, /E_TTS_QUOTA/);
+  assert.match(seriesOut.series.voice_error, /6\/6 页未配音/);
+  assert.equal(seriesOut.series.voice_failed, 12);
+
+  const lecture = readSlides(found, 2);
+  assert.equal(lecture.voice_status, 'failed');
+  assert.match(lecture.voice_error, /E_TTS_QUOTA/);
+  assert.equal(lecture.slides.every((slide) => !slide.audio_file), true);
+});
+
+test('AC-145：补配音（missingOnly）只请求缺失页，已就绪页不重跑', async () => {
+  resetFake();
+  await post('/dsh-book-slides/voice', {
+    provider: 'qwen3-tts',
+    model: 'qwen3-tts-flash',
+    voice: 'Cherry',
+    apiKey: 'sk-test-abcdef1234',
+  });
+  const { found } = makeSeries('fill');
+  const doc = readSlides(found, 2);
+  doc.slides[2].audio_script = 'FAILME' + doc.slides[2].audio_script;
+  fs.writeFileSync(slidesFileOf(found, 2), JSON.stringify(doc, null, 2));
+  qwen.failText = 'FAILME';
+
+  const first = await post('/dsh-book-slides/revoice', { seriesId: found.series.id, missingOnly: true });
+  const firstJob = await waitJob(first.jobId, (item) => item.status === 'done');
+  assert.equal(firstJob.error.failures.length, 1);
+  qwen.failText = '';
+
+  const before = qwen.requests.length;
+  const fill = await post('/dsh-book-slides/revoice', { seriesId: found.series.id, missingOnly: true });
+  const job = await waitJob(fill.jobId, (item) => item.status === 'done');
+  assert.equal(job.error, null);
+  assert.equal(qwen.requests.length, before + 1, '只补那 1 页');
+
+  const after = readSlides(found, 2);
+  assert.equal(after.voice_status, 'ready');
+  assert.equal(after.voice_failed, 0);
+  const seriesOut = await json('/dsh-book-slides/series?seriesId=' + found.series.id);
+  assert.equal(seriesOut.series.voice_status, 'ready');
+  assert.equal(seriesOut.series.voice_code, undefined);
 });
 
 test('AC-137：取消配音后状态 cancelled，slides.json 不写半截音频字段', async () => {
