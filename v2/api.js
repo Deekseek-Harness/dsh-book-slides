@@ -62,6 +62,13 @@ import {
 } from './voice.js';
 import { deleteBackup, diagnosticsPayload, listBackups, openBackup, settingsPayload } from './settings.js';
 import {
+  probeComfyTts,
+  saveVoiceTable,
+  saveWorkflow as saveTtsWorkflow,
+  voiceTablePayload,
+  workflowPayload,
+} from './comfy-tts.js';
+import {
   cancelPracticeJob,
   cancelPracticeJobsForBook,
   cancelPracticeJobsForSeries,
@@ -966,10 +973,14 @@ async function handleVoicePost(req, res) {
   }
 }
 
-async function handleVoiceProbe(req, res) {
+async function handleVoiceProbe(req, res, options) {
   ensureRoot();
   const body = await readJsonBody(req, 64 * 1024);
-  const result = await probeVoiceConfig(body && body.text);
+  const result = await probeVoiceConfig(body && body.text, {
+    fetchImpl: options && options.voiceFetch,
+    speaker: (body && (body.comfyVoice || body.speaker)) || '',
+    voice: (body && body.voice) || '',
+  });
   if (!result.ok) {
     sendError(res, result.code || 'E_TTS_UNCONFIGURED', result.error || '语音不可用', result.hint || '');
     return;
@@ -979,10 +990,73 @@ async function handleVoiceProbe(req, res) {
     res.setHeader('content-type', result.contentType || 'audio/wav');
     res.setHeader('content-length', String(result.audio.length));
     res.setHeader('cache-control', 'no-store');
+    if (result.audio_ms) res.setHeader('x-tts-ms', String(Math.round(result.audio_ms)));
+    if (result.voice) res.setHeader('x-tts-voice', String(result.voice));
+    if (result.voiceLabel) res.setHeader('x-tts-voice-label', String(result.voiceLabel));
+    if (result.model) res.setHeader('x-tts-model', String(result.model));
     res.end(result.audio);
     return;
   }
   sendJson(res, 200, Object.assign({ ok: true }, result));
+}
+
+async function handleVoiceWorkflow(req, res) {
+  ensureRoot();
+  if (req.method === 'GET') {
+    try {
+      sendJson(res, 200, { ok: true, workflow: workflowPayload() });
+    } catch (err) {
+      sendError(res, (err && err.code) || 'E_TTS_WORKFLOW', String((err && err.message) || err), (err && err.hint) || '');
+    }
+    return;
+  }
+  const body = await readJsonBody(req, 2 * 1024 * 1024);
+  try {
+    const workflow = saveTtsWorkflow(body);
+    sendJson(res, 200, { ok: true, workflow: workflow });
+  } catch (err) {
+    sendJson(res, 200, {
+      ok: false,
+      code: (err && err.code) || 'E_TTS_WORKFLOW',
+      error: String((err && err.message) || err),
+      hint: (err && err.hint) || '',
+      candidates: (err && err.candidates) || [],
+    });
+  }
+}
+
+async function handleVoiceSpeakers(req, res) {
+  ensureRoot();
+  if (req.method === 'GET') {
+    try {
+      sendJson(res, 200, { ok: true, table: voiceTablePayload() });
+    } catch (err) {
+      sendError(res, (err && err.code) || 'E_TTS_VOICE_TABLE', String((err && err.message) || err), (err && err.hint) || '');
+    }
+    return;
+  }
+  const body = await readJsonBody(req, 512 * 1024);
+  try {
+    const table = saveVoiceTable(body);
+    sendJson(res, 200, { ok: true, table: table });
+  } catch (err) {
+    sendJson(res, 200, {
+      ok: false,
+      code: (err && err.code) || 'E_TTS_VOICE_TABLE',
+      error: String((err && err.message) || err),
+      hint: (err && err.hint) || '',
+    });
+  }
+}
+
+async function handleVoiceComfyProbe(req, res, options) {
+  ensureRoot();
+  try {
+    const out = await probeComfyTts({ fetchImpl: options && options.voiceFetch });
+    sendJson(res, 200, Object.assign({ ok: true }, out));
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_TTS_CONNECT', String((err && err.message) || err), (err && err.hint) || '');
+  }
 }
 
 async function handleRevoice(req, res, options) {
@@ -1723,7 +1797,19 @@ async function routeM1Inner(req, res, url, options = {}) {
     return true;
   }
   if (pathname === PREFIX + '/voice/probe') {
-    await handleVoiceProbe(req, res);
+    await handleVoiceProbe(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/voice/workflow') {
+    await handleVoiceWorkflow(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/voice/speakers') {
+    await handleVoiceSpeakers(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/voice/comfy/probe') {
+    await handleVoiceComfyProbe(req, res, options);
     return true;
   }
   if (pathname === PREFIX + '/revoice') {

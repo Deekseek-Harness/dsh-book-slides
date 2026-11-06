@@ -3,6 +3,48 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.0.0-alpha.5] - 2026-11-07
+
+对齐 SRS `规范需求2.0.md` v1.2（AC-148 ~ AC-155）：新增本地 ComfyUI Qwen3-TTS 配音 provider、默认工作流与音色表、连接/试听测试、串行队列。**不改数据 schema**。
+
+### 版本与环境
+
+- 包 `2.0.0-alpha.5`（tag `v2.0.0-alpha.5`）、产品 `2.0`、数据 schema `2`、文档 v1.2。
+- `voice.json` 保持 version 2，只新增可选字段 `comfyVoice` / `textNode`；根目录新增 `comfy-tts-workflow.json`、`comfy-tts-voices.json`。
+
+### 新增
+
+- 语音供应商扩为四个：`qwen3-tts` / `comfyui-tts` / `browser` / `off`；默认仍是 browser，不自动探测 ComfyUI。
+- ComfyUI 配音：默认工作流 `workflows/qwen3-tts.json`（源 `doc/comfyui/qwen3-tts-配音.json`，`FB_Qwen3TTSCustomVoice` → `PreviewAudio`），支持导入 API / 带 `widgets_values_named` 的界面格式工作流，支持文本节点手选（`voice.json.textNode`）。
+- 音色表：默认 `Qwen3-TTS-CustomVoice` 9 音色（Vivian 默认），支持导入模型音色表/纯名字数组、恢复默认；换音色只写请求 `speaker`，不重写工作流；`comfyVoice` 与云端 `voice` 分开保存。
+- 模型一致性：连接测试读 `/object_info` 的 `speaker` 枚举，返回 `modelSpeakers` 与 `unsupported`；全不支持时 `E_TTS_SPEAKER` 拦截，部分不支持标灰并回落；设置页在连接测试/出错时给一致性提示。
+- 设置页：ComfyUI 地址（与配图共用 image.json）、工作流/音色表导入与恢复、连接测试、试听测试、配音作业排队/进度/取消。
+- ComfyUI 配音与配图共用全局串行队列（`v2/comfy-queue.js`）；取消不调用 `/interrupt`，已完成页保留。
+- 音频支持 wav/flac/mp3/ogg：播放器与 `/audio` 兼容，书档保留原格式；PPT 只嵌 wav/mp3，其它格式给 warning。
+- 错误码：`E_TTS_CONNECT` / `E_TTS_WORKFLOW` / `E_TTS_WORKFLOW_NODE` / `E_TTS_MODEL_MISSING` / `E_TTS_VOICE_TABLE` / `E_TTS_SPEAKER` / `E_TTS_BUSY`。
+- 诊断新增语音 provider、ComfyUI 工作流/格式、音色表名/模型与 `textNode`。
+
+### 测试
+
+- 新增 `test/v2-tts-comfy.test.mjs`（AC-148 ~ AC-155）：默认工作流/音色表、连接与试听、工作流导入/多候选/恢复、音色表导入/恢复、模型支持与一致性、逐页落盘/缓存/force、串行队列与取消。
+- `npm run test:v2`：21 个文件 / 117 项，0 失败。
+
+### 手工验证
+
+- 2026-11-07 本机 ComfyUI：设置页导入音色表/工作流、连接测试、试听、`Uncle Fu` / `Ono Anna` 切换通过。
+- **完整逐页配音尚未真机验证**：逐页合成/落盘、缓存、串行队列、flac 输出与 PPT warning 留 M6。
+
+### 修复
+
+- ComfyUI 语音设置页瘦身：说明改悬停 `title`，只保留连接/试听两个测试与底部蓝色「保存」；「朗读稿输入位置」只在多文本工作流出现。
+- 试听不再依赖“先保存”：`/voice/probe` 可显式带 `comfyVoice`/`voice`，修复不同音色试听结果相同。
+- 写入音色时同时清空 `custom_speaker_name`（该字段非空会覆盖 `speaker`），并返回 `x-tts-voice` 让面板显示实际使用的音色。
+- 音色名与 ComfyUI `/object_info` 比对忽略大小写与空格/下划线/连字符：修复 `Uncle_Fu`、`Ono_Anna` 被误判为“模型不支持”而回落到 Vivian。
+- 默认音色表与本地 `ComfyUI-Qwen-TTS` 节点的 `speaker` 枚举对齐：`Uncle_fu`、`Ono_anna`（界面显示 `Uncle Fu`/`Ono Anna`）；修复发送 `Uncle Fu`/`Ono Anna` 时 ComfyUI 报“Value not in list”。
+- 导入音色表/工作流时剥掉 UTF-8 BOM，避免编辑器保存的 JSON 被误判为非法。
+- 把 `/voice/workflow`、`/voice/speakers`、`/voice/comfy/probe` 注册进 DSH 宿主路由；修复导入音色表报 HTTP 405。
+- 连接/试听遇到非 JSON 响应时不再显示“服务端返回的不是 JSON”，改为“插件服务无响应（HTTP n），重启 DSH 后再试”。
+
 ## [2.0.0-alpha.4] - 2026-11-06
 
 对齐 SRS `规范需求2.0.md` v1.1（AC-142 ~ AC-147）：播放器缩略图与配图提示词面板、配音失败可见与四态按钮、配图四态按钮与单页换一张。**不改数据 schema**。

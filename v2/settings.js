@@ -15,6 +15,8 @@ import { META_FILE, ROOT, getMeta, packageVersion, readJson } from './root.js';
 import { storageStats, dirSize } from './books.js';
 import { recentErrors } from './errors.js';
 import { resolveModel } from './llm.js';
+import { readVoiceConfig } from '../tts.js';
+import { voiceTablePayload, workflowPayload } from './comfy-tts.js';
 
 const require = createRequire(import.meta.url);
 const PLUGIN_DIR = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -209,6 +211,21 @@ export function settingsPayload(ctx) {
 /** 诊断：版本 + schema + pdfjs + 最近错误（不含正文）。 */
 export function diagnosticsPayload() {
   const meta = getMeta();
+  const voiceConfig = readVoiceConfig();
+  let workflow = null;
+  let voiceTable = null;
+  try {
+    const info = workflowPayload();
+    workflow = { name: info.name, source: info.source, format: info.format, textNode: info.textNode, valid: info.valid };
+  } catch {
+    workflow = null;
+  }
+  try {
+    const table = voiceTablePayload();
+    voiceTable = { name: table.name, model: table.model, source: table.source, count: table.count };
+  } catch {
+    voiceTable = null;
+  }
   return {
     version: packageVersion(),
     productVersion: '2.0',
@@ -219,5 +236,12 @@ export function diagnosticsPayload() {
     pdfjsVersion: moduleVersion('pdfjs-dist') || '未知',
     errors: recentErrors(5),
     upgradedFrom: String(readJson(META_FILE(), {}).upgraded_from || ''),
+    voice: {
+      provider: voiceConfig.provider,
+      model: voiceConfig.model,
+      comfyVoice: voiceConfig.comfyVoice,
+      textNode: voiceConfig.textNode,
+    },
+    comfy: { workflow: workflow, voiceTable: voiceTable },
   };
 }

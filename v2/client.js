@@ -213,6 +213,8 @@ body[data-ds-dark-theme] .blm-player-alert{color:#ffd27a}
 .blm-group h3{margin:0 0 8px;font-size:12px;font-weight:650;letter-spacing:.04em;color:var(--blm-dim)}
 .blm-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0;font-size:12px}
 .blm-field > .label{flex:0 0 68px;color:var(--blm-dim)}
+.blm-field > .label[title]{cursor:help}
+.blm-voice-actions{margin-top:14px;padding-top:10px;border-top:1px solid var(--blm-line);justify-content:flex-end}
 .blm-input{flex:1;min-width:140px;border:1px solid var(--blm-line);border-radius:6px;padding:5px 8px;font:inherit;background:var(--blm-card);color:var(--blm-text);color-scheme:inherit}
 .blm-kv{display:grid;grid-template-columns:92px 1fr;gap:6px 10px;margin:0;font-size:12px}
 .blm-kv dt{color:var(--blm-dim)}
@@ -245,11 +247,25 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
     async function api(path, options) {
       const res = await fetch(API + path, options);
+      const raw = await res.text().catch(() => '');
       let data = null;
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error('服务端返回的不是 JSON');
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          data = null;
+        }
+      }
+      if (data === null) {
+        const err = new Error(
+          '插件服务无响应（HTTP ' + res.status + '）。' +
+            (res.status === 404
+              ? '插件可能没加载，重启 DSH 后再试。'
+              : '稍后重试；一直这样就把 DSH 重启一次。'),
+        );
+        err.code = 'E_BAD_RESPONSE';
+        err.detail = { status: res.status, body: raw.slice(0, 300) };
+        throw err;
       }
       if (!data || data.ok !== true) {
         const err = new Error((data && (data.message || data.error)) || '请求失败');
@@ -3298,8 +3314,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         } catch (err) {
           notify(
             err.code === 'E_TTS_UNCONFIGURED'
-              ? '还没配置语音：到设置页选 Qwen3-TTS 并填 Key，或改用浏览器朗读。'
-              : err.message,
+              ? '语音没配置好：到设置页填 Qwen Key / 配置 ComfyUI 工作流，或改用浏览器朗读。'
+              : (err.code ? err.code + '：' : '') + err.message,
           );
         } finally {
           setBusy(false);
@@ -4076,14 +4092,42 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
     /* ------------------------------ M4 设置（FR-21.5） ------------------------------ */
 
-    function Settings({ onBack, notify }) {
-      const [settings, setSettings] = useState(null);
-      const [voice, setVoice] = useState(null);
-      const [providers, setProviders] = useState([]);
-      const [models, setModels] = useState([]);
-      const [qwenVoices, setQwenVoices] = useState([]);
-      const [diagnostics, setDiagnostics] = useState(null);
-      const [form, setForm] = useState({ provider: 'browser', model: 'qwen3-tts-flash', voice: '', rate: 1 });
+    function Settings({ onBack, notify, initial }) {
+      const seed = initial && typeof initial === 'object' ? initial : {};
+      const [settings, setSettings] = useState(seed.settings || null);
+      const [voice, setVoice] = useState(seed.voice || null);
+      const [providers, setProviders] = useState(seed.providers || []);
+      const [models, setModels] = useState(seed.models || []);
+      const [qwenVoices, setQwenVoices] = useState(seed.qwenVoices || []);
+      const [ttsWorkflow, setTtsWorkflow] = useState(seed.workflow || null);
+      const [ttsTable, setTtsTable] = useState(seed.voiceTable || null);
+      const [ttsProbe, setTtsProbe] = useState(null);
+      const [ttsMsg, setTtsMsg] = useState('');
+      const [ttsBusy, setTtsBusy] = useState(false);
+      const [pendingWorkflow, setPendingWorkflow] = useState(null);
+      const [pendingTextNode, setPendingTextNode] = useState('');
+      const previewAudioRef = useRef(null);
+      const [diagnostics, setDiagnostics] = useState(seed.diagnostics || null);
+      const [form, setForm] = useState(() => {
+        const saved = seed.voice || null;
+        return saved
+          ? {
+              provider: saved.provider || 'browser',
+              model: saved.model || 'qwen3-tts-flash',
+              voice: saved.voice || '',
+              comfyVoice: saved.comfyVoice || 'Vivian',
+              textNode: saved.textNode || '',
+              rate: Number(saved.rate) || 1,
+            }
+          : {
+              provider: 'browser',
+              model: 'qwen3-tts-flash',
+              voice: '',
+              comfyVoice: 'Vivian',
+              textNode: '',
+              rate: 1,
+            };
+      });
       const [apiKeyInput, setApiKeyInput] = useState('');
       const [editingKey, setEditingKey] = useState(false);
       const [voices, setVoices] = useState([]);
@@ -4108,6 +4152,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         setProviders(voiceOut.providers || []);
         setModels(voiceOut.models || []);
         setQwenVoices(voiceOut.qwenVoices || []);
+        setTtsWorkflow(voiceOut.workflow || null);
+        setTtsTable(voiceOut.voiceTable || null);
         setDiagnostics(diagOut);
         setImage(imageOut && imageOut.ok ? imageOut : null);
         if (voiceOut.voice) {
@@ -4115,6 +4161,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             provider: voiceOut.voice.provider || 'browser',
             model: voiceOut.voice.model || 'qwen3-tts-flash',
             voice: voiceOut.voice.voice || '',
+            comfyVoice: voiceOut.voice.comfyVoice || 'Vivian',
+            textNode: voiceOut.voice.textNode || '',
             rate: Number(voiceOut.voice.rate) || 1,
           });
         }
@@ -4167,11 +4215,15 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             setProviders(out.providers || []);
             setModels(out.models || []);
             setQwenVoices(out.qwenVoices || []);
+            setTtsWorkflow(out.workflow || ttsWorkflow);
+            setTtsTable(out.voiceTable || ttsTable);
             if (out.voice) {
               setForm({
                 provider: out.voice.provider || 'browser',
                 model: out.voice.model || 'qwen3-tts-flash',
                 voice: out.voice.voice || '',
+                comfyVoice: out.voice.comfyVoice || 'Vivian',
+                textNode: out.voice.textNode || '',
                 rate: Number(out.voice.rate) || 1,
               });
             }
@@ -4185,7 +4237,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             setSaving(false);
           }
         },
-        [form],
+        [form, ttsWorkflow, ttsTable],
       );
 
       const saveApiKey = async () => {
@@ -4218,27 +4270,59 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       /** 试听：Qwen 返回 WAV 字节直接播；浏览器返回朗读参数，本机念。 */
       const probe = async () => {
         setMessage('');
+        setTtsMsg('');
         setError(null);
         try {
           const res = await fetch(API + '/voice/probe', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ text: '你好，这是一段试听，用来确认语音能出声。' }),
+            body: JSON.stringify({
+              text: '你好，这是一段试听，用来确认语音能出声。',
+              comfyVoice: form.provider === 'comfyui-tts' ? comfyVoiceValue : '',
+              voice: form.provider === 'qwen3-tts' ? form.voice : '',
+            }),
           });
           const type = String(res.headers.get('content-type') || '');
           if (type.includes('audio/')) {
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
+            if (previewAudioRef.current) {
+              try {
+                previewAudioRef.current.pause();
+                previewAudioRef.current.currentTime = 0;
+              } catch {
+                /* 旧音频已结束 */
+              }
+            }
             const audio = new Audio(url);
+            previewAudioRef.current = audio;
             audio.onended = () => URL.revokeObjectURL(url);
             audio.onerror = () => URL.revokeObjectURL(url);
             await audio.play();
-            setMessage('正在试听 Qwen3-TTS…');
+            const usedVoice =
+              String(res.headers.get('x-tts-voice-label') || '').trim() ||
+              String(res.headers.get('x-tts-voice') || '').trim();
+            setMessage(
+              (form.provider === 'comfyui-tts' ? '正在试听 ComfyUI 配音' : '正在试听 Qwen3-TTS') +
+                (usedVoice ? '（' + usedVoice + '）' : '') +
+                '…',
+            );
             return;
           }
-          const result = await res.json().catch(() => ({}));
+          const raw = await res.text();
+          let result = null;
+          try {
+            result = JSON.parse(raw);
+          } catch {
+            result = null;
+          }
+          if (!result) {
+            const err = new Error('试听失败：插件服务无响应（HTTP ' + res.status + '），重启 DSH 后再试');
+            err.code = 'E_BAD_RESPONSE';
+            throw err;
+          }
           if (!result || result.ok === false) {
-            const err = new Error((result && (result.error || result.code)) || '试听失败');
+            const err = new Error((result && (result.error || result.message || result.code)) || '试听失败');
             err.code = result && result.code;
             throw err;
           }
@@ -4254,6 +4338,212 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               ? '语音没配置好：' + String(err.message || '') + (err.hint ? ' ' + err.hint : '')
               : String((err && err.message) || err),
           );
+        }
+      };
+
+      const saveComfyAddress = async (patch) => {
+        setTtsBusy(true);
+        setTtsMsg('');
+        try {
+          const out = await api('/image/config', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(patch || {}),
+          });
+          if (out.ok) {
+            setImage(out);
+            setTtsMsg('ComfyUI 地址已保存（与配图共用）');
+          }
+        } catch (err) {
+          setTtsMsg(String((err && err.message) || err));
+        } finally {
+          setTtsBusy(false);
+        }
+      };
+
+      const probeComfyConnection = async () => {
+        setTtsBusy(true);
+        setMessage('');
+        setTtsMsg('正在连接 ComfyUI…');
+        try {
+          const res = await fetch(API + '/voice/comfy/probe', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          const raw = await res.text();
+          let out = null;
+          try {
+            out = JSON.parse(raw);
+          } catch {
+            out = null;
+          }
+          if (!out) {
+            const err = new Error('连接测试失败：插件服务无响应（HTTP ' + res.status + '），重启 DSH 后再试');
+            err.code = 'E_BAD_RESPONSE';
+            throw err;
+          }
+          if (!out.ok) {
+            const err = new Error(out.message || out.error || '连接失败');
+            err.code = out.code;
+            throw err;
+          }
+          setTtsProbe(out);
+          const missed = out.missing && Array.isArray(out.missing.nodes) ? out.missing.nodes : [];
+          const unsupported = out.voiceTable && Array.isArray(out.voiceTable.unsupported) ? out.voiceTable.unsupported : [];
+          setTtsMsg(
+            '连接成功（ComfyUI ' + (out.version || '未知版本') + '）' +
+              (missed.length ? '；缺节点：' + missed.slice(0, 3).join('、') : '') +
+              (unsupported.length ? '；' + unsupported.length + ' 个音色不被模型支持' : ''),
+          );
+        } catch (err) {
+          setTtsProbe(null);
+          setTtsMsg(((err && err.code) || 'E_TTS_CONNECT') + '：' + String((err && err.message) || err));
+        } finally {
+          setTtsBusy(false);
+        }
+      };
+
+      const importVoiceTable = async (file) => {
+        if (!file) return;
+        setTtsBusy(true);
+        setTtsMsg('');
+        try {
+          const text = (await file.text()).replace(/^\uFEFF/, '');
+          let table = null;
+          try {
+            table = JSON.parse(text);
+          } catch {
+            setTtsMsg('音色表不是合法 JSON');
+            return;
+          }
+          const out = await api('/voice/speakers', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ table, name: file.name }),
+          });
+          setTtsTable(out.table || null);
+          setTtsProbe(null);
+          if (out.table) {
+            const names = (out.table.speakers || []).map((item) => item.name);
+            setForm((prev) => Object.assign({}, prev, { comfyVoice: names.includes(prev.comfyVoice) ? prev.comfyVoice : out.table.defaultVoice }));
+          }
+          setTtsMsg('音色表已导入（' + ((out.table && out.table.count) || 0) + ' 个音色）');
+        } catch (err) {
+          const detail = (err && err.detail) || {};
+          setTtsMsg((detail.code || err.code || 'E_TTS_VOICE_TABLE') + '：' + (detail.error || err.message));
+        } finally {
+          setTtsBusy(false);
+        }
+      };
+
+      const resetVoiceTable = async () => {
+        setTtsBusy(true);
+        try {
+          const out = await api('/voice/speakers', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ reset: true }),
+          });
+          setTtsTable(out.table || null);
+          setTtsProbe(null);
+          setForm((prev) => Object.assign({}, prev, { comfyVoice: (out.table && out.table.defaultVoice) || prev.comfyVoice }));
+          setTtsMsg('已恢复默认音色表（9 音色）');
+        } catch (err) {
+          setTtsMsg(String((err && err.message) || err));
+        } finally {
+          setTtsBusy(false);
+        }
+      };
+
+      const importVoiceWorkflow = async (file) => {
+        if (!file) return;
+        setTtsBusy(true);
+        setTtsMsg('');
+        try {
+          const text = (await file.text()).replace(/^\uFEFF/, '');
+          let workflow = null;
+          try {
+            workflow = JSON.parse(text);
+          } catch {
+            setTtsMsg('工作流不是合法 JSON');
+            return;
+          }
+          const out = await api('/voice/workflow', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workflow, name: file.name }),
+          });
+          setTtsWorkflow(out.workflow || null);
+          setPendingWorkflow(null);
+          setTtsProbe(null);
+          if (out.workflow && out.workflow.textNode) setForm((prev) => Object.assign({}, prev, { textNode: out.workflow.textNode }));
+          setTtsMsg('配音工作流已导入（' + ((out.workflow && out.workflow.format) || '') + '）');
+        } catch (err) {
+          const detail = (err && err.detail) || {};
+          const candidates = detail.candidates || [];
+          if (detail.code === 'E_TTS_WORKFLOW_NODE' && candidates.length) {
+            setPendingWorkflow({ workflow, name: file.name, candidates });
+            setPendingTextNode(candidates[0].id);
+            setTtsMsg('这个工作流有多个朗读稿输入位置，请选择一个后确认导入。');
+            return;
+          }
+          setTtsMsg(
+            (detail.code || err.code || 'E_TTS_WORKFLOW') + '：' + (detail.error || err.message) +
+              (candidates.length ? '；可选朗读稿位置：' + candidates.map((item) => item.id).join('、') : ''),
+          );
+        } finally {
+          setTtsBusy(false);
+        }
+      };
+
+      const resetVoiceWorkflow = async () => {
+        setTtsBusy(true);
+        try {
+          const out = await api('/voice/workflow', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ reset: true }),
+          });
+          setTtsWorkflow(out.workflow || null);
+          setPendingWorkflow(null);
+          setTtsProbe(null);
+          if (out.workflow && out.workflow.textNode) setForm((prev) => Object.assign({}, prev, { textNode: out.workflow.textNode }));
+          setTtsMsg('已恢复默认配音工作流');
+        } catch (err) {
+          setTtsMsg(String((err && err.message) || err));
+        } finally {
+          setTtsBusy(false);
+        }
+      };
+
+      const selectVoiceTextNode = async (value) => {
+        const saved = await save({ textNode: value });
+        if (saved) {
+          setTtsMsg('朗读稿输入位置已保存');
+          setTtsWorkflow((prev) => (prev ? Object.assign({}, prev, { textNode: value }) : prev));
+        }
+      };
+
+      const confirmPendingWorkflow = async () => {
+        if (!pendingWorkflow) return;
+        setTtsBusy(true);
+        try {
+          const out = await api('/voice/workflow', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workflow: pendingWorkflow.workflow, name: pendingWorkflow.name, textNode: pendingTextNode }),
+          });
+          setTtsWorkflow(out.workflow || null);
+          setPendingWorkflow(null);
+          setTtsProbe(null);
+          if (out.workflow && out.workflow.textNode) setForm((prev) => Object.assign({}, prev, { textNode: out.workflow.textNode }));
+          setTtsMsg('配音工作流已导入（已选朗读稿位置）');
+        } catch (err) {
+          const detail = (err && err.detail) || {};
+          setTtsMsg((detail.code || err.code || 'E_TTS_WORKFLOW') + '：' + (detail.error || err.message));
+        } finally {
+          setTtsBusy(false);
         }
       };
 
@@ -4382,7 +4672,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         setImageBusy(true);
         setImageMsg('');
         try {
-          const text = await file.text();
+          const text = (await file.text()).replace(/^\uFEFF/, '');
           let workflow = null;
           try {
             workflow = JSON.parse(text);
@@ -4429,6 +4719,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
       const imageForm = (image && image.image) || null;
       const workflowInfo = (imageForm && imageForm.workflow) || {};
+      const comfyAddress = imageForm || { host: '127.0.0.1', port: 8188, baseUrl: 'http://127.0.0.1:8188' };
+      const ttsSpeakers = (ttsTable && ttsTable.speakers) || [];
+      const ttsUnsupported = new Set((ttsProbe && ttsProbe.voiceTable && ttsProbe.voiceTable.unsupported) || []);
+      const comfyVoiceValue = ttsSpeakers.some((item) => item.name === form.comfyVoice)
+        ? form.comfyVoice
+        : (ttsTable && ttsTable.defaultVoice) || '';
 
       return h(
         'div',
@@ -4460,11 +4756,13 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                   value: form.provider,
                   disabled: saving,
                   'aria-label': '语音供应商',
+                  title: providerNote || '选择配音方式',
                   onChange: (event) => {
                     const provider = event.target.value;
                     const patch = { provider };
                     if (provider === 'qwen3-tts' && !form.voice && qwenVoices.length) patch.voice = qwenVoices[0].id;
                     if (provider === 'browser' && form.provider === 'qwen3-tts') patch.voice = '';
+                    if (provider === 'comfyui-tts' && !form.comfyVoice) patch.comfyVoice = (ttsTable && ttsTable.defaultVoice) || 'Vivian';
                     save(patch);
                   },
                 },
@@ -4484,13 +4782,13 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                   value: form.model,
                   disabled: saving || form.provider !== 'qwen3-tts',
                   'aria-label': '语音合成模型',
+                  title: form.provider === 'comfyui-tts' ? 'ComfyUI 的模型由工作流决定' : '只切语音模型；生成文案仍走 DSH 默认模型',
                   onChange: (event) => save({ model: event.target.value }),
                 },
                 (models.length ? models : [{ id: 'qwen3-tts-flash', label: 'Qwen3-TTS Flash（非实时）', ready: true }]).map((item) =>
                   h('option', { key: item.id, value: item.id, disabled: !item.ready }, item.label + (item.ready ? '' : '（未接入）')),
                 ),
               ),
-              h('span', { className: 'blm-dim', style: { fontSize: 11 } }, '只切语音模型；生成文案仍走 DSH 默认模型'),
             ),
             form.provider === 'qwen3-tts'
               ? h(
@@ -4518,18 +4816,18 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                             placeholder: '粘贴 Qwen API Key（只存本机）',
                             autoComplete: 'new-password',
                             'aria-label': 'Qwen API Key',
+                            title: 'Key 存 voice.json（0600），面板只显示末 4 位；空输入不覆盖旧 Key',
                             onChange: (event) => setApiKeyInput(event.target.value),
                             onKeyDown: (event) => {
                               if (event.key === 'Enter') saveApiKey();
                             },
                           }),
-                          h('button', { className: 'blm-btn primary', disabled: saving || !apiKeyInput.trim(), onClick: saveApiKey }, '保存 Key'),
+                          h('button', { className: 'blm-btn primary', disabled: saving || !apiKeyInput.trim(), onClick: saveApiKey, title: '只存本机 voice.json；不写日志、URL 或讲次' }, '保存 Key'),
                           voice && voice.hasKey
                             ? h('button', { className: 'blm-btn', onClick: () => { setEditingKey(false); setApiKeyInput(''); } }, '取消')
                             : null,
                         ),
                   ),
-                  h('div', { className: 'blm-note' }, 'Key 存 voice.json（0600），面板只显示末 4 位；不写入讲次、URL 或日志。'),
                 )
               : null,
             h(
@@ -4544,7 +4842,11 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                       value: form.voice,
                       disabled: saving,
                       'aria-label': 'Qwen 音色',
-                      onChange: (event) => save({ voice: event.target.value }),
+                      onChange: (event) => {
+                        const value = event.target.value;
+                        setForm((prev) => Object.assign({}, prev, { voice: value }));
+                        save({ voice: value });
+                      },
                     },
                     qwenVoices.map((item) =>
                       h(
@@ -4554,42 +4856,249 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                       ),
                     ),
                   )
-                : h(
+                : form.provider === 'comfyui-tts'
+                  ? h(
+                      'select',
+                      {
+                        className: 'blm-select',
+                        value: comfyVoiceValue,
+                        disabled: saving || ttsBusy || !ttsSpeakers.length,
+                        'aria-label': 'ComfyUI 音色',
+                        onChange: (event) => {
+                          const value = event.target.value;
+                          setForm((prev) => Object.assign({}, prev, { comfyVoice: value }));
+                          save({ comfyVoice: value });
+                        },
+                      },
+                      ttsSpeakers.length
+                        ? ttsSpeakers.map((item) =>
+                            h(
+                              'option',
+                              { key: item.name, value: item.name, disabled: ttsUnsupported.has(item.name) },
+                              (item.label || item.name) + (item.style ? ' · ' + item.style : '') + (item.lang ? ' · ' + item.lang : '') +
+                                (ttsUnsupported.has(item.name) ? '（模型不支持）' : ''),
+                            ),
+                          )
+                        : h('option', { value: '' }, '当前音色表为空'),
+                    )
+                  : h(
+                      'select',
+                      {
+                        className: 'blm-select',
+                        value: form.voice,
+                        disabled: saving || form.provider !== 'browser',
+                        'aria-label': '朗读音色',
+                        onChange: (event) => save({ voice: event.target.value }),
+                      },
+                      h('option', { value: '' }, '系统默认'),
+                      voices.map((item) => h('option', { key: item.voiceURI || item.name, value: item.name }, item.name + ' · ' + item.lang)),
+                    ),
+              form.provider === 'comfyui-tts'
+                ? h('span', { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') : '音色表未加载' },
+                    ttsTable ? (ttsTable.source === 'default' ? '默认音色表' : '自定义音色表') + ' · ' + (ttsTable.count || 0) + ' 个' : '音色表未加载')
+                : null,
+            ),
+            form.provider === 'browser'
+              ? h(
+                  'div',
+                  { className: 'blm-field' },
+                  h('span', { className: 'label', title: '只影响浏览器朗读；Qwen 与 ComfyUI 的语速由模型决定' }, '语速'),
+                  h(
                     'select',
                     {
                       className: 'blm-select',
-                      value: form.voice,
-                      disabled: saving || form.provider !== 'browser',
-                      'aria-label': '朗读音色',
-                      onChange: (event) => save({ voice: event.target.value }),
+                      value: String(form.rate),
+                      disabled: saving,
+                      'aria-label': '朗读语速',
+                      onChange: (event) => save({ rate: Number(event.target.value) }),
                     },
-                    h('option', { value: '' }, '系统默认'),
-                    voices.map((item) => h('option', { key: item.voiceURI || item.name, value: item.name }, item.name + ' · ' + item.lang)),
+                    RATE_STEPS.map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
                   ),
-            ),
-            h(
-              'div',
-              { className: 'blm-field' },
-              h('span', { className: 'label' }, '语速'),
-              h(
-                'select',
-                {
-                  className: 'blm-select',
-                  value: String(form.rate),
-                  disabled: saving,
-                  'aria-label': '朗读语速',
-                  onChange: (event) => save({ rate: Number(event.target.value) }),
-                },
-                RATE_STEPS.map((rate) => h('option', { key: rate, value: String(rate) }, rate.toFixed(1) + '×')),
-              ),
-              h('button', { className: 'blm-btn', disabled: saving, onClick: probe }, '试听'),
-              h('button', { className: 'blm-btn', disabled: saving, onClick: () => save({}) }, saving ? '保存中…' : '保存'),
-            ),
+                )
+              : null,
+            form.provider === 'comfyui-tts'
+              ? h(
+                  React.Fragment,
+                  null,
+                  h(
+                    'div',
+                    { className: 'blm-field' },
+                    h('span', { className: 'label' }, 'ComfyUI 地址'),
+                    h('input', {
+                      className: 'blm-input',
+                      style: { flex: '0 0 140px', minWidth: 100 },
+                      defaultValue: comfyAddress.host,
+                      placeholder: '127.0.0.1',
+                      'aria-label': 'ComfyUI 主机',
+                      title: '默认 127.0.0.1；与配图共用这个地址',
+                      onBlur: (event) => {
+                        const host = String(event.target.value || '').trim();
+                        if (host && host !== comfyAddress.host) saveComfyAddress({ host });
+                      },
+                    }),
+                    h('input', {
+                      className: 'blm-input',
+                      style: { flex: '0 0 90px', minWidth: 70 },
+                      type: 'number',
+                      defaultValue: comfyAddress.port,
+                      'aria-label': 'ComfyUI 端口',
+                      title: '默认 8188；与配图共用这个端口',
+                      onBlur: (event) => {
+                        const port = Number(event.target.value);
+                        if (port && port !== comfyAddress.port) saveComfyAddress({ port });
+                      },
+                    }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'blm-field' },
+                    h('span', { className: 'label' }, '配音工作流'),
+                    h(
+                      'span',
+                      { className: 'blm-dim', style: { fontSize: 11 }, title: ttsWorkflow ? ttsWorkflow.name + ' · ' + (ttsWorkflow.format || '') + ' · ' + (ttsWorkflow.nodes || 0) + ' 节点' : '' },
+                      ttsWorkflow ? (ttsWorkflow.source === 'default' ? '内置' : '自定义') + ' · ' + ttsWorkflow.name : '工作流未加载',
+                    ),
+                    h('button', {
+                      className: 'blm-btn',
+                      disabled: saving || ttsBusy,
+                      title: '导入 ComfyUI 工作流（API 格式，或带 widgets_values_named 的界面格式）',
+                      onClick: () => document.getElementById('blm-tts-workflow-input')?.click(),
+                    }, '导入'),
+                    h('input', {
+                      id: 'blm-tts-workflow-input',
+                      type: 'file',
+                      accept: '.json,application/json',
+                      style: { display: 'none' },
+                      onChange: (event) => {
+                        const file = event.target.files && event.target.files[0];
+                        event.target.value = '';
+                        importVoiceWorkflow(file);
+                      },
+                    }),
+                    h('button', { className: 'blm-btn', disabled: saving || ttsBusy, title: '恢复内置默认工作流', onClick: resetVoiceWorkflow }, '恢复默认'),
+                  ),
+                  ttsWorkflow && (ttsWorkflow.candidates || []).length > 1
+                    ? h(
+                        'div',
+                        { className: 'blm-field' },
+                        h('span', { className: 'label', title: '工作流里有多个文本输入，选一个接收朗读稿；默认工作流只有一个，平时不显示这行' }, '朗读稿输入位置'),
+                        h(
+                          'select',
+                          {
+                            className: 'blm-select',
+                            value: form.textNode || ttsWorkflow.textNode || '',
+                            disabled: saving || ttsBusy,
+                            'aria-label': '朗读稿输入位置',
+                            onChange: (event) => selectVoiceTextNode(event.target.value),
+                          },
+                          (ttsWorkflow.candidates || []).map((item) =>
+                            h('option', { key: item.id, value: item.id }, item.id + ' · ' + (item.class_type || '') + (item.text ? ' · ' + item.text.slice(0, 18) : '')),
+                          ),
+                        ),
+                      )
+                    : null,
+                  pendingWorkflow
+                    ? h(
+                        'div',
+                        { className: 'blm-field' },
+                        h('span', { className: 'label', title: '导入的工作流有多个文本输入，先选一个再确认' }, '朗读稿输入位置'),
+                        h(
+                          'select',
+                          {
+                            className: 'blm-select',
+                            value: pendingTextNode,
+                            disabled: ttsBusy,
+                            'aria-label': '选择朗读稿输入位置',
+                            onChange: (event) => setPendingTextNode(event.target.value),
+                          },
+                          (pendingWorkflow.candidates || []).map((item) =>
+                            h('option', { key: item.id, value: item.id }, item.id + ' · ' + (item.class_type || '') + (item.text ? ' · ' + item.text.slice(0, 18) : '')),
+                          ),
+                        ),
+                        h('button', { className: 'blm-btn primary', disabled: ttsBusy, onClick: confirmPendingWorkflow }, '确认导入'),
+                        h('button', { className: 'blm-btn', disabled: ttsBusy, onClick: () => setPendingWorkflow(null) }, '取消'),
+                      )
+                    : null,
+                  h(
+                    'div',
+                    { className: 'blm-field' },
+                    h('span', { className: 'label' }, '音色表'),
+                    h(
+                      'span',
+                      { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') + ' · ' + (ttsTable.count || 0) + ' 个' : '音色表未加载' },
+                      ttsTable ? (ttsTable.source === 'default' ? '默认' : '自定义') + ' · ' + (ttsTable.count || 0) + ' 个音色' : '未加载',
+                    ),
+                    h('button', {
+                      className: 'blm-btn',
+                      disabled: saving || ttsBusy,
+                      title: '导入模型音色表 JSON（对象或纯音色名数组）；只写本地，不要求 ComfyUI 在线',
+                      onClick: () => document.getElementById('blm-tts-table-input')?.click(),
+                    }, '导入音色表'),
+                    h('input', {
+                      id: 'blm-tts-table-input',
+                      type: 'file',
+                      accept: '.json,application/json',
+                      style: { display: 'none' },
+                      onChange: (event) => {
+                        const file = event.target.files && event.target.files[0];
+                        event.target.value = '';
+                        importVoiceTable(file);
+                      },
+                    }),
+                    h('button', { className: 'blm-btn', disabled: saving || ttsBusy, title: '恢复 Qwen3-TTS-CustomVoice 默认 9 音色', onClick: resetVoiceTable }, '恢复默认'),
+                  ),
+                  ttsMsg ? h('div', { className: 'blm-note' }, ttsMsg) : null,
+                  ttsProbe && ttsProbe.voiceTable && ttsProbe.voiceTable.unsupported && ttsProbe.voiceTable.unsupported.length
+                    ? h('div', { className: 'blm-note warn' }, '音色表与当前模型不完全一致：' + ttsProbe.voiceTable.unsupported.length + ' 个音色不被支持（' + ttsProbe.voiceTable.unsupported.slice(0, 4).join('、') + '）。换模型后请导入匹配的音色表。')
+                    : null,
+                  ttsWorkflow && ttsWorkflow.warnings && ttsWorkflow.warnings.length
+                    ? h('div', { className: 'blm-note warn' }, ttsWorkflow.warnings.join('；'))
+                    : null,
+                  ttsTable && ttsTable.warning ? h('div', { className: 'blm-note warn' }, ttsTable.warning) : null,
+                )
+              : null,
             message ? h('div', { className: 'blm-note' }, message) : null,
-            providerNote ? h('div', { className: 'blm-dim', style: { fontSize: 11 } }, providerNote) : null,
             form.provider === 'browser' && !speechOk
               ? h('div', { className: 'blm-note warn' }, '当前浏览器不支持本机朗读；换 Chrome / Edge 最新版。')
               : null,
+            h(
+              'div',
+              { className: 'blm-row blm-voice-actions' },
+              form.provider === 'comfyui-tts'
+                ? h(
+                    'button',
+                    {
+                      className: 'blm-btn',
+                      disabled: saving || ttsBusy,
+                      title: '只读检查 ComfyUI 版本、节点和音色支持，不生成音频',
+                      onClick: probeComfyConnection,
+                    },
+                    ttsBusy ? '测试中…' : '连接测试',
+                  )
+                : null,
+              h(
+                'button',
+                {
+                  className: 'blm-btn',
+                  disabled: saving || ttsBusy,
+                  title: form.provider === 'comfyui-tts' ? '用当前音色真跑一次 ComfyUI 工作流，只播放、不落盘' : '试听当前供应商的合成效果',
+                  onClick: probe,
+                },
+                '试听',
+              ),
+              h('div', { style: { flex: 1 } }),
+              h(
+                'button',
+                {
+                  className: 'blm-btn primary',
+                  style: { minWidth: 92 },
+                  disabled: saving,
+                  title: '保存语音设置；改下拉时也会自动保存',
+                  onClick: () => save({}),
+                },
+                saving ? '保存中…' : '保存',
+              ),
+            ),
           ),
           h(
             'section',
@@ -4799,6 +5308,26 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                   h('dd', null, diagnostics.dshVersion || '未知'),
                   h('dt', null, 'pdfjs 版本'),
                   h('dd', null, diagnostics.pdfjsVersion || '未知'),
+                  h('dt', null, '语音'),
+                  h(
+                    'dd',
+                    null,
+                    diagnostics.voice
+                      ? diagnostics.voice.provider + ' · 音色 ' + (diagnostics.voice.comfyVoice || '—') + ' · 朗读稿位置 ' + (diagnostics.voice.textNode || '自动')
+                      : '—',
+                  ),
+                  h(
+                    'dt',
+                    null,
+                    'ComfyUI',
+                  ),
+                  h(
+                    'dd',
+                    null,
+                    diagnostics.comfy && diagnostics.comfy.workflow
+                      ? (diagnostics.comfy.workflow.name || '—') + ' · ' + (diagnostics.comfy.workflow.format || '') + ' · 音色表 ' + ((diagnostics.comfy.voiceTable && diagnostics.comfy.voiceTable.name) || '—')
+                      : '—',
+                  ),
                   h('dt', null, '最近错误'),
                   h(
                     'dd',

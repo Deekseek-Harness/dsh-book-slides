@@ -223,6 +223,9 @@ export const ROUTE_MODULE = ROUTE_PREFIX + '/module';
 export const ROUTE_AUDIO = ROUTE_PREFIX + '/audio';
 export const ROUTE_VOICE = ROUTE_PREFIX + '/voice';
 export const ROUTE_VOICE_PROBE = ROUTE_PREFIX + '/voice/probe';
+export const ROUTE_VOICE_WORKFLOW = ROUTE_PREFIX + '/voice/workflow';
+export const ROUTE_VOICE_SPEAKERS = ROUTE_PREFIX + '/voice/speakers';
+export const ROUTE_VOICE_COMFY_PROBE = ROUTE_PREFIX + '/voice/comfy/probe';
 export const ROUTE_PAGES = ROUTE_PREFIX + '/pages';
 export const ROUTE_PROGRESS = ROUTE_PREFIX + '/progress';
 export const ROUTE_PREFERENCE = ROUTE_PREFIX + '/preference';
@@ -2937,6 +2940,12 @@ export function apply(ctx) {
     route(ROUTE_VOICE, routeV2);
 
     route(ROUTE_VOICE_PROBE, routeV2);
+
+    route(ROUTE_VOICE_WORKFLOW, routeV2);
+
+    route(ROUTE_VOICE_SPEAKERS, routeV2);
+
+    route(ROUTE_VOICE_COMFY_PROBE, routeV2);
 
     // 2.0 M5：配图 / 练习 / 导出 / 书档由 2.0 接管（1.x 同名处理器不再注册）
     route(ROUTE_IMAGE, routeV2);

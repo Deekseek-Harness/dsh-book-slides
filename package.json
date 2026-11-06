@@ -1,9 +1,9 @@
 {
   "name": "dsh-book-slides",
-  "version": "2.0.0-alpha.4",
+  "version": "2.0.0-alpha.5",
   "private": true,
   "type": "module",
-  "description": "DSH 左侧栏「精讲」面板：导入带文字层的 PDF，自动切章，勾选章节生成幻灯片式精讲，分屏对照原文播放；配图支持提示词占位或本地 ComfyUI 出图；可把精讲导出为带配音与备注的 PPTX；可按章出题练习并按遗忘节奏复习。",
+  "description": "DSH 左侧栏「精讲」面板：导入带文字层的 PDF，自动切章，勾选章节生成幻灯片式精讲，分屏对照原文播放；配音支持千问 Qwen3-TTS 云端与本地 ComfyUI 工作流（可导入音色表），配图支持提示词占位或本地 ComfyUI 出图；可把精讲导出为带配音与备注的 PPTX；可按章出题练习并按遗忘节奏复习。",
   "exports": {
     ".": "./index.js",
     "./client": "./v2/client.js",
@@ -67,7 +67,7 @@
   },
   "scripts": {
     "test": "node test/smoke.test.mjs && node test/server.test.mjs && node test/panel.test.mjs && node test/toc.test.mjs && node test/toc-llm.test.mjs && node test/check.test.mjs && node test/slides.test.mjs && node test/generate.test.mjs && node test/practice.test.mjs && node test/session.test.mjs && node test/tts.test.mjs && node test/qwen.test.mjs && node test/package.test.mjs && node test/comfy.test.mjs && node test/imaging.test.mjs && node test/image-auto.test.mjs && node test/pptx.test.mjs && node test/pptexport.test.mjs",
-    "test:v2": "node test/v2-m1.test.mjs && node test/v2-m1-server.test.mjs && node test/v2-m2.test.mjs && node test/v2-m2-server.test.mjs && node test/v2-toc.test.mjs && node test/v2-m3.test.mjs && node test/v2-m3-server.test.mjs && node test/v2-series-lifecycle.test.mjs && node test/v2-m4-routes.test.mjs && node test/v2-revoice.test.mjs && node test/parity-voice.test.mjs && node test/parity-player.test.mjs && node test/parity-settings.test.mjs && node test/v2-practice.test.mjs && node test/v2-pptx.test.mjs && node test/v2-package.test.mjs && node test/v2-images.test.mjs && node test/v2-m5-client.test.mjs && node test/v2-trash.test.mjs && node test/v2-longtask.test.mjs",
+    "test:v2": "node test/v2-m1.test.mjs && node test/v2-m1-server.test.mjs && node test/v2-m2.test.mjs && node test/v2-m2-server.test.mjs && node test/v2-toc.test.mjs && node test/v2-m3.test.mjs && node test/v2-m3-server.test.mjs && node test/v2-series-lifecycle.test.mjs && node test/v2-m4-routes.test.mjs && node test/v2-revoice.test.mjs && node test/parity-voice.test.mjs && node test/parity-player.test.mjs && node test/parity-settings.test.mjs && node test/v2-practice.test.mjs && node test/v2-pptx.test.mjs && node test/v2-package.test.mjs && node test/v2-images.test.mjs && node test/v2-tts-comfy.test.mjs && node test/v2-m5-client.test.mjs && node test/v2-trash.test.mjs && node test/v2-longtask.test.mjs",
     "test:mech": "node test/books.mech.e2e.mjs",
     "test:chapters": "node test/books.toc.e2e.mjs",
     "test:truth": "node test/books.toc.e2e.mjs --truth test/truth --baseline",

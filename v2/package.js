@@ -291,7 +291,7 @@ export async function planExport(bookIds, options = {}) {
             const rel = String((slide && slide.audio_file) || '');
             if (!rel || seen.has(rel)) continue;
             seen.add(rel);
-            if (!/^audio\/\d{3}\.(wav|mp3)$/.test(rel)) continue;
+            if (!/^audio\/\d{3}\.(wav|mp3|flac|ogg)$/.test(rel)) continue;
             const meta = await addFile(files, path.join(doc.dir, ...rel.split('/')), lectureDirName + '/' + rel);
             if (meta) {
               audioCount += 1;
@@ -1084,7 +1084,7 @@ function normalizeLectureTree(seriesDirPath, series) {
       for (const slide of slidesDoc.slides) {
         const rel = String((slide && slide.audio_file) || '');
         if (!rel) continue;
-        if (!/^audio\/\d{3}\.(wav|mp3)$/.test(rel) || !isFile(path.join(dir, ...rel.split('/')))) {
+        if (!/^audio\/\d{3}\.(wav|mp3|flac|ogg)$/.test(rel) || !isFile(path.join(dir, ...rel.split('/')))) {
           slide.audio_file = null;
           slide.audio_provider = 'none';
           missing += 1;

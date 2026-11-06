@@ -28,6 +28,7 @@ import { ROOT, writeJson } from './root.js';
 import { lectureDir, loadLecture } from './lectures.js';
 import { findSeries, patchSeriesLecture, persistSeries } from './series.js';
 import { recordError } from './errors.js';
+import { matchSpeakerName, prepareComfyVoice, probeComfySpeech, synthesizeComfyVoicing, voiceTablePayload, workflowPayload } from './comfy-tts.js';
 
 const ACTIVE = ['queued', 'voicing', 'cancelling'];
 const READY = ['ready', 'ready_degraded'];
@@ -75,12 +76,39 @@ function jobState(job) {
 /* ------------------------------ 配置与试听 ------------------------------ */
 
 export function voicePayload() {
+  let workflow = null;
+  let voiceTable = null;
+  try {
+    workflow = workflowPayload();
+  } catch (err) {
+    workflow = { valid: false, error: String((err && err.message) || err), warnings: [] };
+  }
+  try {
+    voiceTable = voiceTablePayload();
+  } catch (err) {
+    voiceTable = { name: '', model: '', source: 'default', count: 0, speakers: [], defaultVoice: '', warning: String((err && err.message) || err) };
+  }
+  const publicConfig = publicVoiceConfig(readVoiceConfig());
+  if (voiceTable && voiceTable.speakers && voiceTable.speakers.length) {
+    const matched = matchSpeakerName(voiceTable, publicConfig.comfyVoice);
+    if (matched && matched !== publicConfig.comfyVoice) {
+      publicConfig.comfyVoice = matched;
+      // 等价名归一（Uncle_Fu → Uncle Fu），不是回落到默认音色；顺手把旧配置迁成表里的写法
+      try {
+        writeVoiceConfig({ comfyVoice: matched });
+      } catch {
+        /* 迁移失败不影响本次显示 */
+      }
+    }
+  }
   return {
-    voice: publicVoiceConfig(readVoiceConfig()),
+    voice: publicConfig,
     providers: VOICE_PROVIDERS,
     models: QWEN_MODELS,
     qwenVoices: QWEN_VOICES,
-    note: 'Qwen3-TTS 的 Key 只存本机 voice.json（0600）；配音不随文本生成自动执行。',
+    workflow: workflow,
+    voiceTable: voiceTable,
+    note: 'Qwen3-TTS 的 Key 只存本机 voice.json（0600）；ComfyUI 地址与配图共用 image.json；配音不随文本生成自动执行。',
   };
 }
 
@@ -89,7 +117,11 @@ export function saveVoice(patch) {
 }
 
 export async function probeVoiceConfig(text, options) {
-  return probeVoice(readVoiceConfig(), text, options);
+  const config = readVoiceConfig();
+  if (config.provider === 'comfyui-tts') return probeComfySpeech(text, options);
+  const opts = options && typeof options === 'object' ? options : {};
+  const override = String(opts.voice || '').trim();
+  return probeVoice(override ? Object.assign({}, config, { voice: override }) : config, text, opts);
 }
 
 export function hasApiKey() {
@@ -211,9 +243,17 @@ async function runRevoiceJob(job, found, options) {
   const config = readVoiceConfig();
   const cacheDir = path.join(ROOT, 'audio-cache');
   const failedLectures = [];
+  let comfyCtx = null;
   try {
     if (config.provider === 'qwen3-tts' && !config.apiKey) {
       throw new TtsError('E_TTS_UNCONFIGURED', '未配置 Qwen API Key', '到设置页填入 Key，或改用浏览器朗读。');
+    }
+    if (config.provider === 'comfyui-tts') {
+      job.message = '正在校验 ComfyUI 工作流/音色…';
+      comfyCtx = await prepareComfyVoice({
+        signal: job.controller.signal,
+        fetchImpl: options.fetchImpl,
+      });
     }
     job.status = 'voicing';
     job.stage = 'voicing';
@@ -235,22 +275,50 @@ async function runRevoiceJob(job, found, options) {
 
       let result = null;
       if (targets.length) {
-        result =
-          config.provider === 'browser' || config.provider === 'off'
-            ? planVoicing(targets, config)
-            : await synthesizeVoicing(targets, config, {
-                moduleDir: doc.dir,
-                cacheDir,
-                signal: job.controller.signal,
-                fetchImpl: options.fetchImpl,
-                timeoutMs: options.timeoutMs,
-                ignoreCache: job.force,
-                onProgress: (done, total) => {
-                  job.current = done;
-                  job.total = total;
-                  job.message = '第 ' + n + ' 讲 · 已配音 ' + done + '/' + total + ' 页';
-                },
-              });
+        if (comfyCtx) {
+          result = await synthesizeComfyVoicing(
+            targets,
+            {
+              prepared: comfyCtx.prepared,
+              table: comfyCtx.table,
+              speaker: comfyCtx.speaker,
+              textNode: comfyCtx.textNode,
+              workflowHash: comfyCtx.workflowHash,
+              model: comfyCtx.model,
+              baseUrl: comfyCtx.baseUrl,
+            },
+            {
+              moduleDir: doc.dir,
+              cacheDir: cacheDir,
+              signal: job.controller.signal,
+              fetchImpl: options.fetchImpl,
+              timeoutMs: options.timeoutMs,
+              ignoreCache: job.force,
+              onProgress: (done, total) => {
+                job.current = done;
+                job.total = total;
+                job.message = '第 ' + n + ' 讲 · 已配音 ' + done + '/' + total + ' 页';
+              },
+            },
+          );
+        } else {
+          result =
+            config.provider === 'browser' || config.provider === 'off'
+              ? planVoicing(targets, config)
+              : await synthesizeVoicing(targets, config, {
+                  moduleDir: doc.dir,
+                  cacheDir,
+                  signal: job.controller.signal,
+                  fetchImpl: options.fetchImpl,
+                  timeoutMs: options.timeoutMs,
+                  ignoreCache: job.force,
+                  onProgress: (done, total) => {
+                    job.current = done;
+                    job.total = total;
+                    job.message = '第 ' + n + ' 讲 · 已配音 ' + done + '/' + total + ' 页';
+                  },
+                });
+        }
         assertActive(job);
       }
 
@@ -295,8 +363,8 @@ async function runRevoiceJob(job, found, options) {
       const degraded = voiceStatus === 'partial' || voiceStatus === 'failed';
       const voiceMeta = {
         provider: result ? result.provider : (doc.slidesDoc.voice && doc.slidesDoc.voice.provider) || '',
-        model: (result && result.model) || config.model || '',
-        voice: config.voice || '',
+        model: (result && result.model) || (comfyCtx && comfyCtx.model) || config.model || '',
+        voice: (result && result.voice) || (config.provider === 'comfyui-tts' ? config.comfyVoice : config.voice) || '',
         rate: Number(config.rate) || 1,
         mode,
         degraded,
@@ -427,15 +495,20 @@ export function findAudioFile(seriesDirPath, n, i) {
     : null;
   if (slide && slide.audio_file) {
     const rel = String(slide.audio_file).replace(/\\/g, '/');
-    if (/^audio\/\d{3}\.(wav|mp3)$/.test(rel)) candidates.push(path.join(dir, rel));
+    if (/^audio\/\d{3}\.(wav|mp3|flac|ogg)$/.test(rel)) candidates.push(path.join(dir, rel));
   }
   candidates.push(path.join(dir, 'audio', pad3(index) + '.wav'));
   candidates.push(path.join(dir, 'audio', pad3(index) + '.mp3'));
+  candidates.push(path.join(dir, 'audio', pad3(index) + '.flac'));
+  candidates.push(path.join(dir, 'audio', pad3(index) + '.ogg'));
   for (const file of candidates) {
     try {
       const stat = fs.statSync(file);
       if (stat.isFile() && stat.size > 0) {
-        return { file, size: stat.size, type: file.toLowerCase().endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav' };
+        const ext = path.extname(file).toLowerCase().slice(1);
+        const type =
+          ext === 'mp3' ? 'audio/mpeg' : ext === 'flac' ? 'audio/flac' : ext === 'ogg' ? 'audio/ogg' : 'audio/wav';
+        return { file, size: stat.size, type };
       }
     } catch {
       /* 试下一个 */

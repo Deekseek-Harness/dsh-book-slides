@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "Qwen3-TTS-CustomVoice 默认音色表",
+  "model": "Qwen3-TTS-CustomVoice",
+  "speakers": [
+    { "name": "Vivian", "style": "明亮、略带个性的年轻女声", "lang": "中文", "default": true },
+    { "name": "Serena", "style": "温暖、柔和的年轻女声", "lang": "中文" },
+    { "name": "Uncle_fu", "label": "Uncle Fu", "style": "低沉、醇厚的成熟男声", "lang": "中文" },
+    { "name": "Dylan", "style": "充满活力的北京年轻男声", "lang": "中文（北京）" },
+    { "name": "Eric", "style": "活泼的成都男声", "lang": "中文（四川）" },
+    { "name": "Ryan", "style": "富有节奏感和动态的男声", "lang": "英文" },
+    { "name": "Aiden", "style": "阳光、中音清晰的美国男声", "lang": "英文" },
+    { "name": "Ono_anna", "label": "Ono Anna", "style": "活泼的日本女声", "lang": "日文" },
+    { "name": "Ono_anna1", "label": "Ono Anna1", "style": "活泼的日本女声1", "lang": "日文1" },
+    { "name": "Sohee", "style": "温暖、富有情感的韩国女声", "lang": "韩文" }
+  ]
+}

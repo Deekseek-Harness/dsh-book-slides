@@ -165,6 +165,15 @@ function resolveAudio(lectureDirPath, slide) {
   return null;
 }
 
+function unsupportedAudioFormat(lectureDirPath, slide) {
+  const rel = String((slide && slide.audio_file) || '');
+  if (!/^audio\/\d{3}\.(flac|ogg)$/.test(rel)) return '';
+  const abs = inside(lectureDirPath, rel);
+  if (!abs || !isFile(abs)) return '';
+  const ext = rel.endsWith('.flac') ? 'flac' : 'ogg';
+  return ext;
+}
+
 function resolveImage(lectureDirPath, slide) {
   if (String((slide && slide.image_status) || '') !== 'ready') return null;
   const rel = String((slide && slide.image_file) || '');
@@ -234,6 +243,7 @@ function buildDeckForLecture(found, n, options) {
   const list = doc.slidesDoc.slides;
 
   const missingAudio = [];
+  const unsupportedAudio = [];
   const missingImage = [];
   const lostImages = [];
   let audioBytes = 0;
@@ -245,9 +255,12 @@ function buildDeckForLecture(found, n, options) {
   const slides = list.map((source, index0) => {
     const index = index0 + 1;
     const audio = resolveAudio(doc.dir, source);
+    const unsupportedExt = audio ? '' : unsupportedAudioFormat(doc.dir, source);
     const image = includeImages ? resolveImage(doc.dir, source) : null;
-    if (!audio) missingAudio.push(index);
-    else {
+    if (!audio) {
+      if (unsupportedExt) unsupportedAudio.push({ index, ext: unsupportedExt });
+      else missingAudio.push(index);
+    } else {
       audioPages += 1;
       if (includeAudio) audioBytes += audio.bytes;
     }
@@ -275,8 +288,15 @@ function buildDeckForLecture(found, n, options) {
   });
 
   const warnings = [];
-  if (!audioPages) warnings.push('第 ' + n + ' 讲没有可用音频，PPT 将不含声音');
+  if (!audioPages && !unsupportedAudio.length) warnings.push('第 ' + n + ' 讲没有可用音频，PPT 将不含声音');
   else if (missingAudio.length) warnings.push('第 ' + n + ' 讲 ' + missingAudio.length + '/' + slides.length + ' 页没有音频，将跳过');
+  if (unsupportedAudio.length) {
+    warnings.push(
+      '第 ' + n + ' 讲 ' + unsupportedAudio.length + ' 页音频为 ' +
+        Array.from(new Set(unsupportedAudio.map((item) => item.ext))).join('/') +
+        '，PPT 不支持嵌入，将跳过；建议把 ComfyUI 工作流输出改成 SaveAudio（audio_format=wav）',
+    );
+  }
   if (!includeAudio && audioPages) warnings.push('本次不含音频（第 ' + n + ' 讲 ' + audioPages + ' 页可含音频）');
   if (!includeImages && imagePages) warnings.push('本次不含配图（第 ' + n + ' 讲 ' + imagePages + ' 页有图）');
   if (lostImages.length) warnings.push('第 ' + n + ' 讲第 ' + lostImages.slice(0, 5).join('、') + ' 页配图文件缺失，将留白');

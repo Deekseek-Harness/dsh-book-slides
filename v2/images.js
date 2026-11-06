@@ -41,10 +41,21 @@ import { BOOKS_DIR, readJson, writeAtomic, writeJson } from './root.js';
 import { findSeries, patchSeriesLecture, persistSeries } from './series.js';
 import { lectureDir, loadLecture } from './lectures.js';
 import { recordError } from './errors.js';
+import { runComfyExclusive } from './comfy-queue.js';
 
 const READY = ['ready', 'ready_degraded'];
 const IMAGE_RE = /^images\/(\d{3})\.png$/;
 const JOB_FILE = 'image-job.json';
+
+/** 与配音共用 ComfyUI 串行队列（FR-23.1 / AC-152）。 */
+async function generateImageQueued(options) {
+  try {
+    return await runComfyExclusive(() => generateImage(options), { signal: options && options.signal });
+  } catch (err) {
+    if (err && err.code === 'E_CANCELLED') throw new ImageError('E_IMG_CANCELLED', '已取消');
+    throw err;
+  }
+}
 
 /* ------------------------------ 配置 ------------------------------ */
 
@@ -120,7 +131,7 @@ export async function testImage({ prompt = '', options = {} } = {}) {
     throw new ImageError('E_IMG_PROMPT', '测试提示词最多 ' + TEST_PROMPT_MAX + ' 字', '当前 ' + text.length + ' 字。');
   }
   const seed = seedFor(text, workflowHashOf(ctx.store.workflow), Date.now());
-  const result = await generateImage({
+  const result = await generateImageQueued({
     config: ctx.config,
     workflow: ctx.store.workflow,
     prompt: text,
@@ -610,7 +621,7 @@ async function runImageJob(job, ctx, options) {
         if (job.cancelled) break;
         try {
           const remaining = Math.max(15000, budgetDeadline - Date.now());
-          const result = await generateImage({
+          const result = await generateImageQueued({
             config,
             workflow,
             prompt,

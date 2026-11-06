@@ -79,8 +79,9 @@ export function writeJson(file, value) {
 export function readJson(file, fallback) {
   try {
     const raw = fs.readFileSync(file, 'utf8');
-    if (!raw.trim()) return fallback;
-    return JSON.parse(raw);
+    const text = raw.replace(/^\uFEFF/, '');
+    if (!text.trim()) return fallback;
+    return JSON.parse(text);
   } catch {
     return fallback;
   }

@@ -1,10 +1,13 @@
 /**
  * 精讲台 · 语音（v1.2）
  *
- * 两套供应商：
- *   browser   —— window.speechSynthesis，本机合成，不产生音频文件（M3 起）
- *   qwen3-tts —— 千问 Qwen3-TTS 非实时 HTTP，逐页合成 WAV 落盘（v1.2）
- *   off       —— 只出文字
+ * 供应商标识（2.0 起）：
+ *   browser      —— window.speechSynthesis，本机合成，不产生音频文件（M3 起）
+ *   qwen3-tts    —— 千问 Qwen3-TTS 非实时 HTTP，逐页合成 WAV 落盘（v1.2）
+ *   comfyui-tts  —— 本地 ComfyUI 的 Qwen3-TTS 工作流，逐页取音频（2.0 v1.2）
+ *   off          —— 只出文字
+ *
+ * comfyui-tts 的合成逻辑在 v2/comfy-tts.js；本文件只保留配置、云端与浏览器路径。
  *
  * 安全边界：
  *   - Qwen API Key 只存 voice.json（0600），publicVoiceConfig 只回末 4 位；
@@ -86,6 +89,7 @@ export const QWEN_VOICES = [
 
 export const VOICE_PROVIDERS = [
   { id: 'qwen3-tts', label: 'Qwen3-TTS（千问 AI）', ready: true, note: '逐页合成 WAV 存到本机；需要 API Key' },
+  { id: 'comfyui-tts', label: '本地 ComfyUI（Qwen3-TTS）', ready: true, note: '逐页调用本机 ComfyUI 工作流；需配置工作流与音色表' },
   { id: 'browser', label: '浏览器朗读（本机合成）', ready: true, note: '不产生音频文件，播放时由浏览器朗读' },
   { id: 'off', label: '关闭', ready: true, note: '只出文字，不朗读' },
 ];
@@ -94,6 +98,8 @@ export const DEFAULT_VOICE = {
   provider: 'browser',
   model: QWEN_MODEL,
   voice: '',
+  comfyVoice: 'Vivian',
+  textNode: '',
   rate: 1,
   apiKey: '',
 };
@@ -106,11 +112,12 @@ export const PROBE_TEXT = '你好，这是一段试听，用来确认 Qwen3-TTS 
 
 /** 语音失败统一错误：code 供作业层与面板使用，message 不包含 key。 */
 export class TtsError extends Error {
-  constructor(code, message, hint) {
+  constructor(code, message, hint, extra) {
     super(message);
     this.name = 'TtsError';
     this.code = code;
     this.hint = hint || '';
+    if (extra && typeof extra === 'object') Object.assign(this, extra);
   }
 }
 
@@ -136,6 +143,8 @@ export function normalizeVoiceConfig(raw) {
     provider: provider,
     model: model,
     voice: selected,
+    comfyVoice: String(source.comfyVoice == null ? '' : source.comfyVoice).slice(0, 80) || 'Vivian',
+    textNode: String(source.textNode == null ? '' : source.textNode).trim().slice(0, 24),
     rate: normalizeRate(source.rate),
     apiKey: String(source.apiKey || '').trim().slice(0, 500),
   };
@@ -183,18 +192,26 @@ export function publicVoiceConfig(config) {
     provider: voiceConfig.provider,
     model: voiceConfig.model,
     voice: voiceConfig.voice,
+    comfyVoice: voiceConfig.comfyVoice,
+    textNode: voiceConfig.textNode,
     rate: voiceConfig.rate,
     hasKey: hasKey,
     apiKeyMask: maskApiKey(voiceConfig.apiKey),
-    configured: voiceConfig.provider === 'browser' || voiceConfig.provider === 'off' || qwenReady,
+    configured:
+      voiceConfig.provider === 'browser' ||
+      voiceConfig.provider === 'off' ||
+      voiceConfig.provider === 'comfyui-tts' ||
+      qwenReady,
     note:
       voiceConfig.provider === 'browser'
         ? '语音由本机浏览器合成，不上传、不产生音频文件。'
         : voiceConfig.provider === 'off'
           ? '语音已关闭，模块只出文字。'
-          : hasKey
-            ? 'Qwen3-TTS 已配置：生成时逐页合成 WAV，播放器直接播音频文件。'
-            : '还没填 Qwen API Key；生成会降级为只出文字。',
+          : voiceConfig.provider === 'comfyui-tts'
+            ? 'ComfyUI 配音：逐页调用用户配置的本地工作流；换音色只改请求参数，不改工作流。'
+            : hasKey
+              ? 'Qwen3-TTS 已配置：生成时逐页合成 WAV，播放器直接播音频文件。'
+              : '还没填 Qwen API Key；生成会降级为只出文字。',
   };
 }
 
@@ -379,6 +396,14 @@ export async function probeVoice(config, text, options) {
       note: '由浏览器窗口朗读，音量/音色取决于系统与浏览器设置。',
     };
   }
+  if (voiceConfig.provider === 'comfyui-tts') {
+    return {
+      ok: false,
+      code: 'E_TTS_UNCONFIGURED',
+      error: 'ComfyUI 配音需在 2.0 设置页试听',
+      hint: '打开设置 → 语音 → 本地 ComfyUI。',
+    };
+  }
   if (!voiceConfig.apiKey) {
     return {
       ok: false,
@@ -494,6 +519,9 @@ export async function synthesizeVoicing(slides, config, options) {
   const voiceConfig = normalizeVoiceConfig(config);
   const opts = options || {};
   if (voiceConfig.provider === 'browser' || voiceConfig.provider === 'off') {
+    return planVoicing(slides, voiceConfig);
+  }
+  if (voiceConfig.provider === 'comfyui-tts') {
     return planVoicing(slides, voiceConfig);
   }
   if (!voiceConfig.apiKey) {
@@ -620,6 +648,18 @@ export function planVoicing(slides, config) {
       degraded: false,
       code: null,
       message: '',
+      slides: applyVoicing(slides, { provider: 'off', rate: voiceConfig.rate }),
+    };
+  }
+  if (voiceConfig.provider === 'comfyui-tts') {
+    return {
+      provider: 'comfyui-tts',
+      mode: 'none',
+      model: voiceConfig.model,
+      voice: voiceConfig.comfyVoice,
+      degraded: true,
+      code: 'E_TTS_UNCONFIGURED',
+      message: 'ComfyUI 配音需由 2.0 语音作业执行',
       slides: applyVoicing(slides, { provider: 'off', rate: voiceConfig.rate }),
     };
   }

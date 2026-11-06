@@ -211,7 +211,7 @@ function textOf(doc) {
 
 test('FR-23：供应商/模型/音色列表与试听（浏览器参数、Qwen WAV）', async () => {
   const config = await json('/dsh-book-slides/voice');
-  assert.deepEqual(config.providers.map((item) => item.id), ['qwen3-tts', 'browser', 'off']);
+  assert.deepEqual(config.providers.map((item) => item.id), ['qwen3-tts', 'comfyui-tts', 'browser', 'off']);
   assert.deepEqual(config.models.map((item) => item.id), ['qwen3-tts-flash']);
   assert.equal(config.qwenVoices.length, 48);
   assert.equal(new Set(config.qwenVoices.map((item) => item.id)).size, 48);
