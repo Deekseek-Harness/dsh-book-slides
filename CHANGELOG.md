@@ -7,7 +7,7 @@
 
 主题「Part 默认禁选、可编辑」：修正 AC-92 与 AC-129 的文档矛盾，按预防式禁选收敛；补 Part 编辑入口。
 
-主题「AC 判据化：可触发、可观察、可判定」：FR-14 的 AC-99 / AC-100 原先只写“性质”，没有触发失败分支的手段，也没把机检结论暴露成信号；本次补读取侧校验、故障注入与机检退出码。
+主题「AC 判据化：可触发、可观察、可判定」：FR-14 / FR-15 的 AC-99 ~ AC-102 原先只写“性质”，没有触发失败分支的手段，也没把机检结论暴露成信号；本次补读取侧校验、故障注入与机检退出码。
 
 ### 修复
 
@@ -32,12 +32,13 @@
 - `test/v2-m2.test.mjs` 增加系列 `part_version`/章快照不随 Part 编辑改变的断言。
 - `test/v2-m2.test.mjs` 的 AC-96/97/98 改为表驱动：FR-13.1 夹具 F1–F12 + 6 万整/6 万+1 边界 + 48 章 `E_SERIES_TOO_MANY`。
 
-### 章介绍（FR-14：AC-99 / AC-100）
+### 验收判据化（AC-99 ~ AC-102）
 
 - SRS v1.6：AC-99 / AC-100 改为“构造 → 断言 → 判定 → 机检入口 → 人工边界”，`sections` 校验明确覆盖落盘 `briefs.json`，坏 JSON 用故障注入判定；§10 / §12.7 / 附录 D 同步。
+- SRS v1.7：AC-101 / AC-102 同口径改造——`seams` 数 ≠ N−1 与术语凭空发明只重试 1 次；两次失败降级规则 plan 且过生成门；FR-15 校验口径改为“术语出现在原文或 briefs 中”。
 - `briefs.json` 读取侧校验：讲纲缓存命中与 `GET /briefs` 都会重跑 `sections` 原文校验；改坏的章回退“标题 + 首尾段”并给 warning，不静默采用，也不覆盖人工修改。
 - `/plan/preview` 的 `briefsSource` 增加 `mixed`（部分章回退）；`GET /briefs` 返回 `warnings` 与 `rejected`。
-- 新增 `npm run verify:briefs`（AC-99 机检，退出码 0/1）与 `test/v2-briefs.test.mjs`（AC-99/100：坏 section 逐章回退、坏 JSON 重试 1 次、route 级 `mixed` 可观察）。
+- 新增 `npm run verify:briefs`（AC-99 机检，退出码 0/1）、`test/v2-briefs.test.mjs`（AC-99/100）与 `test/v2-plan-ac.test.mjs`（AC-101/102，含降级后过生成门与 briefs 术语放行的反向用例）。
 
 ## [2.0.0-alpha.7] - 2026-11-08
 
