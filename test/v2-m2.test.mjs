@@ -34,10 +34,12 @@ test('AC-92/95：Part 确认、冲突、校验、编辑、删除', () => {
   const part = savePart({ bookId: loaded.book.id, chapters: [1, 2, 3, 4, 5, 6, 7], title: '函数' });
   assert.equal(part.version, 1);
   assert.equal(listParts(loaded.book.id).length, 1);
+  const series = createSeries({ bookId: loaded.book.id, partId: part.id });
+  assert.equal(series.part_version, 1);
 
   assert.throws(
     () => savePart({ bookId: loaded.book.id, chapters: [7], title: '冲突' }),
-    (err) => err.code === 'E_PART_CONFLICT' && err.conflicts[0].partId === part.id,
+    (err) => err.code === 'E_PART_CONFLICT' && err.conflicts[0].partId === part.id && /编辑/.test(err.hint),
   );
   assert.throws(() => savePart({ bookId: loaded.book.id, chapters: [0], title: '' }), (err) => err.code === 'E_PART_FRONT');
   assert.throws(() => savePart({ bookId: loaded.book.id, chapters: [1, 1], title: '' }), (err) => err.code === 'E_PART_DUP');
@@ -45,6 +47,9 @@ test('AC-92/95：Part 确认、冲突、校验、编辑、删除', () => {
   const updated = updatePart({ bookId: loaded.book.id, partId: part.id, addChapters: [], removeChapters: [7], title: '函数（改）' });
   assert.equal(updated.version, 2);
   assert.equal(updated.title, '函数（改）');
+  // AC-93：系列保存的是创建时的 Part 章快照，不随 Part 改名/增删章静默改变。
+  assert.equal(series.part_version, 1);
+  assert.deepEqual(series.chapters, [1, 2, 3, 4, 5, 6, 7]);
   deletePart(loaded.book.id, part.id);
   assert.equal(listParts(loaded.book.id).length, 0);
 });

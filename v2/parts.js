@@ -92,7 +92,7 @@ function validateSelection(loaded, chapters, { ignorePartId = '' } = {}) {
     throw new PartError(
       'E_PART_CONFLICT',
       '第 ' + conflicts[0].chapters.join('、') + ' 章已属于《' + conflicts[0].title + '》',
-      '三选：并入已有 Part / 改选 / 先把冲突章移出原 Part。',
+      '该章已属于其它 Part；请先在原 Part「编辑」中移出，再加入新 Part。',
       conflicts,
     );
   }

@@ -56,6 +56,8 @@ body[data-ds-dark-theme] .blm-root{color-scheme:dark}
 .blm-meta{color:var(--blm-dim);font-size:11px;margin-top:2px;display:flex;gap:6px;flex-wrap:wrap}
 .blm-badge{font-size:10px;border:1px solid var(--blm-line);border-radius:99px;padding:0 6px;color:var(--blm-dim)}
 .blm-badge.ok{color:#2ea043;border-color:color-mix(in oklab,#2ea043 35%,transparent);background:color-mix(in oklab,#2ea043 12%,transparent)}
+.blm-badge.warn{color:#8a5a00;border-color:color-mix(in oklab,#f0b400 45%,transparent);background:color-mix(in oklab,#f0b400 14%,transparent)}
+body[data-ds-dark-theme] .blm-badge.warn{color:#ffd27a}
 .blm-menu{position:absolute;right:6px;top:6px;background:rgba(0,0,0,.55);color:#fff;border:0;border-radius:6px;width:24px;height:24px;cursor:pointer;line-height:1}
 .blm-menu-box{position:absolute;right:6px;top:34px;z-index:5;background:var(--blm-card);color:var(--blm-text);border:1px solid var(--blm-line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:4px;min-width:92px}
 .blm-menu-box button{display:block;width:100%;text-align:left;border:0;background:transparent;color:inherit;padding:6px 9px;border-radius:5px;font:inherit;cursor:pointer}
@@ -69,7 +71,7 @@ body[data-ds-dark-theme] .blm-root{color-scheme:dark}
 .blm-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .blm-chapters{border:1px solid var(--blm-line);border-radius:10px;overflow:hidden;margin-top:12px;background:var(--blm-card)}
 .blm-parts{display:flex;flex-direction:column;gap:6px;margin-top:10px}
-.blm-part{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--blm-line);border-radius:8px;background:color-mix(in oklab,currentColor 3%,transparent)}
+.blm-part{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;border:1px solid var(--blm-line);border-radius:8px;background:color-mix(in oklab,currentColor 3%,transparent)}
 .blm-part-main{flex:1;min-width:0}
 .blm-chapter{display:grid;grid-template-columns:22px 34px 1fr 52px 52px 72px;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--blm-line);font-size:12px;color:var(--blm-text)}
 .blm-chapter.owns{background:color-mix(in oklab,currentColor 4%,transparent)}
@@ -481,6 +483,35 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const p = Number(job.current) || 0;
       const total = Number(job.total) || 0;
       return '第 ' + k + '/' + n + ' 讲 · 第 ' + p + '/' + total + ' 页';
+    }
+
+    /**
+     * 章节勾选态（AC-92 / AC-129）：
+     * 已确认 Part 的章 checked + disabled，用预防式禁选从源头避免 Part 冲突；
+     * 改归属必须走组头「编辑」，不能让用户在列表里直接反选。
+     */
+    function chapterSelectionState({ n, front = false, owner = null, selected = [], busy = false }) {
+      const num = Number(n);
+      const picked = (Array.isArray(selected) ? selected : []).includes(num);
+      const owned = owner != null;
+      const title = owner && owner.title ? String(owner.title) : '其它 Part';
+      return {
+        checked: picked || owned,
+        disabled: front === true || busy === true || owned,
+        title: front === true
+          ? '前文不参与 Part'
+          : owned
+            ? '属于《' + title + '》；不可直接取消勾选，改归属请用「编辑」'
+            : '选择这一章',
+      };
+    }
+
+    /** 系列是否仍基于创建时的 Part 章快照（AC-93）。 */
+    function seriesSnapshotVersion(series, part) {
+      if (!series || !part) return 0;
+      const saved = Number(series.part_version) || 1;
+      const current = Number(part.version) || 1;
+      return saved < current ? saved : 0;
     }
 
     /** 从「继续听」的进度找起始页：优先该讲页码，其次第 1 页。 */
@@ -3165,7 +3196,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
     }
 
 
-    function SeriesCard({ series, notify, onReload, onPlay }) {
+    function SeriesCard({ series, part, notify, onReload, onPlay }) {
       const [job, setJob] = useState(null);
       const [stitch, setStitch] = useState(null);
       const [voiceJob, setVoiceJob] = useState(null);
@@ -3180,6 +3211,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const voiceActive = voiceJob != null && ['queued', 'voicing', 'cancelling'].includes(String(voiceJob.status || ''));
       const imageActive = imageJob != null && ['queued', 'running', 'cancelling'].includes(String(imageJob.status || ''));
       const playable = lectures.filter((lec) => READY_LECTURE.includes(String(lec.status)));
+      const snapshotVersion = seriesSnapshotVersion(series, part);
       const voicePending = playable.filter((lec) => String(lec.voice_status || 'none') !== 'ready');
       const voiceAllReady = playable.length > 0 && voicePending.length === 0;
       const voiceStarted = ['ready', 'partial', 'failed'].includes(String(series.voice_status || ''));
@@ -3631,6 +3663,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             ? h('span', { className: 'blm-badge' + (['stitched', 'verified'].includes(series.stitch) ? ' ok' : '') },
                 series.stitch === 'verified' ? '已验收' : series.stitch === 'stitched' ? '已衔接' : '未衔接')
             : null,
+          snapshotVersion
+            ? h('span', {
+                className: 'blm-badge warn',
+                title: 'Part 已更新；本系列仍基于创建时的章快照，内容未变',
+              }, '基于旧快照（v' + snapshotVersion + '）')
+            : null,
         ),
         series.voice_code || series.voice_error
           ? h(
@@ -3746,6 +3784,92 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       );
     }
 
+    /** Part 编辑弹窗（AC-93）：改名、移出本 Part 的章、加入未归属的章。 */
+    function PartEditDialog({ draft, chapters, partOf, busy, error, onTitle, onToggle, onSave, onClose }) {
+      const original = Array.isArray(draft.original) ? draft.original.map(Number) : [];
+      return h(
+        'div',
+        {
+          className: 'blm-modal-mask',
+          onClick: (event) => {
+            if (event.target === event.currentTarget && !busy) onClose();
+          },
+        },
+        h(
+          'div',
+          { className: 'blm-modal blm-plan-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '编辑 Part' },
+          h(
+            'div',
+            { className: 'blm-row' },
+            h('strong', null, '编辑 Part'),
+            h('div', { style: { flex: 1 } }),
+            h('button', { className: 'blm-btn', disabled: busy, onClick: onClose }, '关闭'),
+          ),
+          h('div', { className: 'blm-dim', style: { marginTop: 6, fontSize: 12 } },
+            '改名或增删章后 part_version 递增；其系列会显示「基于旧快照」。'),
+          h(
+            'label',
+            { className: 'blm-row', style: { marginTop: 10 } },
+            h('span', { className: 'blm-dim' }, '标题'),
+            h('input', {
+              className: 'blm-select',
+              style: { flex: 1, minWidth: 0 },
+              value: draft.title || '',
+              placeholder: 'Part 标题',
+              disabled: busy,
+              onChange: (event) => onTitle(event.target.value),
+            }),
+          ),
+          error ? h('div', { className: 'blm-error', style: { marginTop: 8 } }, error) : null,
+          h('div', { className: 'blm-dim', style: { marginTop: 8, fontSize: 11 } },
+            '取消勾选 = 从本 Part 移出；勾选 = 加入本 Part。已被其它 Part 占用的章需先在原 Part 移出，再加入本 Part。'),
+          h(
+            'div',
+            { className: 'blm-chapters', style: { maxHeight: '42vh', overflow: 'auto' } },
+            chapters.map((c) => {
+              const n = Number(c.n);
+              const ownedByThis = original.includes(n);
+              const other = !ownedByThis && partOf.get(n);
+              const remove = (draft.remove || []).map(Number);
+              const add = (draft.add || []).map(Number);
+              const checked = ownedByThis ? !remove.includes(n) : add.includes(n);
+              const status = c.front === true
+                ? '前文'
+                : ownedByThis
+                  ? remove.includes(n) ? '将移出' : '本 Part'
+                  : other
+                    ? '属于《' + (other.title || '其它 Part') + '》'
+                    : add.includes(n) ? '将加入' : '可加入';
+              return h(
+                'div',
+                {
+                  className: 'blm-chapter' + (ownedByThis ? ' owns' : ''),
+                  key: c.n + '-' + c.from,
+                  style: { gridTemplateColumns: '22px 34px 1fr 130px' },
+                },
+                h('input', {
+                  type: 'checkbox',
+                  checked,
+                  disabled: c.front === true || !!other || busy,
+                  onChange: () => onToggle(n, ownedByThis),
+                  title: other ? '该章属于《' + (other.title || '其它 Part') + '》，先移出再加入' : ownedByThis ? '取消勾选会从本 Part 移出' : '加入本 Part',
+                }),
+                h('span', { className: 'blm-dim' }, String(c.n ?? '')),
+                h('span', { className: 't', title: c.title }, c.title),
+                h('span', { className: 'blm-dim', style: { textAlign: 'right', fontSize: 11 } }, status),
+              );
+            }),
+          ),
+          h(
+            'div',
+            { className: 'blm-row', style: { marginTop: 10, justifyContent: 'flex-end' } },
+            h('button', { className: 'blm-btn', disabled: busy, onClick: onClose }, '取消'),
+            h('button', { className: 'blm-btn primary', disabled: busy, onClick: onSave }, busy ? '保存中…' : '保存修改'),
+          ),
+        ),
+      );
+    }
+
     function Detail({ bookId, onBack, onChanged, notify, onPlay }) {
       const [data, setData] = useState(null);
       const [parts, setParts] = useState([]);
@@ -3763,7 +3887,22 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [planPartId, setPlanPartId] = useState('');
       const [planWarnings, setPlanWarnings] = useState([]);
       const [savingSeries, setSavingSeries] = useState(false);
-      const [conflict, setConflict] = useState(null);
+      const [partEdit, setPartEdit] = useState(null);
+      const [flashPartId, setFlashPartId] = useState('');
+      const partRefs = useRef({});
+
+      useEffect(() => {
+        if (!flashPartId) return;
+        const node = partRefs.current[flashPartId];
+        if (node && typeof node.scrollIntoView === 'function') {
+          try {
+            node.scrollIntoView({ block: 'center' });
+          } catch {
+            /* 嵌入环境可能不支持参数 */
+          }
+        }
+        setFlashPartId('');
+      }, [flashPartId, parts]);
 
       const load = useCallback(async () => {
         setLoading(true);
@@ -3870,9 +4009,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           body: JSON.stringify({ bookId, chapters, partId, source: 'manual' }),
         });
         notify('已确认 Part《' + out.part.title + '》');
-        setConflict(null);
         setSelected([]);
         await load();
+        setFlashPartId(out.part.id);
+        return out.part;
       };
 
       const confirmPart = async () => {
@@ -3881,55 +4021,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         try {
           await postPart(selected);
         } catch (err) {
-          const conflicts = err.detail && err.detail.conflicts;
-          if (err.code === 'E_PART_CONFLICT' && Array.isArray(conflicts) && conflicts.length) {
-            setConflict({ chapters: selected.slice(), conflicts });
-          } else {
-            notify(err.message);
-          }
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      const mergeConflict = async () => {
-        if (!conflict) return;
-        setBusy(true);
-        try {
-          await postPart(conflict.chapters, conflict.conflicts[0].partId);
-        } catch (err) {
-          if (err.code === 'E_PART_CONFLICT' && err.detail && err.detail.conflicts) {
-            setConflict({ chapters: conflict.chapters, conflicts: err.detail.conflicts });
-          } else {
-            notify(err.message);
-          }
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      const removeConflict = async () => {
-        if (!conflict) return;
-        setBusy(true);
-        try {
-          for (const item of conflict.conflicts) {
-            try {
-              await api('/part/update', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ bookId, partId: item.partId, removeChapters: item.chapters }),
-              });
-            } catch (err) {
-              if (err.code === 'E_PART_EMPTY') {
-                await api('/part?bookId=' + encodeURIComponent(bookId) + '&partId=' + encodeURIComponent(item.partId), { method: 'DELETE' });
-              } else {
-                throw err;
-              }
-            }
-          }
-          await postPart(conflict.chapters);
-        } catch (err) {
-          notify(err.message);
+          // 默认 UI 已禁选，正常操作不会冲突；这里只兜底 API/并发导致的竞态。
+          notify(
+            err.code === 'E_PART_CONFLICT'
+              ? '章节归属冲突：' + err.message + '。请先在该 Part 的「编辑」中移出冲突章。'
+              : err.message,
+          );
         } finally {
           setBusy(false);
         }
@@ -3992,6 +4089,68 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         }
       };
 
+      /** AC-93：组头「编辑」打开；改名/增删章都走 /part/update，成功 version+1。 */
+      const openPartEdit = (part) => {
+        setSelected([]);
+        setPartEdit({
+          partId: part.id,
+          title: part.title || '',
+          originalTitle: part.title || '',
+          original: (part.chapters || []).map(Number),
+          add: [],
+          remove: [],
+          error: '',
+        });
+      };
+
+      const togglePartEditChapter = (n, ownedByThis) => {
+        setPartEdit((cur) => {
+          if (!cur) return cur;
+          if (ownedByThis) {
+            const remove = cur.remove.map(Number);
+            return { ...cur, remove: remove.includes(n) ? remove.filter((x) => x !== n) : remove.concat(n) };
+          }
+          const add = cur.add.map(Number);
+          return { ...cur, add: add.includes(n) ? add.filter((x) => x !== n) : add.concat(n) };
+        });
+      };
+
+      const savePartEdit = async () => {
+        if (!partEdit) return;
+        const title = String(partEdit.title || '').trim();
+        const originalTitle = String(partEdit.originalTitle || '').trim();
+        if (!partEdit.add.length && !partEdit.remove.length && title === originalTitle) {
+          setPartEdit(null);
+          notify('没有修改');
+          return;
+        }
+        setBusy(true);
+        setPartEdit((cur) => (cur ? { ...cur, error: '' } : cur));
+        try {
+          const out = await api('/part/update', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              bookId,
+              partId: partEdit.partId,
+              title: partEdit.title,
+              addChapters: partEdit.add,
+              removeChapters: partEdit.remove,
+            }),
+          });
+          const id = out.part.id;
+          notify('Part 已更新（v' + out.part.version + '）');
+          setPartEdit(null);
+          setSelected([]);
+          await load();
+          setFlashPartId(id);
+        } catch (err) {
+          setPartEdit((cur) => (cur ? { ...cur, error: err.code === 'E_PART_EMPTY' ? 'Part 至少要保留 1 章；要解散请用「删除」。' : err.message } : cur));
+        } finally {
+          setBusy(false);
+        }
+      };
+
       if (loading && !data) return h('div', { className: 'blm-body' }, h('div', { className: 'blm-dim' }, '加载中…'));
       if (!data) return h('div', { className: 'blm-body' }, h('button', { className: 'blm-btn', onClick: onBack }, '← 返回'));
 
@@ -4000,6 +4159,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const cover = data.cover ? API + '/cover?bookId=' + encodeURIComponent(bookId) + '&v=' + encodeURIComponent(book.lastOpenedAt || '') : '';
       const partOf = new Map();
       for (const part of parts) for (const n of part.chapters || []) partOf.set(Number(n), part);
+      const partSeriesCount = (partId) => series.filter((item) => item.part_id === partId).length;
       const selectedChars = chapters.filter((c) => selected.includes(Number(c.n))).reduce((sum, c) => sum + (Number(c.chars) || 0), 0);
       const toggleChapter = (n) => {
         if (partOf.has(Number(n))) return;
@@ -4061,14 +4221,28 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     parts.map((part) =>
                       h(
                         'div',
-                        { className: 'blm-part', key: part.id },
+                        {
+                          className: 'blm-part',
+                          key: part.id,
+                          ref: (node) => {
+                            partRefs.current[part.id] = node;
+                          },
+                        },
                         h(
                           'div',
                           { className: 'blm-part-main' },
-                          h('div', { className: 'blm-title' }, part.title),
-                          h('div', { className: 'blm-meta' }, part.chapters.length + ' 章 · ' + (part.chars || 0) + ' 字 · v' + part.version + ' · 已确认'),
+                          h(
+                            'div',
+                            { className: 'blm-row' },
+                            h('div', { className: 'blm-title' }, part.title),
+                            h('span', { className: 'blm-badge ok' }, '已确认'),
+                          ),
+                          h('div', { className: 'blm-meta' },
+                            part.chapters.length + ' 章 · ' + (part.chars || 0) + ' 字 · ' +
+                            partSeriesCount(part.id) + ' 个系列 · v' + part.version),
                         ),
                         h('button', { className: 'blm-btn', disabled: busy, onClick: () => previewPlan(part) }, '预览讲纲'),
+                        h('button', { className: 'blm-btn', disabled: busy, onClick: () => openPartEdit(part) }, '编辑'),
                         h('button', { className: 'blm-btn', disabled: busy, onClick: () => removePart(part) }, '删除'),
                       ),
                     ),
@@ -4083,18 +4257,21 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               h(
                 'div',
                 { className: 'blm-chapters' },
-                (editing ? draft : chapters).map((c, i) =>
-                  h(
+                (editing ? draft : chapters).map((c, i) => {
+                  const n = Number(c.n);
+                  const owner = partOf.get(n) || null;
+                  const state = chapterSelectionState({ n, front: c.front === true, owner, selected, busy });
+                  return h(
                     'div',
-                    { className: 'blm-chapter' + (partOf.has(Number(c.n)) ? ' owns' : ''), key: c.n + '-' + c.from },
+                    { className: 'blm-chapter' + (owner ? ' owns' : ''), key: c.n + '-' + c.from },
                     editing
                       ? h('span', null)
                       : h('input', {
                           type: 'checkbox',
-                          checked: partOf.has(Number(c.n)) || selected.includes(Number(c.n)),
-                          disabled: c.front === true || partOf.has(Number(c.n)) || busy,
-                          onChange: () => toggleChapter(c.n),
-                          title: c.front === true ? '前文不参与 Part' : partOf.has(Number(c.n)) ? '属于《' + partOf.get(Number(c.n)).title + '》' : '选择这一章',
+                          checked: state.checked,
+                          disabled: state.disabled,
+                          onChange: () => toggleChapter(n),
+                          title: state.title,
                         }),
                     h('span', { className: 'blm-dim' }, String(c.n ?? i + 1)),
                     editing
@@ -4106,9 +4283,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     editing
                       ? h('input', { type: 'number', value: c.to, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { to: Number(e.target.value) }) : x))) })
                       : h('span', { className: 'blm-dim' }, 'p' + c.to),
-                    h('span', { className: 'blm-dim', style: { fontSize: 10, textAlign: 'right' } }, c.front === true ? '前文' : partOf.has(Number(c.n)) ? '属于 ' + partOf.get(Number(c.n)).title : c.manual ? '手动' : ''),
-                  ),
-                ),
+                    h('span', { className: 'blm-dim', style: { fontSize: 10, textAlign: 'right' } }, c.front === true ? '前文' : owner ? '属于 ' + owner.title : c.manual ? '手动' : ''),
+                  );
+                }),
               ),
               !editing
                 ? h(
@@ -4154,30 +4331,27 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     series.map((s) => h(SeriesCard, {
                       key: s.id,
                       series: s,
+                      part: parts.find((p) => p.id === s.part_id) || null,
                       notify,
                       onReload: reloadSeries,
                       onPlay: (item, n) => onPlay && onPlay(item, n),
                     })),
                   )
                 : null,
-        conflict
-          ? h(
-              'div',
-              { className: 'blm-modal-mask' },
-              h(
-                'div',
-                { className: 'blm-modal' },
-                h('div', { className: 'blm-detail-title', style: { fontSize: 15 } }, '章节归属冲突'),
-                h('div', { className: 'blm-dim' },
-                  conflict.conflicts.map((c) => '第 ' + c.chapters.join('、') + ' 章已属于《' + c.title + '》').join('；')),
-                h('div', { className: 'blm-row', style: { marginTop: 12 } },
-                  h('button', { className: 'blm-btn primary', disabled: busy, onClick: mergeConflict }, '并入已有 Part'),
-                  h('button', { className: 'blm-btn', disabled: busy, onClick: removeConflict }, '先移出原 Part'),
-                  h('button', { className: 'blm-btn', disabled: busy, onClick: () => { setConflict(null); setSelected([]); } }, '改选'),
-                ),
-                h('div', { className: 'blm-dim', style: { marginTop: 8, fontSize: 11 } }, '三个选择都会立即改 Part；“改选”不写盘。'),
-              ),
-            )
+        partEdit
+          ? h(PartEditDialog, {
+              draft: partEdit,
+              chapters,
+              partOf,
+              busy,
+              error: partEdit.error,
+              onTitle: (value) => setPartEdit((cur) => (cur ? { ...cur, title: value } : cur)),
+              onToggle: togglePartEditChapter,
+              onSave: savePartEdit,
+              onClose: () => {
+                if (!busy) setPartEdit(null);
+              },
+            })
           : null,
             ),
       );
@@ -5727,6 +5901,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         TransitionCard,
         SeriesCard,
         SeriesDirectory,
+        PartEditDialog,
         Settings,
         PracticePanel,
         ExportDialog,
@@ -5742,6 +5917,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         nextLectureAfter,
         formatSeriesProgress,
         formatJobLine,
+        chapterSelectionState,
+        seriesSnapshotVersion,
         resolveInitialSlide,
         pdfHighlightRects,
         normalizePdfText,

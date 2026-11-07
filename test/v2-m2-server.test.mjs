@@ -57,6 +57,25 @@ test('M2 路由：Part/预览/系列/计划', async () => {
   assert.equal(conflict.ok, false);
   assert.equal(conflict.code, 'E_PART_CONFLICT');
 
+  const updated = await json('/dsh-book-slides/part/update', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: book.id, partId: part.part.id, title: '函数（改）', removeChapters: [7] }),
+  });
+  assert.equal(updated.ok, true);
+  assert.equal(updated.part.version, 2);
+  assert.equal(updated.part.title, '函数（改）');
+  assert.deepEqual(updated.part.chapters, [1, 2, 3, 4, 5, 6]);
+
+  const addedBack = await json('/dsh-book-slides/part/update', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: book.id, partId: part.part.id, addChapters: [7] }),
+  });
+  assert.equal(addedBack.ok, true);
+  assert.equal(addedBack.part.version, 3);
+  assert.deepEqual(addedBack.part.chapters, [1, 2, 3, 4, 5, 6, 7]);
+
   const preview = await json('/dsh-book-slides/plan/preview', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

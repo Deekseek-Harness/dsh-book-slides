@@ -3,6 +3,22 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [Unreleased]
+
+主题「Part 默认禁选、可编辑」：修正 AC-92 与 AC-129 的文档矛盾，按预防式禁选收敛；补 Part 编辑入口。
+
+### 修复
+
+- 已确认 Part 的章在列表中始终只读且不可反选，从源头避免 Part 冲突；不提供“再勾选已属 Part 的章”或冲突三选弹窗。AC-92 改为结果型验收：UI 无重选路径，API 冲突仍返回 `E_PART_CONFLICT` 且不写盘。
+- API/并发冲突只提示“请先在该 Part 的「编辑」中移出冲突章”，不自动并入/移出，不调模型。
+- Part 组头新增「编辑」：可改名、移出本 Part 的章、加入未归属的章；调用 `/part/update`，成功后 `part_version+1`，系列卡显示「基于旧快照（vN）」。
+- 组头补「系列数」与「已确认」徽标；确认/编辑成功后滚动到对应 Part。
+
+### 测试
+
+- 新增 `test/v2-part-ui.test.mjs`：默认禁选/只读、无重选入口、旧快照徽标、Part 编辑弹窗静态渲染与源码入口。
+- `test/v2-m2.test.mjs` 增加系列 `part_version`/章快照不随 Part 编辑改变的断言。
+
 ## [2.0.0-alpha.7] - 2026-11-08
 
 主题「换图不打断播放」：修复播放中「换一张」导致当前页音频/朗读反复从头播放的问题；换图改为独立临时状态 + 作业状态轮询，失败保留旧图。
