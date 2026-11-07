@@ -127,9 +127,11 @@ function deterministicSplitMeta(base, lectures) {
   return Object.assign({}, base, { throughline, seams, terms: [], source: 'rule', stitched: false });
 }
 
-function sliceChapter(chapter, maxChars = HARD_CHARS) {
-  const text = String(chapter.text || '');
-  if (text.length <= maxChars) return [{ chapter: chapter.n, title: chapter.title, from: 0, to: text.length, chars: text.length, text }];
+/** 单章超过 6 万字就在章内拆：6 万字 ≈ 30 页，再长会被页数上限压掉内容。 */
+const CHAPTER_SPLIT_CHARS = 60000;
+
+/** 在 text 里找一处“居中”的切点：优先节标题行，其次行边界，最后按字。 */
+function findCut(text) {
   const lines = text.split(/\r?\n/);
   const offsets = [];
   let at = 0;
@@ -149,23 +151,34 @@ function sliceChapter(chapter, maxChars = HARD_CHARS) {
     cut = text.lastIndexOf('\n', target);
     if (cut < 1000 || text.length - cut < 1000) cut = target;
   }
-  const head = text.slice(0, cut);
-  const tail = text.slice(cut);
-  const parts = [];
-  const total = head.length + tail.length;
-  if (head.length > maxChars) return sliceChapter({ n: chapter.n, title: chapter.title, text: head, chars: head.length }, maxChars).map((s) => Object.assign({}, s, { title: chapter.title, partLabel: s.partLabel || '上' }));
-  if (tail.length > maxChars) {
-    // 极长章继续二分，标签在外部统一编号
-    parts.push({ chapter: chapter.n, title: chapter.title, from: 0, to: head.length, chars: head.length, text: head });
-    const rest = sliceChapter({ n: chapter.n, title: chapter.title, text: tail, chars: tail.length }, maxChars);
-    for (const s of rest) parts.push(Object.assign({}, s, { from: head.length + s.from, to: head.length + s.to }));
-  } else {
-    parts.push({ chapter: chapter.n, title: chapter.title, from: 0, to: head.length, chars: head.length, text: head });
-    parts.push({ chapter: chapter.n, title: chapter.title, from: head.length, to: total, chars: tail.length, text: tail });
+  return cut;
+}
+
+/** 纯文本二分，返回不带标签的段；两半都继续递归，避免极长章丢尾。 */
+function splitRaw(text, maxChars) {
+  if (text.length <= maxChars) return [{ from: 0, to: text.length, chars: text.length, text }];
+  const cut = findCut(text);
+  const out = splitRaw(text.slice(0, cut), maxChars);
+  for (const seg of splitRaw(text.slice(cut), maxChars)) {
+    out.push(Object.assign({}, seg, { from: cut + seg.from, to: cut + seg.to }));
   }
+  return out;
+}
+
+function sliceChapter(chapter, maxChars = CHAPTER_SPLIT_CHARS) {
+  const text = String(chapter.text || '');
+  if (text.length <= maxChars) return [{ chapter: chapter.n, title: chapter.title, from: 0, to: text.length, chars: text.length, text }];
+  const parts = splitRaw(text, maxChars).map((seg) => ({
+    chapter: chapter.n,
+    title: chapter.title,
+    from: seg.from,
+    to: seg.to,
+    chars: seg.chars,
+    text: seg.text,
+  }));
   if (parts.length <= 2) {
     parts[0].partLabel = '上';
-    parts[1].partLabel = '下';
+    if (parts[1]) parts[1].partLabel = '下';
   } else {
     for (let i = 0; i < parts.length; i += 1) parts[i].partLabel = String(i + 1) + '/' + parts.length;
   }
@@ -185,7 +198,7 @@ export function rulePlan(part, chapters) {
   };
   for (const chapter of list) {
     const chars = charsOf(chapter);
-    if (chars > HARD_CHARS) {
+    if (chars > CHAPTER_SPLIT_CHARS) {
       close();
       const slices = sliceChapter(chapter);
       for (const slice of slices) {
@@ -199,6 +212,9 @@ export function rulePlan(part, chapters) {
       continue;
     }
     if (current.length >= MAX_CHAPTERS_PER_LECTURE) close();
+    // I4：单讲 ≤8 万。目标 6 万是软的，但硬上限不能靠“当前讲还很短”放行；
+    // 否则 41999 + 59999 会拼出 10.2 万字的一讲。
+    if (current.length && currentChars + chars > HARD_CHARS) close();
     if (current.length && currentChars + chars > TARGET_CHARS && currentChars >= TARGET_CHARS * 0.7) close();
     current.push(chapter);
     currentChars += chars;
@@ -405,7 +421,7 @@ async function enrichSplitPlan({ ctx, book, part, chapters, base, dir, force }) 
       return {
         plan: Object.assign({}, base, { throughline, seams: normalizedSeams, terms, source: 'model', stitched: true }),
         briefs: briefOut,
-        warnings: [...(briefOut.warnings || []), '第 ' + chapters.find((c) => charsOf(c) > HARD_CHARS).n + ' 章超过 8 万字，已按节拆成 ' + base.lectures.length + ' 讲并生成接缝。'],
+        warnings: [...(briefOut.warnings || []), '第 ' + chapters.find((c) => charsOf(c) > CHAPTER_SPLIT_CHARS).n + ' 章超过 6 万字，已按节拆成 ' + base.lectures.length + ' 讲并生成接缝。'],
       };
     } catch (err) {
       lastError = String((err && err.message) || err);
@@ -420,7 +436,7 @@ async function enrichSplitPlan({ ctx, book, part, chapters, base, dir, force }) 
 
 export async function buildPlan({ ctx, book, part, chapters, dir = '', force = false }) {
   const base = rulePlan(part, chapters);
-  const huge = chapters.filter((c) => charsOf(c) > HARD_CHARS);
+  const huge = chapters.filter((c) => charsOf(c) > CHAPTER_SPLIT_CHARS);
   if (huge.length) {
     const detail = huge
       .map((c) => '第 ' + c.n + ' 章 ' + charsOf(c) + ' 字')
@@ -429,7 +445,7 @@ export async function buildPlan({ ctx, book, part, chapters, dir = '', force = f
       return {
         plan: base,
         briefs: null,
-        warnings: [detail + '超过单讲 8 万字，已自动按节拆成上/下；没有可用模型，系列保持 unstitched。'],
+        warnings: [detail + '超过单章 6 万字，已自动按节拆成上/下；没有可用模型，系列保持 unstitched。'],
       };
     }
     const split = await enrichSplitPlan({ ctx, book, part, chapters, base, dir, force });

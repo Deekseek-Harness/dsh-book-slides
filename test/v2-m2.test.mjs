@@ -54,27 +54,70 @@ test('AC-92/95：Part 确认、冲突、校验、编辑、删除', () => {
   assert.equal(listParts(loaded.book.id).length, 0);
 });
 
-test('AC-96/98：7 章 8.4 万字 → 2 讲 30+12 页；非连续章按字数', async () => {
-  const loaded = makeBook();
-  const nums = [1, 2, 3, 4, 5, 6, 7];
-  const chapters = nums.map((n) => {
-    const c = loaded.chapters.find((x) => x.n === n);
-    return { n, title: c.title, from: c.from, to: c.to, chars: 12000, text: '正'.repeat(12000) };
-  });
-  const part = { id: 'p1', title: '函数', chapters: nums, version: 1 };
-  const out = await buildPlan({ ctx: null, book: loaded.book, part, chapters });
-  assert.equal(out.plan.source, 'rule');
-  assert.equal(out.plan.lectures.length, 2);
-  assert.deepEqual(out.plan.lectures.map((l) => l.pages), [30, 12]);
-  assert.equal(out.plan.totalPages, 42);
-  assert.equal(out.plan.lectures[0].chapters.length, 5);
+const clampPages = (chars) => Math.max(6, Math.min(30, Math.round(chars / 2000)));
 
-  const odd = [1, 3, 5];
-  const oddChapters = odd.map((n) => chapters.find((c) => c.n === n));
-  const oddPlan = await buildPlan({ ctx: null, book: loaded.book, part: { id: 'p2', title: '奇数章', chapters: odd }, chapters: oddChapters });
-  assert.equal(oddPlan.plan.lectures.length, 1);
-  assert.deepEqual(oddPlan.plan.lectures[0].chapters, odd);
-  assert.equal(oddPlan.plan.lectures[0].pages, 18); // 36k / 2000
+/** FR-13 的判据：对任意章集合成立的不变量（I1–I4 + 页预算公式）。 */
+function assertInvariants(plan, nums, label) {
+  assert.ok(plan.lectures.length >= 1 && plan.lectures.length <= 8, label + '：讲数应在 1–8');
+  const covered = [];
+  plan.lectures.forEach((lecture, i) => {
+    assert.equal(lecture.n, i + 1, label + '：讲次应连续');
+    assert.ok(lecture.chapters.length >= 1 && lecture.chapters.length <= 6, label + '：每讲 1–6 章');
+    assert.ok(lecture.chars <= 80000, label + '：每讲应 ≤8 万字，实际 ' + lecture.chars);
+    assert.equal(lecture.pages, clampPages(lecture.chars), label + '：页预算公式');
+    covered.push(...lecture.chapters);
+  });
+  // 章内拆分时同一章会跨讲重复出现（带 slice），此时只要求覆盖完备。
+  if (!plan.lectures.some((l) => l.slice)) {
+    assert.equal(new Set(covered).size, covered.length, label + '：章不应重复');
+  }
+  assert.ok(covered.every((n) => nums.includes(n)), label + '：不应出现 Part 外的章');
+  assert.deepEqual(
+    [...new Set(covered)].sort((a, b) => a - b),
+    nums.slice().sort((a, b) => a - b),
+    label + '：章覆盖应完备',
+  );
+  assert.equal(plan.totalPages, plan.lectures.reduce((sum, l) => sum + l.pages, 0), label + '：总页数');
+  assert.equal(plan.estMinutes, plan.totalPages, label + '：时长由页数派生');
+}
+
+const mkChapter = (n, chars, text) => {
+  const body = text || '正'.repeat(chars);
+  return { n, title: '第' + n + ' 章', from: n, to: n, chars: body.length, text: body };
+};
+
+async function planOf(loaded, chapters) {
+  const part = { id: 'p-' + chapters.map((c) => c.n).join('-'), title: '规则夹具', chapters: chapters.map((c) => c.n) };
+  const out = await buildPlan({ ctx: null, book: loaded.book, part, chapters });
+  return out.plan;
+}
+
+test('AC-96/98：任意章集合满足 I1–I4 与页预算（FR-13.1 夹具 F1–F12）', async () => {
+  const loaded = makeBook();
+  const heading = '\n9.1 第一节\n';
+  const cases = [
+    { id: 'F1', chapters: [1, 2, 3, 4, 5, 6, 7].map((n) => mkChapter(n, 12000)), shape: [[1, 2, 3, 4, 5], [6, 7]], pages: [30, 12] },
+    { id: 'F2', chapters: [1, 2, 3, 4, 5, 6].map((n) => mkChapter(n, 12000)), shape: [[1, 2, 3, 4, 5], [6]], pages: [30, 6] },
+    { id: 'F3', chapters: [mkChapter(1, 60000)], pages: [30] },
+    { id: 'F4', chapters: [mkChapter(1, 80000)], parts: ['上', '下'], pages: [20, 20] },
+    { id: 'F5', chapters: [mkChapter(1, 60001, '甲'.repeat(29996) + heading + '乙'.repeat(29996))], parts: ['上', '下'] },
+    { id: 'F6', chapters: [mkChapter(1, 41999), mkChapter(2, 59999)], pages: [21, 30] },
+    { id: 'F7', chapters: [mkChapter(1, 40000), mkChapter(2, 41000)], pages: [20, 21] },
+    { id: 'F8', chapters: [1, 3, 5].map((n) => mkChapter(n, 12000)), shape: [[1, 3, 5]], pages: [18] },
+    { id: 'F10', chapters: [mkChapter(1, 5000)], pages: [6] },
+    { id: 'F12', chapters: [mkChapter(1, 240000)], parts: ['1/4', '2/4', '3/4', '4/4'], pages: [30, 30, 30, 30] },
+  ];
+  for (const item of cases) {
+    const plan = await planOf(loaded, item.chapters);
+    assertInvariants(plan, item.chapters.map((c) => c.n), item.id);
+    if (item.pages) assert.deepEqual(plan.lectures.map((l) => l.pages), item.pages, item.id + '：页预算');
+    if (item.shape) assert.deepEqual(plan.lectures.map((l) => l.chapters), item.shape, item.id + '：装章');
+    if (item.parts) assert.deepEqual(plan.lectures.map((l) => l.slice && l.slice.part), item.parts, item.id + '：拆分标签');
+  }
+
+  // F9：48 章 ×1.2 万 = 10 讲 > 8，报 E_SERIES_TOO_MANY，不静默截断。
+  const many = Array.from({ length: 48 }, (_, i) => mkChapter(i + 1, 12000));
+  await assert.rejects(planOf(loaded, many), (err) => err.code === 'E_SERIES_TOO_MANY');
 });
 
 test('AC-139：系列先 draft，写 plan 后才 planned，不产生作业', () => {
@@ -152,6 +195,23 @@ test('AC-97：单章 9 万字拆上/下两讲，切点落在节标题', async ()
   assert.deepEqual(out.plan.lectures.map((l) => l.chapters), [[9], [9]]);
   assert.deepEqual(out.plan.lectures.map((l) => l.slice.part), ['上', '下']);
   assert.equal(out.plan.totalChars, text.length);
+  const cutAt = out.plan.lectures[0].slice.to;
+  assert.equal(out.plan.lectures[1].slice.from, cutAt, '上/下两段应首尾相接');
+  assert.ok(text.slice(cutAt).startsWith('9.1 第一节'), '切点应落在节标题行');
+  assert.ok(out.plan.lectures.every((l) => l.chars <= 60000), '每段 ≤6 万');
+
+  // 边界：6 万整不拆；6 万+1 字拆；6–8 万必须拆（否则 30 页上限会压掉内容）。
+  const atCap = await planOf(loaded, [mkChapter(1, 60000)]);
+  assert.equal(atCap.lectures.length, 1, '恰好 6 万不拆');
+  const overCap = await planOf(loaded, [mkChapter(1, 60001)]);
+  assert.equal(overCap.lectures.length, 2, '6 万+1 字应拆上/下');
+  assert.deepEqual(overCap.lectures.map((l) => l.chapters), [[1], [1]]);
+  assert.deepEqual(overCap.lectures.map((l) => l.slice.part), ['上', '下']);
+  assert.ok(overCap.lectures.every((l) => l.chars <= 60000), '每段 ≤6 万');
+  const mid = await planOf(loaded, [mkChapter(1, 70000)]);
+  assert.equal(mid.lectures.length, 2, '6–8 万要拆');
+  const atOldHard = await planOf(loaded, [mkChapter(1, 80000)]);
+  assert.equal(atOldHard.lectures.length, 2, '8 万也要拆');
 
   const series = createSeries({ bookId: book.id, partId: part.id, plan: out.plan });
   assert.equal(series.status, 'planned');
