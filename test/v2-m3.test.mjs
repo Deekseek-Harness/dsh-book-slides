@@ -150,10 +150,11 @@ async function run(series, ctx) {
   return findSeries(series.id);
 }
 
-test('AC-103：2 讲生成后预缝断言逐字通过，音频字段留空，系列 ready/stitched', async () => {
+test('AC-103：预缝注入逐字一致；坏接缝只修该页，不重跑整讲，音频字段留空', async () => {
   const loaded = makeBook('pre');
   const series = makeSeries(loaded);
-  const found = await run(series, makeCtx());
+  const ctx = makeCtx();
+  const found = await run(series, ctx);
 
   assert.equal(found.series.status, 'ready');
   assert.equal(found.series.stitch, 'stitched');
@@ -161,11 +162,24 @@ test('AC-103：2 讲生成后预缝断言逐字通过，音频字段留空，系
   const second = loadLecture(found.dir, 2);
   assert.equal(first.slidesDoc.slides.length, 6);
   assert.equal(second.slidesDoc.slides.length, 6);
-  assert.ok(String(second.slidesDoc.slides[0].audio_script).trim().startsWith(SEAM));
-  assert.ok(String(first.slidesDoc.slides[5].audio_script).trim().endsWith(SEAM));
+
+  // 字符级比对：cover 的前缀与 last 的后缀都恰好是接缝句本身，不是“包含”
+  const lastScript = String(first.slidesDoc.slides[5].audio_script).trim();
+  const coverScript = String(second.slidesDoc.slides[0].audio_script).trim();
+  assert.ok(lastScript.endsWith(SEAM));
+  assert.ok(coverScript.startsWith(SEAM));
+  assert.equal(coverScript.slice(0, SEAM.length), lastScript.slice(-SEAM.length), '封面首句与末页末句逐字相同');
+  assert.ok(lastScript.length <= 220 && coverScript.length <= 220, '朗读稿总长 ≤220 字');
+
   assert.equal(second.slidesDoc.slides[0].audio_file, null);
   assert.equal(second.slidesDoc.slides[0].audio_provider, 'none');
   assert.equal(found.series.lectures[0].status, 'ready');
+
+  // 假模型两侧都不带接缝句 → 每个边界页各修 1 次；整讲不重跑
+  assert.equal(first.lecture.seam_repairs, 1);
+  assert.equal(second.lecture.seam_repairs, 1);
+  assert.equal(ctx.calls.seam, 2, '两个边界页各 1 次页级修复调用');
+  assert.equal(ctx.calls.generate, 2, '只生成 2 讲，不因接缝失败重跑');
 
   const report = buildStitchReport(found);
   assert.equal(report.state, 'stitched');
@@ -173,13 +187,16 @@ test('AC-103：2 讲生成后预缝断言逐字通过，音频字段留空，系
   assert.equal(report.metrics.find((m) => m.id === 'coverage').ok, true);
 });
 
-test('AC-104：篡改第 2 讲封面后只触发 1 次页级修复，第 1 讲文件不变', async () => {
+test('AC-104：篡改第 2 讲封面后只修 1 页，第 1 讲与第 2 讲其余页不变', async () => {
   const loaded = makeBook('seam');
   const series = makeSeries(loaded);
   const generated = await run(series, makeCtx());
   const second = loadLecture(generated.dir, 2);
-  const firstFile = path.join(generated.dir, 'lectures', '1', 'slides.json');
-  const firstMtime = fs.statSync(firstFile).mtimeMs;
+  const pagesBefore = JSON.parse(JSON.stringify(second.slidesDoc.slides));
+  const firstSlidesFile = path.join(generated.dir, 'lectures', '1', 'slides.json');
+  const firstLectureFile = path.join(generated.dir, 'lectures', '1', 'lecture.json');
+  const firstMtime = fs.statSync(firstSlidesFile).mtimeMs;
+  const firstLectureMtime = fs.statSync(firstLectureFile).mtimeMs;
 
   second.slidesDoc.slides[0] = Object.assign({}, second.slidesDoc.slides[0], {
     audio_script: '被改坏的开头，' + '这一段仍然有足够长度但它没有接缝句。'.repeat(2),
@@ -187,17 +204,28 @@ test('AC-104：篡改第 2 讲封面后只触发 1 次页级修复，第 1 讲�
   writeLectureOutputs(generated.dir, 2, second.lecture, second.slidesDoc);
   const before = buildStitchReport(generated);
   assert.equal(before.state, 'unstitched');
-  assert.ok(before.failures.some((f) => f.type === 'seam' && f.lecture === 2));
+  assert.ok(before.failures.some((f) => f.type === 'seam' && f.lecture === 2 && f.page === 1));
 
   const ctx = makeCtx();
   const out = await repairStitch({ found: generated, ctx });
   const secondAfter = loadLecture(generated.dir, 2);
   assert.ok(String(secondAfter.slidesDoc.slides[0].audio_script).trim().startsWith(SEAM));
+
+  // 只修 1 页：第 2 讲封面；其余页逐字不变
+  const seamItems = out.repaired.filter((item) => item.type === 'seam');
+  assert.equal(seamItems.length, 1);
+  assert.equal(seamItems[0].lecture, 2);
+  assert.equal(seamItems[0].page, 1);
+  assert.deepEqual(secondAfter.slidesDoc.slides.slice(1), pagesBefore.slice(1), '第 2 讲其余页不得被改写');
+
+  // 第 1 讲零改动：两个文件 mtime 都不变
+  assert.equal(fs.statSync(firstSlidesFile).mtimeMs, firstMtime);
+  assert.equal(fs.statSync(firstLectureFile).mtimeMs, firstLectureMtime);
+
+  // 重跑断言：报告回到 stitched，seam 100%
   assert.equal(out.report.state, 'stitched');
-  assert.ok(out.repaired.some((item) => item.type === 'seam' && item.lecture === 2));
-  assert.equal(out.repaired.filter((item) => item.type === 'seam').length, 1);
-  assert.equal(fs.statSync(firstFile).mtimeMs, firstMtime);
-  assert.equal(ctx.calls.generate, 0);
+  assert.equal(out.report.metrics.find((m) => m.id === 'seam').ok, true);
+  assert.equal(ctx.calls.generate, 0, '不重生成整讲');
 });
 
 test('AC-105：术语禁用词报告定位到讲，确定性修复后术语 0', async () => {
