@@ -32,11 +32,12 @@
 - `test/v2-m2.test.mjs` 增加系列 `part_version`/章快照不随 Part 编辑改变的断言。
 - `test/v2-m2.test.mjs` 的 AC-96/97/98 改为表驱动：FR-13.1 夹具 F1–F12 + 6 万整/6 万+1 边界 + 48 章 `E_SERIES_TOO_MANY`。
 
-### 验收判据化（AC-99 ~ AC-102）
+### 验收判据化（AC-99 ~ AC-106）
 
 - SRS v1.6：AC-99 / AC-100 改为“构造 → 断言 → 判定 → 机检入口 → 人工边界”，`sections` 校验明确覆盖落盘 `briefs.json`，坏 JSON 用故障注入判定；§10 / §12.7 / 附录 D 同步。
 - SRS v1.7：AC-101 / AC-102 同口径改造——`seams` 数 ≠ N−1 与术语凭空发明只重试 1 次；两次失败降级规则 plan 且过生成门；FR-15 校验口径改为“术语出现在原文或 briefs 中”。
 - SRS v1.8：AC-103 / AC-104 改为可执行判据——构造坏接缝、字符级断言与 `seam_repairs` 计数；篡改后只修 1 页、第 2 讲其余页与第 1 讲 mtime 不变；FR-16 补“可观察”。
+- SRS v1.9：AC-105 / AC-106 改为可执行判据——术语/重复率定位到页并定点修复、第 1 讲 mtime 不变；补“修复幂等”与“ρ 只告警”规则与用例；新增 `npm run verify:stitch`（六指标表 + 失败项，退出码 0/1）。
 - `briefs.json` 读取侧校验：讲纲缓存命中与 `GET /briefs` 都会重跑 `sections` 原文校验；改坏的章回退“标题 + 首尾段”并给 warning，不静默采用，也不覆盖人工修改。
 - `/plan/preview` 的 `briefsSource` 增加 `mixed`（部分章回退）；`GET /briefs` 返回 `warnings` 与 `rejected`。
 - 新增 `npm run verify:briefs`（AC-99 机检，退出码 0/1）、`test/v2-briefs.test.mjs`（AC-99/100）与 `test/v2-plan-ac.test.mjs`（AC-101/102，含降级后过生成门与 briefs 术语放行的反向用例）。

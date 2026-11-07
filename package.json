@@ -72,7 +72,8 @@
     "test:chapters": "node test/books.toc.e2e.mjs",
     "test:truth": "node test/books.toc.e2e.mjs --truth test/truth --baseline",
     "test:truth:mech": "node test/books.mech.e2e.mjs --truth test/truth --baseline",
-    "verify:briefs": "node scripts/verify-briefs.mjs"
+    "verify:briefs": "node scripts/verify-briefs.mjs",
+    "verify:stitch": "node scripts/verify-stitch.mjs"
   },
   "keywords": [
     "dsh-plugin",

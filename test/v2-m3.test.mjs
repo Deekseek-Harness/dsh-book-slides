@@ -150,7 +150,7 @@ async function run(series, ctx) {
   return findSeries(series.id);
 }
 
-test('AC-103：预缝注入逐字一致；坏接缝只修该页，不重跑整讲，音频字段留空', async () => {
+test('FR-16/AC-103：预缝注入逐字一致；坏接缝只修该页，不重跑整讲，音频字段留空', async () => {
   const loaded = makeBook('pre');
   const series = makeSeries(loaded);
   const ctx = makeCtx();
@@ -187,7 +187,7 @@ test('AC-103：预缝注入逐字一致；坏接缝只修该页，不重跑整�
   assert.equal(report.metrics.find((m) => m.id === 'coverage').ok, true);
 });
 
-test('AC-104：篡改第 2 讲封面后只修 1 页，第 1 讲与第 2 讲其余页不变', async () => {
+test('FR-16/AC-104：篡改第 2 讲封面后只修 1 页，第 1 讲与第 2 讲其余页不变', async () => {
   const loaded = makeBook('seam');
   const series = makeSeries(loaded);
   const generated = await run(series, makeCtx());
@@ -228,10 +228,12 @@ test('AC-104：篡改第 2 讲封面后只修 1 页，第 1 讲与第 2 讲其�
   assert.equal(ctx.calls.generate, 0, '不重生成整讲');
 });
 
-test('AC-105：术语禁用词报告定位到讲，确定性修复后术语 0', async () => {
+test('FR-17/AC-105：术语禁用词报告定位到讲，确定性修复后术语 0，其余讲不变', async (t) => {
   const loaded = makeBook('term');
   const series = makeSeries(loaded);
   const generated = await run(series, makeCtx());
+  const firstSlidesFile = path.join(generated.dir, 'lectures', '1', 'slides.json');
+  const firstMtime = fs.statSync(firstSlidesFile).mtimeMs;
   const second = loadLecture(generated.dir, 2);
   second.slidesDoc.slides[2] = Object.assign({}, second.slidesDoc.slides[2], { title: '定义区间与邻域' });
   writeLectureOutputs(generated.dir, 2, second.lecture, second.slidesDoc);
@@ -246,9 +248,11 @@ test('AC-105：术语禁用词报告定位到讲，确定性修复后术语 0', 
   const after = loadLecture(generated.dir, 2);
   assert.ok(String(after.slidesDoc.slides[2].title).includes('定义域'));
   assert.ok(!String(after.slidesDoc.slides[2].title).includes('定义区间'));
+  assert.equal(fs.statSync(firstSlidesFile).mtimeMs, firstMtime, '其余讲不应被重写');
+  t.diagnostic('terms: 1 → 0；修复只改第 2 讲，第 1 讲 mtime 不变');
 });
 
-test('AC-106：重复率超限报告建议重生成衔接页，页级修复后 ≤0.5 且第 1 讲不变', async () => {
+test('FR-17/AC-106：重复率超限报告建议重生成衔接页，页级修复后 ≤0.5 且第 1 讲不变', async (t) => {
   const loaded = makeBook('dup');
   const series = makeSeries(loaded);
   const generated = await run(series, makeCtx());
@@ -277,9 +281,69 @@ test('AC-106：重复率超限报告建议重生成衔接页，页级修复后 �
   assert.ok(out.repaired.some((item) => item.type === 'duplicate'));
   assert.ok(ctx.calls.duplicate >= 1);
   assert.equal(fs.statSync(firstFile).mtimeMs, firstMtime);
+  t.diagnostic('duplicate: ' + dupMetric.value + ' → ' + rate.toFixed(2) + '；第 1 讲 mtime 不变');
 });
 
-test('作业幂等：已 ready 的系列再次 start 命中缓存，不产生新调用', async () => {
+test('FR-17：同一份已修复的报告重复执行修复不产生新调用', async (t) => {
+  const loaded = makeBook('repair-idem');
+  const series = makeSeries(loaded);
+  const generated = await run(series, makeCtx());
+  const first = loadLecture(generated.dir, 1);
+  const second = loadLecture(generated.dir, 2);
+  second.slidesDoc.slides[3] = Object.assign({}, first.slidesDoc.slides[3], {
+    source_pages: { from: 2, to: 2 },
+    source_quote: '乙'.repeat(60),
+  });
+  writeLectureOutputs(generated.dir, 2, second.lecture, second.slidesDoc);
+
+  const ctx = makeCtx();
+  const firstRun = await repairStitch({ found: generated, ctx });
+  assert.ok(ctx.calls.duplicate >= 1, '第一次修复应触发页级重写');
+  assert.equal(firstRun.report.state, 'stitched');
+
+  const state = { calls: 0 };
+  const throwingCtx = {
+    get(name) {
+      if (name === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'fake', model: 'fake' }) };
+      if (name !== 'llm') return null;
+      return {
+        async prepareCall() {
+          return {
+            config: {},
+            async *stream() {
+              state.calls += 1;
+              throw new Error('第二次修复不应调用模型');
+            },
+          };
+        },
+      };
+    },
+  };
+  const secondRun = await repairStitch({ found: generated, ctx: throwingCtx });
+  assert.equal(state.calls, 0, '重复执行修复不应产生新调用');
+  assert.deepEqual(secondRun.repaired, []);
+  assert.equal(secondRun.report.state, 'stitched');
+  assert.equal(secondRun.unresolved.length, 0);
+  t.diagnostic('第二次修复：0 次模型调用、0 条 repaired');
+});
+
+test('FR-17：密度 ρ 越界只告警，不改变 state', async (t) => {
+  const loaded = makeBook('rho');
+  const series = makeSeries(loaded);
+  const generated = await run(series, makeCtx());
+  const report = buildStitchReport(generated);
+  const density = report.metrics.find((m) => m.id === 'density');
+  assert.equal(density.blocking, false, 'ρ 不是门禁');
+  assert.deepEqual(density.range, [2.5, 8]);
+  assert.equal(density.ok, true);
+  assert.equal(density.warn, true, '本夹具每页原文远多于朗读稿，ρ 必然越界');
+  assert.ok(report.warnings.some((w) => /密度/.test(w)));
+  assert.equal(report.failures.filter((f) => f.type === 'density').length, 0);
+  assert.equal(report.state, 'stitched', 'ρ 越界不得把系列判成 unstitched');
+  t.diagnostic('density warn=true state=' + report.state + '（ρ 不阻塞）');
+});
+
+test('FR-5：作业幂等，已 ready 的系列再次 start 命中缓存，不产生新调用', async () => {
   const loaded = makeBook('cached');
   const series = makeSeries(loaded);
   const generated = await run(series, makeCtx());
@@ -291,7 +355,7 @@ test('作业幂等：已 ready 的系列再次 start 命中缓存，不产生新
   assert.equal(ctx.calls.generate, 0);
 });
 
-test('启动归一：drafting/stitching 与进行中的讲标成 interrupted', () => {
+test('FR-5：启动归一，drafting/stitching 与进行中的讲标成 interrupted', () => {
   const loaded = makeBook('reconcile');
   const series = makeSeries(loaded);
   const found = findSeries(series.id);
@@ -307,7 +371,7 @@ test('启动归一：drafting/stitching 与进行中的讲标成 interrupted', (
   assert.equal(loadLecture(after.dir, 1).lecture.status, 'interrupted');
 });
 
-test('页序与章序：后一页允许回顾前文，source_pages 回退不算失败', async () => {
+test('FR-17：页序与章序，后一页允许回顾前文，source_pages 回退不算失败', async () => {
   const loaded = makeBook('order');
   const series = makeSeries(loaded);
   const generated = await run(series, makeCtx());
@@ -324,7 +388,7 @@ test('页序与章序：后一页允许回顾前文，source_pages 回退不算�
   assert.ok(!report.failures.some((failure) => /页序回退/.test(failure.message)));
 });
 
-test('批预算：超长章按 1.2 万/8 千切批，后续批不出 cover；重跑复用批检查点', async () => {
+test('FR-16：批预算，超长章按 1.2 万/8 千切批，后续批不出 cover；重跑复用批检查点', async () => {
   const text = '第1章 长\n' + '甲'.repeat(20000);
   const rawPages = [{ page: 1, text }];
   const book = createBook({
@@ -399,6 +463,7 @@ test('批预算：超长章按 1.2 万/8 千切批，后续批不出 cover；重
   assert.ok(doc.slidesDoc.slides.length > 6);
   assert.equal(doc.slidesDoc.slides.filter((slide) => slide.layout === 'cover').length, 1);
   assert.equal(doc.lecture.pages, doc.slidesDoc.slides.length);
+  // 单讲系列没有接缝可检，当前实现直接置 verified（语义待定，见实现进度 §4）
   assert.equal(after.series.stitch, 'verified');
 
   // 强制重跑同一讲：批检查点命中，不再调用模型
@@ -427,9 +492,4 @@ test('批预算：超长章按 1.2 万/8 千切批，后续批不出 cover；重
 
 test.after(() => {
   fs.rmSync(ROOT, { recursive: true, force: true });
-});
-
-
-
-
-
+})
