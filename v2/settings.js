@@ -16,7 +16,7 @@ import { storageStats, dirSize } from './books.js';
 import { recentErrors } from './errors.js';
 import { resolveModel } from './llm.js';
 import { readVoiceConfig } from '../tts.js';
-import { voiceTablePayload, workflowPayload } from './comfy-tts.js';
+import { refTablePayload, workflowPayload } from './comfy-clone.js';
 
 const require = createRequire(import.meta.url);
 const PLUGIN_DIR = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -221,7 +221,7 @@ export function diagnosticsPayload() {
     workflow = null;
   }
   try {
-    const table = voiceTablePayload();
+    const table = refTablePayload();
     voiceTable = { name: table.name, model: table.model, source: table.source, count: table.count };
   } catch {
     voiceTable = null;
@@ -239,7 +239,7 @@ export function diagnosticsPayload() {
     voice: {
       provider: voiceConfig.provider,
       model: voiceConfig.model,
-      comfyVoice: voiceConfig.comfyVoice,
+      comfyRefVoice: voiceConfig.comfyRefVoice,
       textNode: voiceConfig.textNode,
     },
     comfy: { workflow: workflow, voiceTable: voiceTable },

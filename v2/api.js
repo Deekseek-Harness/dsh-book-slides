@@ -63,11 +63,11 @@ import {
 import { deleteBackup, diagnosticsPayload, listBackups, openBackup, settingsPayload } from './settings.js';
 import {
   probeComfyTts,
-  saveVoiceTable,
+  saveRefTable,
   saveWorkflow as saveTtsWorkflow,
-  voiceTablePayload,
+  refTablePayload,
   workflowPayload,
-} from './comfy-tts.js';
+} from './comfy-clone.js';
 import {
   cancelPracticeJob,
   cancelPracticeJobsForBook,
@@ -978,7 +978,8 @@ async function handleVoiceProbe(req, res, options) {
   const body = await readJsonBody(req, 64 * 1024);
   const result = await probeVoiceConfig(body && body.text, {
     fetchImpl: options && options.voiceFetch,
-    speaker: (body && (body.comfyVoice || body.speaker)) || '',
+    speaker: (body && (body.comfyRefVoice || body.comfyVoice || body.speaker)) || '',
+    refVoice: (body && (body.comfyRefVoice || body.comfyVoice)) || '',
     voice: (body && body.voice) || '',
   });
   if (!result.ok) {
@@ -1025,24 +1026,24 @@ async function handleVoiceWorkflow(req, res) {
   }
 }
 
-async function handleVoiceSpeakers(req, res) {
+async function handleVoiceRefVoices(req, res) {
   ensureRoot();
   if (req.method === 'GET') {
     try {
-      sendJson(res, 200, { ok: true, table: voiceTablePayload() });
+      sendJson(res, 200, { ok: true, table: refTablePayload() });
     } catch (err) {
-      sendError(res, (err && err.code) || 'E_TTS_VOICE_TABLE', String((err && err.message) || err), (err && err.hint) || '');
+      sendError(res, (err && err.code) || 'E_TTS_VOICE_REF', String((err && err.message) || err), (err && err.hint) || '');
     }
     return;
   }
   const body = await readJsonBody(req, 512 * 1024);
   try {
-    const table = saveVoiceTable(body);
+    const table = saveRefTable(body);
     sendJson(res, 200, { ok: true, table: table });
   } catch (err) {
     sendJson(res, 200, {
       ok: false,
-      code: (err && err.code) || 'E_TTS_VOICE_TABLE',
+      code: (err && err.code) || 'E_TTS_VOICE_REF',
       error: String((err && err.message) || err),
       hint: (err && err.hint) || '',
     });
@@ -1804,8 +1805,8 @@ async function routeM1Inner(req, res, url, options = {}) {
     await handleVoiceWorkflow(req, res);
     return true;
   }
-  if (pathname === PREFIX + '/voice/speakers') {
-    await handleVoiceSpeakers(req, res);
+  if (pathname === PREFIX + '/voice/refvoices') {
+    await handleVoiceRefVoices(req, res);
     return true;
   }
   if (pathname === PREFIX + '/voice/comfy/probe') {

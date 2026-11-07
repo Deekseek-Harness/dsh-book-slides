@@ -4115,7 +4115,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               provider: saved.provider || 'browser',
               model: saved.model || 'qwen3-tts-flash',
               voice: saved.voice || '',
-              comfyVoice: saved.comfyVoice || 'Vivian',
+              comfyRefVoice: saved.comfyRefVoice || 'builtin-vivian',
               textNode: saved.textNode || '',
               rate: Number(saved.rate) || 1,
             }
@@ -4123,7 +4123,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               provider: 'browser',
               model: 'qwen3-tts-flash',
               voice: '',
-              comfyVoice: 'Vivian',
+              comfyRefVoice: 'builtin-vivian',
               textNode: '',
               rate: 1,
             };
@@ -4161,7 +4161,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             provider: voiceOut.voice.provider || 'browser',
             model: voiceOut.voice.model || 'qwen3-tts-flash',
             voice: voiceOut.voice.voice || '',
-            comfyVoice: voiceOut.voice.comfyVoice || 'Vivian',
+            comfyRefVoice: voiceOut.voice.comfyRefVoice || 'builtin-vivian',
             textNode: voiceOut.voice.textNode || '',
             rate: Number(voiceOut.voice.rate) || 1,
           });
@@ -4222,7 +4222,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 provider: out.voice.provider || 'browser',
                 model: out.voice.model || 'qwen3-tts-flash',
                 voice: out.voice.voice || '',
-                comfyVoice: out.voice.comfyVoice || 'Vivian',
+                comfyRefVoice: out.voice.comfyRefVoice || 'builtin-vivian',
                 textNode: out.voice.textNode || '',
                 rate: Number(out.voice.rate) || 1,
               });
@@ -4278,7 +4278,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               text: '你好，这是一段试听，用来确认语音能出声。',
-              comfyVoice: form.provider === 'comfyui-tts' ? comfyVoiceValue : '',
+              comfyRefVoice: form.provider === 'comfyui-tts' ? comfyRefVoiceValue : '',
               voice: form.provider === 'qwen3-tts' ? form.voice : '',
             }),
           });
@@ -4390,11 +4390,11 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           }
           setTtsProbe(out);
           const missed = out.missing && Array.isArray(out.missing.nodes) ? out.missing.nodes : [];
-          const unsupported = out.voiceTable && Array.isArray(out.voiceTable.unsupported) ? out.voiceTable.unsupported : [];
+          const ref = out.refVoice || {};
           setTtsMsg(
             '连接成功（ComfyUI ' + (out.version || '未知版本') + '）' +
-              (missed.length ? '；缺节点：' + missed.slice(0, 3).join('、') : '') +
-              (unsupported.length ? '；' + unsupported.length + ' 个音色不被模型支持' : ''),
+              (ref.name ? '；参考：' + ref.name + (ref.duration_ms ? ' ' + (ref.duration_ms / 1000).toFixed(1) + 's' : '') : '') +
+              (missed.length ? '；缺节点：' + missed.slice(0, 3).join('、') : ''),
           );
         } catch (err) {
           setTtsProbe(null);
@@ -4414,10 +4414,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           try {
             table = JSON.parse(text);
           } catch {
-            setTtsMsg('音色表不是合法 JSON');
+            setTtsMsg('参考库不是合法 JSON');
             return;
           }
-          const out = await api('/voice/speakers', {
+          const out = await api('/voice/refvoices', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ table, name: file.name }),
@@ -4425,13 +4425,13 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           setTtsTable(out.table || null);
           setTtsProbe(null);
           if (out.table) {
-            const names = (out.table.speakers || []).map((item) => item.name);
-            setForm((prev) => Object.assign({}, prev, { comfyVoice: names.includes(prev.comfyVoice) ? prev.comfyVoice : out.table.defaultVoice }));
+            const ids = (out.table.voices || []).map((item) => item.id);
+            setForm((prev) => Object.assign({}, prev, { comfyRefVoice: ids.includes(prev.comfyRefVoice) ? prev.comfyRefVoice : out.table.defaultVoice }));
           }
-          setTtsMsg('音色表已导入（' + ((out.table && out.table.count) || 0) + ' 个音色）');
+          setTtsMsg('参考 voice 库已导入（' + ((out.table && out.table.count) || 0) + ' 项）');
         } catch (err) {
           const detail = (err && err.detail) || {};
-          setTtsMsg((detail.code || err.code || 'E_TTS_VOICE_TABLE') + '：' + (detail.error || err.message));
+          setTtsMsg((detail.code || err.code || 'E_TTS_VOICE_REF') + '：' + (detail.error || err.message));
         } finally {
           setTtsBusy(false);
         }
@@ -4440,15 +4440,15 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const resetVoiceTable = async () => {
         setTtsBusy(true);
         try {
-          const out = await api('/voice/speakers', {
+          const out = await api('/voice/refvoices', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ reset: true }),
           });
           setTtsTable(out.table || null);
           setTtsProbe(null);
-          setForm((prev) => Object.assign({}, prev, { comfyVoice: (out.table && out.table.defaultVoice) || prev.comfyVoice }));
-          setTtsMsg('已恢复默认音色表（9 音色）');
+          setForm((prev) => Object.assign({}, prev, { comfyRefVoice: (out.table && out.table.defaultVoice) || prev.comfyRefVoice }));
+          setTtsMsg('已恢复默认参考 voice 库（2 项）');
         } catch (err) {
           setTtsMsg(String((err && err.message) || err));
         } finally {
@@ -4720,10 +4720,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const imageForm = (image && image.image) || null;
       const workflowInfo = (imageForm && imageForm.workflow) || {};
       const comfyAddress = imageForm || { host: '127.0.0.1', port: 8188, baseUrl: 'http://127.0.0.1:8188' };
-      const ttsSpeakers = (ttsTable && ttsTable.speakers) || [];
-      const ttsUnsupported = new Set((ttsProbe && ttsProbe.voiceTable && ttsProbe.voiceTable.unsupported) || []);
-      const comfyVoiceValue = ttsSpeakers.some((item) => item.name === form.comfyVoice)
-        ? form.comfyVoice
+      const ttsRefs = (ttsTable && ttsTable.voices) || [];
+      const comfyRefVoiceValue = ttsRefs.some((item) => item.id === form.comfyRefVoice)
+        ? form.comfyRefVoice
         : (ttsTable && ttsTable.defaultVoice) || '';
 
       return h(
@@ -4762,7 +4761,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     const patch = { provider };
                     if (provider === 'qwen3-tts' && !form.voice && qwenVoices.length) patch.voice = qwenVoices[0].id;
                     if (provider === 'browser' && form.provider === 'qwen3-tts') patch.voice = '';
-                    if (provider === 'comfyui-tts' && !form.comfyVoice) patch.comfyVoice = (ttsTable && ttsTable.defaultVoice) || 'Vivian';
+                    if (provider === 'comfyui-tts' && !form.comfyRefVoice) patch.comfyRefVoice = (ttsTable && ttsTable.defaultVoice) || 'builtin-vivian';
                     save(patch);
                   },
                 },
@@ -4861,25 +4860,25 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                       'select',
                       {
                         className: 'blm-select',
-                        value: comfyVoiceValue,
-                        disabled: saving || ttsBusy || !ttsSpeakers.length,
-                        'aria-label': 'ComfyUI 音色',
+                        value: comfyRefVoiceValue,
+                        disabled: saving || ttsBusy || !ttsRefs.length,
+                        'aria-label': 'ComfyUI 参考 voice',
                         onChange: (event) => {
                           const value = event.target.value;
-                          setForm((prev) => Object.assign({}, prev, { comfyVoice: value }));
-                          save({ comfyVoice: value });
+                          setForm((prev) => Object.assign({}, prev, { comfyRefVoice: value }));
+                          save({ comfyRefVoice: value });
                         },
                       },
-                      ttsSpeakers.length
-                        ? ttsSpeakers.map((item) =>
+                      ttsRefs.length
+                        ? ttsRefs.map((item) =>
                             h(
                               'option',
-                              { key: item.name, value: item.name, disabled: ttsUnsupported.has(item.name) },
-                              (item.label || item.name) + (item.style ? ' · ' + item.style : '') + (item.lang ? ' · ' + item.lang : '') +
-                                (ttsUnsupported.has(item.name) ? '（模型不支持）' : ''),
+                              { key: item.id, value: item.id },
+                              item.name + (item.duration_ms ? ' · ' + (item.duration_ms / 1000).toFixed(1) + 's' : '') + (item.lang ? ' · ' + item.lang : '') +
+                                (item.default ? '（默认）' : ''),
                             ),
                           )
-                        : h('option', { value: '' }, '当前音色表为空'),
+                        : h('option', { value: '' }, '当前参考库为空'),
                     )
                   : h(
                       'select',
@@ -4894,8 +4893,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                       voices.map((item) => h('option', { key: item.voiceURI || item.name, value: item.name }, item.name + ' · ' + item.lang)),
                     ),
               form.provider === 'comfyui-tts'
-                ? h('span', { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') : '音色表未加载' },
-                    ttsTable ? (ttsTable.source === 'default' ? '默认音色表' : '自定义音色表') + ' · ' + (ttsTable.count || 0) + ' 个' : '音色表未加载')
+                ? h('span', { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') : '参考库未加载' },
+                    ttsTable ? (ttsTable.source === 'builtin' ? '内置参考库' : '自定义参考库') + ' · ' + (ttsTable.count || 0) + ' 项' : '参考库未加载')
                 : null,
             ),
             form.provider === 'browser'
@@ -5022,18 +5021,18 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                   h(
                     'div',
                     { className: 'blm-field' },
-                    h('span', { className: 'label' }, '音色表'),
+                    h('span', { className: 'label' }, '参考 voice 库'),
                     h(
                       'span',
-                      { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') + ' · ' + (ttsTable.count || 0) + ' 个' : '音色表未加载' },
-                      ttsTable ? (ttsTable.source === 'default' ? '默认' : '自定义') + ' · ' + (ttsTable.count || 0) + ' 个音色' : '未加载',
+                      { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') + ' · ' + (ttsTable.count || 0) + ' 项' : '参考库未加载' },
+                      ttsTable ? (ttsTable.source === 'builtin' ? '内置' : '自定义') + ' · ' + (ttsTable.count || 0) + ' 项参考' : '未加载',
                     ),
                     h('button', {
                       className: 'blm-btn',
                       disabled: saving || ttsBusy,
-                      title: '导入模型音色表 JSON（对象或纯音色名数组）；只写本地，不要求 ComfyUI 在线',
+                      title: '导入参考 voice 库 JSON（voices:[{id,name,audio,ref_text}]）；只写本地，不要求 ComfyUI 在线',
                       onClick: () => document.getElementById('blm-tts-table-input')?.click(),
-                    }, '导入音色表'),
+                    }, '导入参考库'),
                     h('input', {
                       id: 'blm-tts-table-input',
                       type: 'file',
@@ -5045,11 +5044,11 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                         importVoiceTable(file);
                       },
                     }),
-                    h('button', { className: 'blm-btn', disabled: saving || ttsBusy, title: '恢复 Qwen3-TTS-CustomVoice 默认 9 音色', onClick: resetVoiceTable }, '恢复默认'),
+                    h('button', { className: 'blm-btn', disabled: saving || ttsBusy, title: '恢复内置参考 voice（Vivian / Uncle_fu）', onClick: resetVoiceTable }, '恢复默认'),
                   ),
                   ttsMsg ? h('div', { className: 'blm-note' }, ttsMsg) : null,
-                  ttsProbe && ttsProbe.voiceTable && ttsProbe.voiceTable.unsupported && ttsProbe.voiceTable.unsupported.length
-                    ? h('div', { className: 'blm-note warn' }, '音色表与当前模型不完全一致：' + ttsProbe.voiceTable.unsupported.length + ' 个音色不被支持（' + ttsProbe.voiceTable.unsupported.slice(0, 4).join('、') + '）。换模型后请导入匹配的音色表。')
+                  ttsProbe && ttsProbe.warnings && ttsProbe.warnings.filter((item) => /参考/.test(String(item))).length
+                    ? h('div', { className: 'blm-note warn' }, ttsProbe.warnings.filter((item) => /参考/.test(String(item))).slice(0, 2).join('；'))
                     : null,
                   ttsWorkflow && ttsWorkflow.warnings && ttsWorkflow.warnings.length
                     ? h('div', { className: 'blm-note warn' }, ttsWorkflow.warnings.join('；'))
@@ -5070,7 +5069,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     {
                       className: 'blm-btn',
                       disabled: saving || ttsBusy,
-                      title: '只读检查 ComfyUI 版本、节点和音色支持，不生成音频',
+                      title: '只读检查 ComfyUI 版本、节点与参考 voice，不生成音频',
                       onClick: probeComfyConnection,
                     },
                     ttsBusy ? '测试中…' : '连接测试',
@@ -5081,7 +5080,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 {
                   className: 'blm-btn',
                   disabled: saving || ttsBusy,
-                  title: form.provider === 'comfyui-tts' ? '用当前音色真跑一次 ComfyUI 工作流，只播放、不落盘' : '试听当前供应商的合成效果',
+                  title: form.provider === 'comfyui-tts' ? '用当前参考 voice 真跑一次 ComfyUI 克隆工作流，只播放、不落盘' : '试听当前供应商的合成效果',
                   onClick: probe,
                 },
                 '试听',
@@ -5313,7 +5312,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     'dd',
                     null,
                     diagnostics.voice
-                      ? diagnostics.voice.provider + ' · 音色 ' + (diagnostics.voice.comfyVoice || '—') + ' · 朗读稿位置 ' + (diagnostics.voice.textNode || '自动')
+                      ? diagnostics.voice.provider + ' · 参考 ' + (diagnostics.voice.comfyRefVoice || '—') + ' · 朗读稿位置 ' + (diagnostics.voice.textNode || '自动')
                       : '—',
                   ),
                   h(
@@ -5325,7 +5324,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     'dd',
                     null,
                     diagnostics.comfy && diagnostics.comfy.workflow
-                      ? (diagnostics.comfy.workflow.name || '—') + ' · ' + (diagnostics.comfy.workflow.format || '') + ' · 音色表 ' + ((diagnostics.comfy.voiceTable && diagnostics.comfy.voiceTable.name) || '—')
+                      ? (diagnostics.comfy.workflow.name || '—') + ' · ' + (diagnostics.comfy.workflow.format || '') + ' · 参考库 ' + ((diagnostics.comfy.voiceTable && diagnostics.comfy.voiceTable.name) || '—')
                       : '—',
                   ),
                   h('dt', null, '最近错误'),

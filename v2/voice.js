@@ -28,7 +28,7 @@ import { ROOT, writeJson } from './root.js';
 import { lectureDir, loadLecture } from './lectures.js';
 import { findSeries, patchSeriesLecture, persistSeries } from './series.js';
 import { recordError } from './errors.js';
-import { matchSpeakerName, prepareComfyVoice, probeComfySpeech, synthesizeComfyVoicing, voiceTablePayload, workflowPayload } from './comfy-tts.js';
+import { prepareComfyVoice, probeComfySpeech, refTablePayload, synthesizeComfyVoicing, workflowPayload } from './comfy-clone.js';
 
 const ACTIVE = ['queued', 'voicing', 'cancelling'];
 const READY = ['ready', 'ready_degraded'];
@@ -84,18 +84,18 @@ export function voicePayload() {
     workflow = { valid: false, error: String((err && err.message) || err), warnings: [] };
   }
   try {
-    voiceTable = voiceTablePayload();
+    voiceTable = refTablePayload();
   } catch (err) {
-    voiceTable = { name: '', model: '', source: 'default', count: 0, speakers: [], defaultVoice: '', warning: String((err && err.message) || err) };
+    voiceTable = { name: '', model: '', source: 'builtin', count: 0, voices: [], defaultVoice: '', warning: String((err && err.message) || err) };
   }
   const publicConfig = publicVoiceConfig(readVoiceConfig());
-  if (voiceTable && voiceTable.speakers && voiceTable.speakers.length) {
-    const matched = matchSpeakerName(voiceTable, publicConfig.comfyVoice);
-    if (matched && matched !== publicConfig.comfyVoice) {
-      publicConfig.comfyVoice = matched;
-      // 等价名归一（Uncle_Fu → Uncle Fu），不是回落到默认音色；顺手把旧配置迁成表里的写法
+  if (voiceTable && voiceTable.voices && voiceTable.voices.length) {
+    const known = voiceTable.voices.some((item) => item.id === publicConfig.comfyRefVoice);
+    const wanted = known ? publicConfig.comfyRefVoice : voiceTable.defaultVoice;
+    if (wanted && wanted !== publicConfig.comfyRefVoice) {
+      publicConfig.comfyRefVoice = wanted;
       try {
-        writeVoiceConfig({ comfyVoice: matched });
+        writeVoiceConfig({ comfyRefVoice: wanted });
       } catch {
         /* 迁移失败不影响本次显示 */
       }
@@ -108,6 +108,7 @@ export function voicePayload() {
     qwenVoices: QWEN_VOICES,
     workflow: workflow,
     voiceTable: voiceTable,
+    refVoices: voiceTable,
     note: 'Qwen3-TTS 的 Key 只存本机 voice.json（0600）；ComfyUI 地址与配图共用 image.json；配音不随文本生成自动执行。',
   };
 }
@@ -281,7 +282,8 @@ async function runRevoiceJob(job, found, options) {
             {
               prepared: comfyCtx.prepared,
               table: comfyCtx.table,
-              speaker: comfyCtx.speaker,
+              refVoice: comfyCtx.refVoice,
+              refAudioSha256: comfyCtx.refAudioSha256,
               textNode: comfyCtx.textNode,
               workflowHash: comfyCtx.workflowHash,
               model: comfyCtx.model,
@@ -364,7 +366,7 @@ async function runRevoiceJob(job, found, options) {
       const voiceMeta = {
         provider: result ? result.provider : (doc.slidesDoc.voice && doc.slidesDoc.voice.provider) || '',
         model: (result && result.model) || (comfyCtx && comfyCtx.model) || config.model || '',
-        voice: (result && result.voice) || (config.provider === 'comfyui-tts' ? config.comfyVoice : config.voice) || '',
+        voice: (result && result.voice) || (config.provider === 'comfyui-tts' ? config.comfyRefVoice : config.voice) || '',
         rate: Number(config.rate) || 1,
         mode,
         degraded,

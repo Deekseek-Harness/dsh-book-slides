@@ -3,7 +3,7 @@
 DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认一个 **Part**，由讲纲规划成 N 讲，
 逐讲生成并做可机检的接缝；播放时左侧 PDF 原文、右侧讲稿连播。**2.0 与 1.x 数据不兼容。**
 
-**当前构建：包 `2.0.0-alpha.5` / 产品 `2.0` / 数据 schema `2`**（2026-11-07，M1–M5 完成 + SRS v1.2 本地 ComfyUI 配音；P0/P1 功能对等全部落地）。
+**当前构建：包 `2.0.0-alpha.6` / 产品 `2.0` / 数据 schema `2`**（2026-11-07，M1–M5 完成 + SRS v1.3「音韵平滑」本地 ComfyUI VoiceClone 配音；P0/P1 功能对等全部落地）。
 变更记录 [CHANGELOG.md](CHANGELOG.md) · 实现进度与验收 [doc/2.0-实现进度.md](doc/2.0-实现进度.md) · 需求 [doc/requirements/规范需求2.0.md](doc/requirements/规范需求2.0.md)。
 
 ## 2.0 预发布（alpha.5）
@@ -14,9 +14,9 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 
 | 项 | 内容 |
 |---|---|
-| 包版本 | `2.0.0-alpha.5`（tag `v2.0.0-alpha.5`） |
+| 包版本 | `2.0.0-alpha.6`（tag `v2.0.0-alpha.6`） |
 | 产品 / schema | 产品 `2.0`、数据 schema `2`、SRS 文档 v1.2 |
-| 已完成 | M1 数据根/导入/分章/书架 · M2 Part/briefs/讲纲 · M3 生成/预缝/后验缝/作业 · M4 播放器/连播/偏好/设置/语音 · M5 书档/练习/配图/导出 PPT/**本地 ComfyUI Qwen3-TTS 配音（工作流与音色表）** · v1.1 子能力（逐页缩略图/配图提示词面板/配音与配图四态按钮/单页换一张/失败可见） |
+| 已完成 | M1 数据根/导入/分章/书架 · M2 Part/briefs/讲纲 · M3 生成/预缝/后验缝/作业 · M4 播放器/连播/偏好/设置/语音 · M5 书档/练习/配图/导出 PPT/**本地 ComfyUI Qwen3-TTS VoiceClone 配音（参考 voice 库）** · v1.1 子能力（逐页缩略图/配图提示词面板/配音与配图四态按钮/单页换一张/失败可见） |
 | 待完成 | M6 真书验收、发布门（AC-92 ~ AC-155）与正式版 `2.0.0` |
 | 兼容 | 不读 1.x 数据、不迁移、无独立单讲；1.x 最后版本仍是 1.4.0 |
 
@@ -41,7 +41,10 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 ├── preference.json          ← 分隔条/语速/静音/上次位置
 ├── voice.json               ← 语音配置（0600）
 ├── image.json               ← 配图配置（策略/地址/风格后缀）
-├── comfy-workflow.json      ← ComfyUI 工作流
+├── comfy-workflow.json      ← ComfyUI 配图工作流
+├── comfy-tts-workflow.json  ← ComfyUI 克隆配音工作流（没有就用内置）
+├── comfy-tts-refvoices.json ← 参考 voice 库（默认内置 2 项）
+├── voices/                  ← 用户导入的参考音频 + 同名 txt
 ├── audio-cache/             ← TTS 缓存
 ├── image-cache/             ← 配图缓存
 ├── trash/<bookId>/          ← 软删除（7 天可恢复）
@@ -60,7 +63,7 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 npm run test:v2     # 20 个文件 / 99 项，0 失败
 ```
 
-覆盖 M1–M5：数据根与升级备份、导入/分章、Part/讲纲、逐讲生成/接缝、播放器、设置/偏好/诊断、语音与独立配音（Qwen 云端 / ComfyUI 本地 / 浏览器）、书档往返/冲突/批量、练习组卷/判题/讲解/复习、ComfyUI 配图、按讲/整套/批量导出 PPT、长任务取消、回收站冲突。ComfyUI TTS 的设置页导入/连接/试听/音色切换已手工验证；完整逐页配音与真书、真 Qwen、真 ComfyUI 全流程验收在 M6。
+覆盖 M1–M5：数据根与升级备份、导入/分章、Part/讲纲、逐讲生成/接缝、播放器、设置/偏好/诊断、语音与独立配音（Qwen 云端 / ComfyUI 本地 / 浏览器）、书档往返/冲突/批量、练习组卷/判题/讲解/复习、ComfyUI 配图、按讲/整套/批量导出 PPT、长任务取消、回收站冲突。ComfyUI TTS 的设置页导入/连接/试听/参考切换已手工验证；完整逐页配音与真书、真 Qwen、真 ComfyUI 全流程验收在 M6。
 
 ## 1.x 使用说明（包 1.4.0 / 功能阶段 v1.6，冻结）
 
@@ -87,7 +90,7 @@ v1.6「练习与复习」：按章出题、模式驱动补题、即时判题、�
 | 切章 | 两条路径：页眉机械切分（回退）与目录驱动切分（模型读目录 + 页码校准 + 抽查）；来源常驻可见，防静默覆盖 |
 | 生成 | 勾 1–5 章 → 分块改写 → 结构校验 → 锚点回填 → 配音；异步作业、进度、取消、断点续跑、失败重试、同章幂等复用 |
 | 播放 | 左 PDF 视觉版式 + 摘抄高亮，右 16:9 幻灯片；自动翻页、快捷键、进度持久化、「继续听」、无配音页降级 |
-| 语音 | Qwen3-TTS 云端 WAV / 本地 ComfyUI Qwen3-TTS（默认工作流 + 可导入音色表）/ 浏览器本机朗读 / 关闭；Key 只存本机、面板只显示后 4 位；音频缓存不重复计费 |
+| 语音 | Qwen3-TTS 云端 WAV / 本地 ComfyUI Qwen3-TTS VoiceClone（默认克隆工作流 + 参考 voice 库）/ 浏览器本机朗读 / 关闭；Key 只存本机、面板只显示后 4 位；音频缓存不重复计费 |
 | 配图 | 默认只出提示词占位；可选本地 ComfyUI（IP+端口、导入 API 工作流）后台逐页出图，失败页回退提示词，不阻断文字与语音 |
 | 导出 | 单模块 → 一个 `.pptx`：每页画面 + 页内配音 + 台词备注；缺音频 / 缺配图逐页降级，确认层显示页数、音频页、配图页与体积 |
 | 练习 | 按章出题（考点来自精讲讲点、出处回填原文）；宿主即时判题，多选全对才算对；答错按需生成讲解并写回题库；**只有一个「开始练习」**，缺题时按模式先补题（确认后执行，每章 +5，补到 count/过半），混合模式新题 >50%；Leitner 5 盒 + 错题本；下发题目不含答案 |
@@ -161,7 +164,7 @@ dsh plugin --profile web remove dsh-book-slides
 | 供应商 | 要配什么 | 产物 | 适合 |
 |---|---|---|---|
 | Qwen3-TTS | API Key、模型（默认 `qwen3-tts-flash`）、音色（48 个非实时系统音色） | 每页 `audio/NNN.wav` | 想听云端音色 |
-| 本地 ComfyUI（Qwen3-TTS） | 地址（默认 `127.0.0.1:8188`，与配图共用）、工作流、音色表 | 每页 `audio/NNN.<ext>`（wav/flac/mp3/ogg） | 想用本机 GPU / 自定义模型 |
+| 本地 ComfyUI（Qwen3-TTS） | 地址（默认 `127.0.0.1:8188`，与配图共用）、克隆工作流、参考 voice 库 | 每页 `audio/NNN.<ext>`（wav/flac/mp3/ogg） | 想用本机 GPU / 自定义音色与讲法 |
 | 浏览器本机朗读 | 音色、语速 | 不产生文件，播放时 `speechSynthesis` | 零成本、无需 Key |
 | 关闭 | — | 只出文字 | 只想看 |
 
@@ -171,9 +174,9 @@ dsh plugin --profile web remove dsh-book-slides
   `sha256(provider|model|voice|language_type|text)` 缓存在 `audio-cache/`，同文同音色不重复计费。
 - 缺 Key 或某页失败只让模块降级 `ready_degraded`，文字照常出，**不会自动回退浏览器**。
 - 费用与限额由千问平台控制；插件只在下发当下下载音频，不保存过期 URL。
-- **本地 ComfyUI（Qwen3-TTS）**：默认工作流来自 `doc/comfyui/qwen3-tts-配音.json`（包内 `workflows/qwen3-tts.json`），默认模型 `Qwen3-TTS-CustomVoice`，默认音色表 9 个音色（`Vivian` 默认）。支持导入 API / 界面格式工作流，也支持导入模型音色表；**换音色只改请求里的 `speaker`，不重写工作流**。
+- **本地 ComfyUI（Qwen3-TTS）**：v1.3 起默认是 **VoiceClone 克隆**——工作流 `workflows/qwen3-tts-通过克隆配音/`（API 格式：`LoadAudio → FB_Qwen3TTSVoiceClone → SaveAudio`），内置参考 `Vivian` / `Uncle Fu` 两组（flac + 同名 txt），每页只替换 `target_text`，并把 `(参考音频, 参考文本)` 注入请求；**换参考不重写工作流**。
 - ComfyUI 的地址与配图共用 `image.json`；配音与配图共用**全局串行队列**，同一时间只跑一个 ComfyUI 作业。设置页提供「连接测试」（只读 `/system_stats` + `/object_info`）与「试听测试」（真跑一次，不落盘/不缓存）。
-- 不同模型的音色表不同，**模型与音色表的一致性由用户负责**；插件只做支持性校验与告警：全部音色不被模型支持时拦截 `E_TTS_SPEAKER`，部分不支持时标灰并回落到受支持音色。
+- 参考是**成对资产**：`ref_text` 必须是参考音频的逐字转写，与目标正文无关；`x_vector_only` 必须为 `false`（为 `true` 只克隆说话人、参考文本失效，导入时会 `E_TTS_WORKFLOW_NODE` 拒绝）。参考音频会经 `/upload/image` 上传到 ComfyUI 的 `input/`，按 sha256 去重。
 - ComfyUI 输出可能是 `.flac`/`.ogg`：播放器可直接播；导出 PPT 只嵌 `.wav`/`.mp3`，其它格式给 warning 并提示把工作流输出改成 `SaveAudio`（`audio_format=wav`）。
 
 > Qwen3-TTS 走 `/api/v1/services/aigc/multimodal-generation/generation`，`input` 只放
@@ -234,8 +237,9 @@ book-slides/
 ├── voice.json                     ← 语音配置（0600；Qwen Key 只存这里）
 ├── image.json                     ← 配图策略 / ComfyUI 地址 / 提示词节点
 ├── comfy-workflow.json            ← 用户导入的配图工作流（没有就用内置默认）
-├── comfy-tts-workflow.json        ← 用户导入的配音工作流（没有就用内置 qwen3-tts）
-├── comfy-tts-voices.json          ← ComfyUI 音色表（默认 Qwen3-TTS-CustomVoice 9 音色）
+├── comfy-tts-workflow.json        ← 用户导入的克隆配音工作流（没有就用内置）
+├── comfy-tts-refvoices.json       ← 参考 voice 库（默认内置 2 项）
+├── voices/                        ← 用户导入的参考音频 + 同名 txt
 ├── preference.json                ← 分隔条比例、语速、静音
 ├── progress.json                  ← {lastBookId, lastModuleId, lastSlide}
 ├── audio-cache/<sha256>.<ext>     ← 语音缓存（云端 wav / ComfyUI wav|flac|mp3|ogg）
@@ -264,7 +268,7 @@ book-slides/
 
 隐私边界：PDF、逐页文本、讲稿、音频、配图、题库与作答记录都只落在上面这个目录；插件不主动外发任何内容。
 联网只发生在五处——调 LLM 生成讲稿、调千问合成语音、调你指定的 ComfyUI 出图、调你指定的 ComfyUI 配音、出题与答错时生成讲解
-（都只在用户点按钮时发生）；ComfyUI 地址不是 `127.0.0.1` 时，提示词与朗读稿会发到局域网那台机器。
+（都只在用户点按钮时发生）；ComfyUI 地址不是 `127.0.0.1` 时，提示词、朗读稿与**当前参考音频/参考文本**会发到局域网那台机器。
 答错时发给模型的是该题题干、你的选择、正确项与原文片段，不发整场记录。没有遥测、没有云端同步。
 
 ## 已知限制
@@ -315,7 +319,7 @@ npm test          # 1.4.0 冻结套件，仅作 1.x 回归参考
 
 | 测试 | 跑什么 |
 |---|---|
-| `npm run test:v2` | **2.0 门禁**：21 个文件 / 117 项 —— 数据根/分章、Part/讲纲、生成/接缝、播放器、设置/偏好、语音/配音、ComfyUI 配音/工作流/音色表、系列删除、路由唯一注册 |
+| `npm run test:v2` | **2.0 门禁**：全量测试 —— 数据根/分章、Part/讲纲、生成/接缝、播放器、设置/偏好、语音/配音、ComfyUI 克隆配音/工作流/参考库、系列删除、路由唯一注册 |
 | `node test/smoke.test.mjs` | 纯逻辑：正则、清洗、切章、存储、PDF 读取 |
 | `node test/server.test.mjs` | 起真服务：导入/书架/书封/Range/改名/删除 + 原文页/偏好/回收站清理 + pdf.js 资源转发 |
 | `node test/panel.test.mjs` | react-dom/server 渲染：书架、详情、生成进度、幻灯片舞台、PDF 窗格、高亮几何、播放器首屏 |

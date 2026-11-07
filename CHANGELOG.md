@@ -3,6 +3,45 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.0.0-alpha.6] - 2026-11-07
+
+主题「音韵平滑」：本地 ComfyUI 配音从 **CustomVoice** 切换为 **VoiceClone 参考音频克隆**（SRS `规范需求2.0.md` v1.3）。不改 provider、不改 `/revoice` 逐页流程、不改数据 schema；**旧 CustomVoice 配音工作流不再兼容**。
+
+### 版本与环境
+
+- 包 `2.0.0-alpha.6`（tag `v2.0.0-alpha.6`）、产品 `2.0`、数据 schema `2`、文档 v1.3。
+- `voice.json` 新增可选字段 `comfyRefVoice`（默认 `builtin-vivian`）；旧 `comfyVoice` 只读保留、不再使用。
+- 根目录新增 `comfy-tts-refvoices.json` 与 `voices/`；默认参考在包内 `workflows/qwen3-tts-通过克隆配音/`。
+
+### 变更（不兼容）
+
+- 默认工作流改为 `workflows/qwen3-tts-通过克隆配音/qwen3-tts-通过克隆配音.json`（API 格式：`LoadAudio → FB_Qwen3TTSVoiceClone → SaveAudio`），识别 `textNode=6`、`outputNode=7`、`refNode=8`。
+- 合成请求改为写 `target_text` + `ref_text`，并把 `ref_audio` 上游 `LoadAudio.audio` 改为当前参考文件名；`x_vector_only` 必须为 `false`。
+- 旧 CustomVoice 工作流（无 `ref_audio`）导入被 `E_TTS_WORKFLOW_NODE` 拒绝；已有的 `comfy-tts-workflow.json` 需「恢复默认」或重新导入克隆工作流。
+- 音色表 → **参考 voice 库**：内置 `Vivian` / `Uncle Fu` 两组（flac + 同名 txt），支持导入/恢复默认；`/voice/speakers` → `/voice/refvoices`；`comfyVoice` → `comfyRefVoice`。
+- 参考音频经 `/upload/image` 上传到 ComfyUI `input/`，按 sha256 去重。
+- 音频缓存键加入 `refVoiceId / refAudioSha256 / refTextSha256`；换参考或改 `ref_text` 即失效。
+- 错误码新增 `E_TTS_VOICE_REF`；`E_TTS_VOICE_TABLE` 仅作旧日志兼容，`E_TTS_SPEAKER` 仅云端仍用。
+- 设置页：参考库下拉（名称/时长/语种/默认项）、导入/恢复默认、时长 warning；连接测试显示当前参考，试听文案改为参考语义。
+- 打包 `package.json.files` 改为 `workflows/`，确保参考 `.flac/.txt` 进安装包。
+
+### 依据与效果
+
+- CustomVoice 只锁音色身份，韵律随目标文本漂移：同讲 6 页实测中位 F0 极差约 3.7 个半音（第 5 页 +1.1 st、第 6 页 +2.2 st）。
+- VoiceClone 以参考音频的语音码为韵律锚点，同讲页间更稳；验收见 SRS AC-155（人工 + F0/语速抽检）。
+- 两个内置参考 21.3s / 22.0s 超出推荐 5–15s，已记入 SRS §12.6，后续替换为 8–12s。
+
+### 测试
+
+- `test/v2-tts-comfy.test.mjs` 重写为 6 项：默认参考库、连接/试听注入（`target_text/ref_text/LoadAudio`、`x_vector_only=false`）、参考库导入/校验/恢复、工作流校验（`x_vector_only=true` 拒绝、UI 格式转换）、逐页配音/缓存/换参考失效、文本入口隔离。
+- 回归：`v2-revoice` 11 项、`parity-voice` 7 项、`comfy` 9 项、`parity-settings` 8 项、`v2-m4-routes` 3 项、`v2-m5-client` 12 项通过。
+
+### 手工验证与待办
+
+- `/upload/image` 与真实 ComfyUI 的兼容性仍需真机复核（假服务已覆盖）。
+- 参考音频 + 同名 txt 的图形化成对导入未做；当前需放入 `voices/` 后导入参考库 JSON。
+- 完整逐页真机配音与真书验收留 M6。
+
 ## [2.0.0-alpha.5] - 2026-11-07
 
 对齐 SRS `规范需求2.0.md` v1.2（AC-148 ~ AC-155）：新增本地 ComfyUI Qwen3-TTS 配音 provider、默认工作流与音色表、连接/试听测试、串行队列。**不改数据 schema**。

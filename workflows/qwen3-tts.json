@@ -65,7 +65,7 @@
         "language": "Auto",
         "seed": 801233936774488,
         "control_after_generate": "randomize",
-        "instruct": "",
+        "instruct": "以教学讲解的口吻朗读，语气平稳、清晰、有亲和力，语速适中，不要夸张表演",
         "max_new_tokens": 2048,
         "top_p": 0.8,
         "top_k": 20,

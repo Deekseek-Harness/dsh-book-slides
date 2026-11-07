@@ -7,7 +7,7 @@
  *   comfyui-tts  —— 本地 ComfyUI 的 Qwen3-TTS 工作流，逐页取音频（2.0 v1.2）
  *   off          —— 只出文字
  *
- * comfyui-tts 的合成逻辑在 v2/comfy-tts.js；本文件只保留配置、云端与浏览器路径。
+ * comfyui-tts 的合成逻辑在 v2/comfy-clone.js；本文件只保留配置、云端与浏览器路径。
  *
  * 安全边界：
  *   - Qwen API Key 只存 voice.json（0600），publicVoiceConfig 只回末 4 位；
@@ -89,7 +89,7 @@ export const QWEN_VOICES = [
 
 export const VOICE_PROVIDERS = [
   { id: 'qwen3-tts', label: 'Qwen3-TTS（千问 AI）', ready: true, note: '逐页合成 WAV 存到本机；需要 API Key' },
-  { id: 'comfyui-tts', label: '本地 ComfyUI（Qwen3-TTS）', ready: true, note: '逐页调用本机 ComfyUI 工作流；需配置工作流与音色表' },
+  { id: 'comfyui-tts', label: '本地 ComfyUI（Qwen3-TTS）', ready: true, note: '逐页调用本机 ComfyUI 克隆工作流；需配置工作流与参考 voice 库' },
   { id: 'browser', label: '浏览器朗读（本机合成）', ready: true, note: '不产生音频文件，播放时由浏览器朗读' },
   { id: 'off', label: '关闭', ready: true, note: '只出文字，不朗读' },
 ];
@@ -98,7 +98,8 @@ export const DEFAULT_VOICE = {
   provider: 'browser',
   model: QWEN_MODEL,
   voice: '',
-  comfyVoice: 'Vivian',
+  comfyVoice: '',
+  comfyRefVoice: 'builtin-vivian',
   textNode: '',
   rate: 1,
   apiKey: '',
@@ -143,7 +144,8 @@ export function normalizeVoiceConfig(raw) {
     provider: provider,
     model: model,
     voice: selected,
-    comfyVoice: String(source.comfyVoice == null ? '' : source.comfyVoice).slice(0, 80) || 'Vivian',
+    comfyVoice: String(source.comfyVoice == null ? '' : source.comfyVoice).slice(0, 80),
+    comfyRefVoice: String(source.comfyRefVoice == null ? '' : source.comfyRefVoice).trim().slice(0, 80) || 'builtin-vivian',
     textNode: String(source.textNode == null ? '' : source.textNode).trim().slice(0, 24),
     rate: normalizeRate(source.rate),
     apiKey: String(source.apiKey || '').trim().slice(0, 500),
@@ -193,6 +195,7 @@ export function publicVoiceConfig(config) {
     model: voiceConfig.model,
     voice: voiceConfig.voice,
     comfyVoice: voiceConfig.comfyVoice,
+    comfyRefVoice: voiceConfig.comfyRefVoice,
     textNode: voiceConfig.textNode,
     rate: voiceConfig.rate,
     hasKey: hasKey,
@@ -208,7 +211,7 @@ export function publicVoiceConfig(config) {
         : voiceConfig.provider === 'off'
           ? '语音已关闭，模块只出文字。'
           : voiceConfig.provider === 'comfyui-tts'
-            ? 'ComfyUI 配音：逐页调用用户配置的本地工作流；换音色只改请求参数，不改工作流。'
+            ? 'ComfyUI 配音：逐页调用用户配置的本地克隆工作流；换参考只改请求参数，不改工作流。'
             : hasKey
               ? 'Qwen3-TTS 已配置：生成时逐页合成 WAV，播放器直接播音频文件。'
               : '还没填 Qwen API Key；生成会降级为只出文字。',

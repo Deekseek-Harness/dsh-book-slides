@@ -1,0 +1,57 @@
+{
+  "6": {
+    "inputs": {
+      "target_text": "什么叫逃逸？简单说，一个对象的指针被函数外的方法或线程引用，它就逃出去了。逃逸分析就是编译器做静态代码分析，判断指针的动态范围，然后决定变量放在堆上还是栈上。它不是运行时的猜测，而是编译期的结论。",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "language": "Chinese",
+      "ref_text": "在 C/C++ 里，用 malloc 或 new 拿到一块内存后，什么时候释放、由谁释放，都得程序员自己惦记。稍不留神就泄漏。Go 把这件事接了过去：即使你调用 new，得到的内存也可能在栈上，堆和栈的差别被编译器在后台处理。一个变量最终去哪儿，是逃逸分析给出的结论。",
+      "seed": 209611848424385,
+      "max_new_tokens": 2048,
+      "top_p": 0.8,
+      "top_k": 20,
+      "temperature": 1,
+      "repetition_penalty": 1.05,
+      "x_vector_only": false,
+      "instruct": "以教学讲解的口吻朗读，语气平稳、清晰、有亲和力，语速适中，不要夸张表演",
+      "attention": "auto",
+      "unload_model_after_generate": false,
+      "custom_model_path": "",
+      "ref_audio": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "FB_Qwen3TTSVoiceClone",
+    "_meta": {
+      "title": "🎭 Qwen3-TTS VoiceClone",
+      "cnr_id": "qwen3-tts-comfyui",
+      "ver": "c7db6c2eb0f269d358c53bb71688dc95de4f7d07"
+    }
+  },
+  "7": {
+    "inputs": {
+      "filename_prefix": "audio/ComfyUI",
+      "audio": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "SaveAudio",
+    "_meta": {
+      "title": "保存音频",
+      "cnr_id": "comfy-core",
+      "ver": "0.8.2"
+    }
+  },
+  "8": {
+    "inputs": {
+      "audio": "qwen3-tts-1.7B_vivian.flac"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  }
+}
