@@ -175,7 +175,7 @@ function unsupportedAudioFormat(lectureDirPath, slide) {
 }
 
 function resolveImage(lectureDirPath, slide) {
-  if (String((slide && slide.image_status) || '') !== 'ready') return null;
+  // 失败重绘会保留旧图：只要 image_file 还在，导出就继续用老图
   const rel = String((slide && slide.image_file) || '');
   if (!IMAGE_RE.test(rel)) return null;
   const abs = inside(lectureDirPath, rel);

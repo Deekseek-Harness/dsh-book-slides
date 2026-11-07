@@ -202,6 +202,54 @@ test('AC-147：ready 页出「换一张」、failed 页出「重试配图」、�
   assert.equal(none.includes('重试配图'), false);
 });
 
+test('AC-147：换图失败但有旧图时继续显示旧图并给「重试配图」；生成中禁用并提示', () => {
+  const oldImage = renderToString(
+    React.createElement(clientModule.__components.SlideStage, {
+      seriesId: 'sabcdefghij',
+      lecture: 1,
+      imageBusy: false,
+      onRegenImage: () => {},
+      slide: {
+        slide_index: 2,
+        layout: 'content_text',
+        title: '页面',
+        bullet_points: ['要点'],
+        image_prompt: '一台机器',
+        image_status: 'failed',
+        image_file: 'images/002.png',
+        image_seed: 7,
+        image_error: 'E_IMG_CONNECT',
+      },
+    }),
+  );
+  assert.ok(oldImage.includes('<img'), '失败但有旧图时仍要渲染旧图');
+  assert.ok(oldImage.includes('重试配图'));
+
+  const busy = renderToString(
+    React.createElement(clientModule.__components.SlideStage, {
+      seriesId: 'sabcdefghij',
+      lecture: 1,
+      imageBusy: true,
+      onRegenImage: () => {},
+      slide: { slide_index: 2, layout: 'content_text', title: '页面', bullet_points: [], image_prompt: '一台机器', image_status: 'ready', image_file: 'images/002.png', image_seed: 7 },
+    }),
+  );
+  assert.ok(busy.includes('生成中…'));
+  assert.ok(busy.includes('disabled'));
+
+  const locked = renderToString(
+    React.createElement(clientModule.__components.SlideStage, {
+      seriesId: 'sabcdefghij',
+      lecture: 1,
+      imageLocked: true,
+      onRegenImage: () => {},
+      slide: { slide_index: 2, layout: 'content_text', title: '页面', bullet_points: [], image_prompt: '一台机器', image_status: 'ready', image_file: 'images/002.png', image_seed: 7 },
+    }),
+  );
+  assert.ok(locked.includes('换一张'));
+  assert.ok(locked.includes('disabled'), '另一页换图进行中时按钮也要禁用');
+});
+
 test('AC-142：底部缩略图按 cover/content_text/quote 渲染迷你版式', () => {
   const thumb = (slide, index, active) =>
     renderToString(

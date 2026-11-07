@@ -399,6 +399,32 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       return 'none';
     }
 
+    /**
+     * 播放 effect 的稳定输入：只包含“本页音频”相关字段。
+     * 配图状态 / 图片种子 / 提示词变化不应改变它，否则换一张会重启当前页播放。
+     */
+    function playbackKey(slide) {
+      if (!slide) return '';
+      return [
+        slide.audio_file || '',
+        slide.audio_provider || '',
+        slide.audio_ms || 0,
+        slide.audio_script || '',
+      ].join('\u0001');
+    }
+
+    /**
+     * 换图期间的临时显示覆盖：继续显示旧图，等任务结束再以服务端结果为准。
+     * 只覆盖图片字段，不动 image_status，避免把“生成中”当成播放输入。
+     */
+    function slideWithImageOverride(slide, override) {
+      if (!slide || !override) return slide;
+      return Object.assign({}, slide, {
+        image_file: override.file != null ? override.file : slide.image_file,
+        image_seed: override.seed != null ? override.seed : slide.image_seed,
+      });
+    }
+
     function lectureStatusOf(series, n) {
       const hit = ((series && series.lectures) || []).find((item) => Number(item.n) === Number(n));
       return hit ? String(hit.status || '') : '';
@@ -1380,7 +1406,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
     }
 
     /** 幻灯片舞台：沿用 1.x 的米色底 / 宋体标题 / 要点 / 引文 / 右下页码。 */
-    function SlideStage({ slide, seriesId, lecture, onRegenImage, imageBusy }) {
+    function SlideStage({ slide, seriesId, lecture, onRegenImage, imageBusy, imageLocked }) {
       const slideKey = slide ? Number(slide.slide_index) || 0 : 0;
       const [showPrompt, setShowPrompt] = useState(false);
       const [copied, setCopied] = useState(false);
@@ -1401,8 +1427,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       }, [showPrompt]);
       if (!slide) return null;
       const layout = String(slide.layout || 'content_text');
+      // 只要还有 image_file 就显示：失败重绘会保留旧图，不能因为状态是 failed 就白屏
       const imageSrc =
-        slide.image_status === 'ready' && slide.image_file && seriesId
+        slide.image_file && seriesId
           ? API + '/image?seriesId=' + encodeURIComponent(seriesId) + '&lecture=' + encodeURIComponent(lecture) + '&i=' + encodeURIComponent(slide.slide_index) + '&v=' + encodeURIComponent(slide.image_seed || '')
           : '';
       const foot = h('div', { className: 'blm-stage-foot' }, '第 ' + slide.slide_index + ' 页');
@@ -1423,7 +1450,13 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           'button',
           {
             className: 'blm-btn',
-            disabled: imageBusy === true,
+            disabled: imageBusy === true || imageLocked === true,
+            title:
+              imageBusy === true
+                ? '正在重绘，完成后自动换图'
+                : imageLocked === true
+                  ? '另一页正在换图，请稍候'
+                  : undefined,
             onClick: (event) => {
               if (event && event.stopPropagation) event.stopPropagation();
               if (typeof onRegenImage === 'function') onRegenImage(slide);
@@ -1433,11 +1466,13 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         );
       const figureTools = !onRegenImage
         ? null
-        : slide.image_status === 'ready' && slide.image_file
-          ? regenButton('换一张')
+        : imageBusy === true
+          ? regenButton('生成中…')
           : slide.image_status === 'failed'
             ? regenButton('重试配图')
-            : null;
+            : slide.image_file
+              ? regenButton('换一张')
+              : null;
       if (layout === 'cover') {
         return h(
           'div',
@@ -1632,7 +1667,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [fullscreen, setFullscreen] = useState(false);
       const [directory, setDirectory] = useState(false);
       const [transition, setTransition] = useState(null);
-      const [imageBusy, setImageBusy] = useState(false);
+      // C：换图期间的临时覆盖层，按 series:lecture:slide 存；不进入播放数据源
+      const [imageOverrides, setImageOverrides] = useState({});
+      const [imageBusyKey, setImageBusyKey] = useState('');
       const [voiceNoticeClosed, setVoiceNoticeClosed] = useState(false);
 
       const rootRef = useRef(null);
@@ -1643,6 +1680,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const skipTimerRef = useRef(null);
       const tickTimerRef = useRef(null);
       const tokenRef = useRef(0);
+      const imageBusyRef = useRef('');
       const indexRef = useRef(index);
       const playingRef = useRef(playing);
       const prefRef = useRef(pref);
@@ -1661,7 +1699,11 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
       const slides = slidesByLecture[lectureN] || [];
       slidesRef.current = slides;
-      const slide = slides[index] || null;
+      const rawSlide = slides[index] || null;
+      const imageKey = rawSlide ? seriesId + ':' + lectureN + ':' + Number(rawSlide.slide_index || 0) : '';
+      const slide = slideWithImageOverride(rawSlide, imageKey ? imageOverrides[imageKey] : null);
+      // 只有音频字段变化才需要重建播放；配图/种子变化不参与
+      const pageAudioKey = playbackKey(rawSlide);
       const lectures = (series && series.lectures) || [];
       const single = lectures.length <= 1;
 
@@ -2005,7 +2047,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           }
         }
         return () => stopAudio();
-      }, [index, playing, pref.rate, pref.muted, lectureN, seriesId, slides, advance, finishLecture, stopAudio]);
+      }, [index, playing, pref.rate, pref.muted, lectureN, seriesId, slides.length, pageAudioKey, advance, finishLecture, stopAudio]);
 
       /* 拖动分隔条：拖完才写偏好 */
       useEffect(() => {
@@ -2071,37 +2113,78 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         };
       }, []);
 
-      /** 单页换一张（AC-147）：只重出该页，轮询到 ready/failed 后刷新本讲。 */
+      /**
+       * 单页换一张（AC-147）：
+       * - 换图期间只写 imageOverrides，不动 slides，因此不会打断播放；
+       * - 轮询 job 状态（B2），结束后只拉一次 /lecture；
+       * - 失败时保留旧图（服务端已保留 image_file/image_seed）。
+       */
       const regenImage = useCallback(
         async (targetSlide) => {
           const slideIndex = Number(targetSlide && targetSlide.slide_index) || 0;
-          if (!slideIndex || imageBusy) return;
-          setImageBusy(true);
+          if (!slideIndex || imageBusyRef.current) return;
+          const key = seriesId + ':' + lectureN + ':' + slideIndex;
+          const listNow = slidesRef.current || [];
+          const rawHit = listNow.find((item) => Number(item.slide_index) === slideIndex) || targetSlide || {};
+          const oldFile = rawHit.image_file != null ? String(rawHit.image_file) : '';
+          const oldSeed = rawHit.image_seed != null ? rawHit.image_seed : 0;
+          imageBusyRef.current = key;
+          setImageBusyKey(key);
+          setImageOverrides((prev) =>
+            Object.assign({}, prev, {
+              [key]: { status: 'regenerating', file: oldFile, seed: oldSeed },
+            }),
+          );
+          let job = null;
+          let timedOut = false;
           try {
-            await api('/image/regen', {
+            job = await api('/image/regen', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ seriesId, lecture: lectureN, slide: slideIndex, force: true }),
             });
+            if (!aliveRef.current) return;
             notify('已开始重出第 ' + slideIndex + ' 页配图');
             const startedAt = Date.now();
             while (Date.now() - startedAt < 180000) {
               await new Promise((resolve) => setTimeout(resolve, 1200));
               if (!aliveRef.current) return;
+              try {
+                const state = await api('/image/status?seriesId=' + encodeURIComponent(seriesId));
+                job = state;
+                if (state && state.live === false) break;
+              } catch {
+                /* 状态接口偶发失败：继续等，别把换图判死 */
+              }
+            }
+            timedOut = !(job && job.live === false);
+            if (!aliveRef.current) return;
+            let list = null;
+            try {
               const doc = await api('/lecture?seriesId=' + encodeURIComponent(seriesId) + '&n=' + lectureN);
-              if (!aliveRef.current) return;
-              const list = (doc.slides && doc.slides.slides) || [];
+              list = (doc.slides && doc.slides.slides) || null;
+            } catch {
+              list = null;
+            }
+            if (!aliveRef.current) return;
+            if (list) {
               setSlidesByLecture((prev) => Object.assign({}, prev, { [lectureN]: list }));
-              const hit = list.find((item) => Number(item.slide_index) === slideIndex);
-              if (!hit) return;
-              if (hit.image_status === 'ready') {
-                notify('第 ' + slideIndex + ' 页配图已更新');
-                return;
-              }
-              if (hit.image_status === 'failed') {
-                notify('第 ' + slideIndex + ' 页配图失败：' + (hit.image_error || 'E_IMG_FAIL'));
-                return;
-              }
+            }
+            const hit = list && list.find((item) => Number(item.slide_index) === slideIndex);
+            if (hit && hit.image_status === 'ready') {
+              notify('第 ' + slideIndex + ' 页配图已更新');
+            } else if (hit && ['queued', 'running', 'pending'].includes(String(hit.image_status || ''))) {
+              notify('第 ' + slideIndex + ' 页配图还在生成，先继续用老图');
+            } else if (hit && hit.image_file) {
+              notify('第 ' + slideIndex + ' 页换图失败，继续用老图' + (hit.image_error ? '：' + hit.image_error : ''));
+            } else if (hit) {
+              notify('第 ' + slideIndex + ' 页配图失败：' + (hit.image_error || (job && job.code) || 'E_IMG_FAIL'));
+            } else if (timedOut) {
+              notify('第 ' + slideIndex + ' 页配图超时，继续用老图');
+            } else if (job && job.status === 'done') {
+              notify('第 ' + slideIndex + ' 页配图已更新');
+            } else {
+              notify('第 ' + slideIndex + ' 页换图未完成，继续用老图');
             }
           } catch (err) {
             if (!aliveRef.current) return;
@@ -2111,10 +2194,19 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 : err.message,
             );
           } finally {
-            if (aliveRef.current) setImageBusy(false);
+            if (imageBusyRef.current === key) imageBusyRef.current = '';
+            if (aliveRef.current) {
+              setImageBusyKey('');
+              setImageOverrides((prev) => {
+                if (!prev[key]) return prev;
+                const next = Object.assign({}, prev);
+                delete next[key];
+                return next;
+              });
+            }
           }
         },
-        [imageBusy, lectureN, notify, seriesId],
+        [lectureN, notify, seriesId],
       );
 
       const nextPage = useCallback(() => {
@@ -2306,7 +2398,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             seriesId,
             lecture: lectureN,
             onRegenImage: regenImage,
-            imageBusy,
+            imageBusy: Boolean(imageKey) && imageBusyKey === imageKey,
+            imageLocked: Boolean(imageBusyKey) && imageBusyKey !== imageKey,
           })),
         ),
         transition
@@ -5644,6 +5737,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         clampRateValue,
         playerKeyAction,
         slideAudioMode,
+        playbackKey,
+        slideWithImageOverride,
         nextLectureAfter,
         formatSeriesProgress,
         formatJobLine,

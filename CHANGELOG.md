@@ -3,6 +3,28 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.0.0-alpha.7] - 2026-11-08
+
+主题「换图不打断播放」：修复播放中「换一张」导致当前页音频/朗读反复从头播放的问题；换图改为独立临时状态 + 作业状态轮询，失败保留旧图。
+
+### 版本与环境
+
+- 包 `2.0.0-alpha.7`（tag `v2.0.0-alpha.7`）、产品 `2.0`、数据 schema `2`、文档 v1.3。
+- 无数据 schema / 配置字段变更，可直接覆盖 `alpha.6`。
+
+### 修复
+
+- 播放中「换一张」不再把当前页音频/朗读打回开头：播放 effect 的依赖从整个 `slides` 数组改为 `slides.length + playbackKey`（本页音频签名），配图/种子更新不再触发播放重建。
+- 「换一张」改为轮询 `/image/status` 作业状态，结束后只拉一次 `/lecture`；换图临时状态放在独立的 `imageOverrides`，不再每 1.2 秒替换整讲数据，也不再产生最多约 150 次整讲 JSON 下载。
+- 换图失败保留旧图：服务端失败/超时/取消/中断不再清空 `image_file`/`image_seed`；播放器继续显示旧图并给「重试配图」，PPTX 导出也继续使用旧图。`reset`（长按强制重配图）仍是破坏性操作，会清空旧图。
+
+### 测试
+
+- `test/parity-player.test.mjs` 新增 `playbackKey` / `slideWithImageOverride` / 播放依赖断言。
+- `test/v2-m5-client.test.mjs` 新增失败保留旧图、生成中禁用、其它页锁定。
+- `test/v2-images.test.mjs` 更新失败/取消用例：失败与取消均保留旧图引用。
+- `test/v2-pptx.test.mjs` 新增失败但有旧图时导出仍使用旧图。
+
 ## [2.0.0-alpha.6] - 2026-11-07
 
 主题「音韵平滑」：本地 ComfyUI 配音从 **CustomVoice** 切换为 **VoiceClone 参考音频克隆**（SRS `规范需求2.0.md` v1.3）。不改 provider、不改 `/revoice` 逐页流程、不改数据 schema；**旧 CustomVoice 配音工作流不再兼容**。

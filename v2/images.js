@@ -466,8 +466,8 @@ export function startImageJob({ seriesId, lecture = null, slide = null, force = 
       if (only != null && index !== only) continue;
       if (only == null && !force && item.image_status === 'ready' && item.image_file) continue;
       if (!String(item.image_prompt || '').trim()) {
+        // 失败不抹掉旧图：前端提示「换图失败，继续用老图」
         item.image_status = 'failed';
-        item.image_file = null;
         item.image_error = 'E_IMG_PROMPT：这一页没有提示词';
         continue;
       }
@@ -594,8 +594,8 @@ async function runImageJob(job, ctx, options) {
     if (!slide) continue;
     job.lecture = target.n;
     if (Date.now() > budgetDeadline) {
+      // 超时也保留旧图
       slide.image_status = 'failed';
-      slide.image_file = null;
       slide.image_error = 'E_IMG_TIMEOUT：配图总时长超过 ' + Math.round(IMAGE_MODULE_BUDGET_MS / 60000) + ' 分钟，可稍后单独补';
       job.failed += 1;
       if (!firstError) firstError = { code: 'E_IMG_TIMEOUT', message: slide.image_error };
@@ -642,8 +642,8 @@ async function runImageJob(job, ctx, options) {
     if (job.cancelled) break;
 
     if (!buffer) {
+      // 失败保留 image_file / image_seed：单页换图失败时继续显示旧图
       slide.image_status = 'failed';
-      slide.image_file = null;
       slide.image_provider = 'comfyui';
       slide.image_error =
         String((lastError && lastError.code) || 'E_IMG_FAIL') + '：' + String((lastError && lastError.message) || '出图失败').slice(0, 200);
@@ -659,7 +659,12 @@ async function runImageJob(job, ctx, options) {
       } else {
         try {
           writeAtomic(abs, buffer);
-          writeImageCache(cacheKey, buffer);
+          // 图片已经落盘；缓存写失败不该把这一页判成失败（旧图也可能已被覆盖）
+          try {
+            writeImageCache(cacheKey, buffer);
+          } catch {
+            /* 忽略缓存失败 */
+          }
           slide.image_file = rel;
           slide.image_status = 'ready';
           slide.image_provider = 'comfyui';
@@ -667,8 +672,8 @@ async function runImageJob(job, ctx, options) {
           slide.image_error = null;
           job.done += 1;
         } catch (err) {
+          // 写图失败保留旧 image_file / image_seed
           slide.image_status = 'failed';
-          slide.image_file = null;
           slide.image_error = 'E_IMG_FAIL：写图失败 ' + String((err && err.message) || err).slice(0, 120);
           job.failed += 1;
         }
@@ -701,8 +706,8 @@ function markTargets(job, status, code, message) {
     if (!doc) continue;
     const slide = doc.slidesDoc.slides.find((item) => Number(item.slide_index) === target.i);
     if (!slide) continue;
+    // 作业级失败也保留旧图，前端继续显示老图并允许重试
     slide.image_status = status;
-    slide.image_file = null;
     slide.image_provider = 'comfyui';
     slide.image_error = code + '：' + String(message || '').slice(0, 200);
     saveSlides(doc);
@@ -716,8 +721,8 @@ function finishCancelled(job) {
     if (!doc) continue;
     const slide = doc.slidesDoc.slides.find((item) => Number(item.slide_index) === target.i);
     if (!slide || slide.image_status === 'ready') continue;
+    // 取消也保留旧图
     slide.image_status = 'failed';
-    slide.image_file = null;
     slide.image_error = 'E_IMG_CANCELLED：已取消';
     saveSlides(doc);
   }
@@ -792,7 +797,7 @@ function interruptStaleSlides(found) {
     for (const slide of doc.slidesDoc.slides) {
       if (!['pending', 'queued', 'running'].includes(String(slide.image_status || ''))) continue;
       slide.image_status = 'failed';
-      slide.image_file = null;
+      // 中断也保留旧图，避免刷新后连原来的图都没了
       slide.image_error = 'E_INTERRUPTED：配图上一次没跑完，点「补配图」重试';
       touched = true;
     }

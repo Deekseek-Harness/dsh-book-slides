@@ -6,9 +6,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const source = fs.readFileSync(new URL('../v2/client.js', import.meta.url), 'utf8');
 const React = require('react');
 const { renderToString } = require('react-dom/server');
 
@@ -100,6 +102,59 @@ test('AC-109：有音频播文件；browser 才朗读；Qwen 失败不回退浏�
   assert.equal(helpers.slideAudioMode({ audio_file: null, audio_provider: 'qwen3-tts', audio_script: '稿子' }), 'none');
   assert.equal(helpers.slideAudioMode({ audio_file: null, audio_provider: 'none', audio_script: '' }), 'none');
   assert.equal(helpers.slideAudioMode(null), 'none');
+});
+
+test('换一张不重启播放：playbackKey 只认本页音频字段，图片变化不影响', () => {
+  const base = {
+    slide_index: 3,
+    audio_file: 'audio/003.wav',
+    audio_provider: 'qwen3-tts',
+    audio_ms: 1200,
+    audio_script: '上一 p 说到……',
+  };
+  const key = helpers.playbackKey(base);
+  assert.equal(helpers.playbackKey(Object.assign({}, base, { image_status: 'ready', image_file: 'images/003.png', image_seed: 7 })), key);
+  assert.equal(helpers.playbackKey(Object.assign({}, base, { image_status: 'generating', image_file: null, image_seed: null })), key);
+  assert.notEqual(helpers.playbackKey(Object.assign({}, base, { audio_file: 'audio/004.wav' })), key);
+  assert.notEqual(helpers.playbackKey(Object.assign({}, base, { audio_script: '换了一段稿子' })), key);
+  assert.notEqual(helpers.playbackKey(Object.assign({}, base, { audio_ms: 2400 })), key);
+  assert.equal(helpers.playbackKey(null), '');
+});
+
+test('播放 effect 依赖的是音频签名，不是整个 slides 数组', () => {
+  assert.ok(source.includes('slides.length, pageAudioKey'), '依赖里应有 slides.length + pageAudioKey');
+  assert.equal(source.includes('lectureN, seriesId, slides, advance'), false, '不应再把整个 slides 数组放进依赖');
+});
+
+test('换一张期间不写 slides：只轮询 job 状态，结束时刷新一次', () => {
+  const start = source.indexOf('const regenImage = useCallback');
+  const end = source.indexOf('const nextPage = useCallback');
+  assert.ok(start >= 0 && end > start, '能找到 regenImage 函数体');
+  const body = source.slice(start, end);
+  assert.equal((body.match(/setSlidesByLecture/g) || []).length, 1, 'regenImage 里只允许结束时刷新一次讲数据');
+  assert.ok(body.includes('/image/status'), '应先轮询 /image/status');
+  assert.equal((body.match(/\/lecture\?seriesId=/g) || []).length, 1, '结束时只拉一次 /lecture');
+});
+
+test('换图临时覆盖：只换图片字段，保留旧图给生成期/失败回退', () => {
+  const slide = {
+    slide_index: 3,
+    image_status: 'failed',
+    image_file: 'images/003.png',
+    image_seed: 7,
+    title: '页面',
+  };
+  assert.equal(helpers.slideWithImageOverride(slide, null), slide, '没有覆盖时原样返回');
+  const display = helpers.slideWithImageOverride(slide, { status: 'regenerating', file: 'images/003.png', seed: 7 });
+  assert.equal(display.image_file, 'images/003.png');
+  assert.equal(display.image_seed, 7);
+  assert.equal(display.image_status, 'failed', '生成中不伪造 ready，避免影响状态判断');
+  assert.equal(display.title, '页面');
+  const noImage = helpers.slideWithImageOverride(
+    { slide_index: 4, image_status: 'failed', image_file: null, image_seed: null },
+    { status: 'regenerating', file: '', seed: 0 },
+  );
+  assert.equal(noImage.image_file, '');
 });
 
 test('AC-107/109：讲末页 → 下一讲就绪给过渡；失败讲 blocked；最后一讲结束', () => {

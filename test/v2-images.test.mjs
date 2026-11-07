@@ -274,17 +274,24 @@ test('AC-146：强制重新配图（reset）清空旧图、nonce 归零后全量
   assert.equal(seriesOut.series.images.total, 3, '单页/强制作业不能把汇总 total 算成 1');
 });
 
-test('AC-120：ComfyUI 不可用时该页留白并给 warning，失败页可单页重试', async () => {
+test('AC-120：ComfyUI 不可用时保留旧图并给 warning，失败页可单页重试', async () => {
   ctl.failSubmit = true;
   // 清掉图片缓存：本用例要验证「真的去请求 ComfyUI 且失败」，不能被旧图缓存短路
   fs.rmSync(path.join(ROOT, 'image-cache'), { recursive: true, force: true });
+  const slidesPath = path.join(fixture.dir, 'lectures', '1', 'slides.json');
+  const before = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  const oldFile = before.slides[2].image_file;
+  const oldSeed = before.slides[2].image_seed;
+  assert.ok(oldFile, '这个用例开始前第 3 页应该已经有一张旧图');
   const failed = await post('/dsh-book-slides/image/regen', { seriesId: fixture.series.id, lecture: 1, slide: 3, force: true });
   assert.equal(failed.ok, true);
   const done = await waitImage(fixture.series.id, (job) => ['done', 'failed', 'cancelled'].includes(job.status));
   assert.equal(done.status, 'failed');
-  const slides = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'lectures', '1', 'slides.json'), 'utf8'));
+  const slides = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
   assert.equal(slides.slides[2].image_status, 'failed');
-  assert.equal(slides.slides[2].image_file, null);
+  assert.equal(slides.slides[2].image_file, oldFile, '换图失败要保留旧图引用');
+  assert.equal(slides.slides[2].image_seed, oldSeed, '旧图种子也要保留');
+  assert.ok(fs.existsSync(path.join(fixture.dir, 'lectures', '1', oldFile)), '旧图文件还在');
   assert.ok(String(slides.slides[2].image_prompt).length > 0, '失败页保留提示词占位');
   assert.equal(slides.slides[1].image_status, 'ready', '其它页不受影响');
 
@@ -295,6 +302,7 @@ test('AC-120：ComfyUI 不可用时该页留白并给 warning，失败页可单�
   assert.equal(fixed.status, 'done');
   const after = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'lectures', '1', 'slides.json'), 'utf8'));
   assert.equal(after.slides[2].image_status, 'ready');
+  assert.notEqual(after.slides[2].image_seed, oldSeed, '重试成功后换成新种子');
 });
 
 test('AC-120 / AC-135：配图作业可取消，状态 cancelled，已生成页保留', async () => {
@@ -308,6 +316,10 @@ test('AC-120 / AC-135：配图作业可取消，状态 cancelled，已生成页�
   assert.equal(cancelled.cancelled, true);
   const done = await waitImage(fixture.series.id, (job) => ['done', 'failed', 'cancelled', 'interrupted'].includes(job.status));
   assert.equal(done.status, 'cancelled');
+  const after = JSON.parse(fs.readFileSync(path.join(fixture.dir, 'lectures', '1', 'slides.json'), 'utf8'));
+  for (let index = 1; index < after.slides.length; index += 1) {
+    assert.ok(after.slides[index].image_file, '取消后旧图引用要保留，别把已有配图清空');
+  }
   ctl.slowHistory = 0;
 });
 

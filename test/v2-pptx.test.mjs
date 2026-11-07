@@ -218,6 +218,27 @@ test('AC-121 / FR-19.2：单讲导出页数、备注逐字、音频与配图内�
   assert.ok(slide4.includes('引文正文'));
 });
 
+test('AC-121：换图失败保留旧图时，导出仍使用旧图', async () => {
+  const found = findSeries(series.id);
+  const slidesPath = path.join(found.dir, 'lectures', '1', 'slides.json');
+  const doc = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  const original = doc.slides[1];
+  doc.slides[1] = Object.assign({}, original, { image_status: 'failed', image_error: 'E_IMG_CONNECT：连不上' });
+  fs.writeFileSync(slidesPath, JSON.stringify(doc, null, 2));
+  try {
+    const plan = await json('/dsh-book-slides/export/pptx/plan?seriesId=' + series.id + '&lecture=1');
+    assert.equal(plan.plan.imagePages, 1, '失败但有旧图的页仍算作有图');
+    const { buffer } = await binary('/dsh-book-slides/export/pptx?seriesId=' + series.id + '&lecture=1');
+    const zipPath = path.join(ROOT, 'failed-old-image.pptx');
+    fs.writeFileSync(zipPath, buffer);
+    const names = (await inspectZip(zipPath)).entries.map((entry) => entry.name);
+    assert.ok(names.includes('ppt/media/image2.png'), '旧图应被导出');
+  } finally {
+    doc.slides[1] = original;
+    fs.writeFileSync(slidesPath, JSON.stringify(doc, null, 2));
+  }
+});
+
 test('AC-111：整套合并页序 = 讲序 + 页序，过渡页含讲标题与接缝句', async () => {
   const plan = await json('/dsh-book-slides/export/pptx/plan?seriesId=' + series.id + '&lecture=all');
   assert.equal(plan.ok, true);
