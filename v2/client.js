@@ -131,7 +131,8 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-divider{background:var(--blm-line);cursor:col-resize;position:relative;touch-action:none}
 .blm-divider::after{content:'';position:absolute;inset:0 -4px}
 .blm-divider:hover,.blm-divider:focus-visible{background:var(--blm-accent);outline:none}
-.blm-source-sticky{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:6px 0;background:var(--blm-bg);border-bottom:1px solid var(--blm-line);margin-bottom:8px}
+.blm-source-top{position:sticky;top:0;z-index:2;background:var(--blm-bg);border-bottom:1px solid var(--blm-line);padding-top:6px;margin-bottom:8px}
+.blm-source-sticky{display:flex;align-items:center;gap:8px;padding:6px 0}
 .blm-chip{font-size:11px;border:1px solid var(--blm-line);border-radius:99px;padding:1px 8px;color:var(--blm-dim);white-space:nowrap}
 .blm-chip.ok{color:#2ea043;border-color:color-mix(in oklab,#2ea043 35%,transparent)}
 .blm-source-banner{font-size:11px;color:var(--blm-dim);background:color-mix(in oklab,currentColor 5%,transparent);border-radius:6px;padding:5px 8px;margin-bottom:8px}
@@ -1177,7 +1178,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [highlights, setHighlights] = useState({});
       const [renderError, setRenderError] = useState(null);
       const [highlightMiss, setHighlightMiss] = useState(false);
-      const anchor = slide && slide.source_anchor ? slide.source_anchor : null;
+      const statusUnanchored = String((slide && slide.anchor_status) || '').toLowerCase() === 'unanchored';
+      const anchor = !statusUnanchored && slide && slide.source_anchor && Number(slide.source_anchor.page) >= 1 ? slide.source_anchor : null;
       const range = (slide && slide.source_pages) || { from: 1, to: 1 };
       const from = Math.max(1, Math.round(Number(range.from) || 1));
       const to = Math.max(from, Math.round(Number(range.to) || from));
@@ -1363,23 +1365,27 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         { className: 'blm-pane-source', ref: rootRef },
         h(
           'div',
-          { className: 'blm-source-sticky' },
-          h('span', { className: 'blm-chip ok' }, '第 ' + chipPage + ' 页'),
-          h('span', { className: 'blm-dim' }, from === to ? '原文第 ' + from + ' 页' : '原文第 ' + from + '–' + to + ' 页'),
-          h('div', { style: { flex: 1 } }),
+          { className: 'blm-source-top' },
           h(
-            'a',
-            {
-              className: 'blm-btn',
-              href: FILE_API + '?bookId=' + encodeURIComponent(bookId || '') + '#page=' + chipPage,
-              target: '_blank',
-              rel: 'noreferrer',
-            },
-            '打开原始 PDF',
+            'div',
+            { className: 'blm-source-sticky' },
+            h('span', { className: 'blm-chip ok' }, '第 ' + chipPage + ' 页'),
+            h('span', { className: 'blm-dim' }, from === to ? '原文第 ' + from + ' 页' : '原文第 ' + from + '–' + to + ' 页'),
+            h('div', { style: { flex: 1 } }),
+            h(
+              'a',
+              {
+                className: 'blm-btn',
+                href: FILE_API + '?bookId=' + encodeURIComponent(bookId || '') + '#page=' + chipPage,
+                target: '_blank',
+                rel: 'noreferrer',
+              },
+              '打开原始 PDF',
+            ),
           ),
+          !anchor ? h('div', { className: 'blm-source-banner' }, '本页未定位到原句，显示整页 PDF') : null,
+          highlightMiss ? h('div', { className: 'blm-source-banner' }, '本页原句没能在 PDF 页面上定位，显示整页') : null,
         ),
-        !anchor ? h('div', { className: 'blm-source-banner' }, '本页未定位到原句，显示整页 PDF') : null,
-        highlightMiss ? h('div', { className: 'blm-source-banner' }, '本页原句没能在 PDF 页面上定位，显示整页') : null,
         body,
       );
     }
@@ -1835,6 +1841,33 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           alive = false;
         };
       }, [series, seriesId, lectureN, slidesByLecture]);
+
+      /* 外部改了数据（注入降级态 / 手工编辑）后，回到窗口时丢掉当前讲缓存并刷新系列，
+         否则播放器会一直用旧 slides，看起来“降级没生效”。 */
+      useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
+        const refresh = () => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+          setSlidesByLecture((prev) => {
+            if (!prev[lectureN]) return prev;
+            const next = Object.assign({}, prev);
+            delete next[lectureN];
+            return next;
+          });
+          api('/series?seriesId=' + encodeURIComponent(seriesId))
+            .then((out) => {
+              if (out && out.series) setSeries(out.series);
+            })
+            .catch(() => {});
+        };
+        window.addEventListener('focus', refresh);
+        const hasDocEvents = typeof document !== 'undefined' && typeof document.addEventListener === 'function';
+        if (hasDocEvents) document.addEventListener('visibilitychange', refresh);
+        return () => {
+          window.removeEventListener('focus', refresh);
+          if (hasDocEvents) document.removeEventListener('visibilitychange', refresh);
+        };
+      }, [seriesId, lectureN]);
 
       /* 换讲/首次加载后决定起始页（同一讲内更新图片不重置页码） */
       const startLectureRef = useRef(0);

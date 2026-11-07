@@ -226,6 +226,7 @@ test('AC-123：原文窗格命中锚点显示页码 chip 与原句；未锚定�
   assert.ok(anchored.includes('第 7 页'), '应显示页码 chip');
   assert.ok(anchored.includes('打开原始 PDF'));
   assert.ok(anchored.includes('正在渲染 PDF 原文'));
+  assert.ok(anchored.includes('blm-source-top'), '页码与提示区必须在 sticky 容器里，滚动时提示不消失');
 
   const unanchored = renderToString(
     React.createElement(components.SourcePane, {
@@ -237,6 +238,30 @@ test('AC-123：原文窗格命中锚点显示页码 chip 与原句；未锚定�
     }),
   );
   assert.ok(unanchored.includes('本页未定位到原句'));
+
+  // 数据一致性兜底：只把 anchor_status 置 unanchored（旧锚点还在）也要降级提示
+  const statusOnly = renderToString(
+    React.createElement(components.SourcePane, {
+      pdfDoc: null,
+      pdfLoading: true,
+      pdfError: null,
+      slide: Object.assign({}, base, { anchor_status: 'unanchored' }),
+      bookId: 'aaaaaaaaaaaa',
+    }),
+  );
+  assert.ok(statusOnly.includes('本页未定位到原句'), 'anchor_status=unanchored 必须优先于残留的 source_anchor');
+
+  // 空锚点（{}）不能静默：既不高亮也不提示是缺陷
+  const emptyAnchor = renderToString(
+    React.createElement(components.SourcePane, {
+      pdfDoc: null,
+      pdfLoading: true,
+      pdfError: null,
+      slide: Object.assign({}, base, { source_anchor: {} }),
+      bookId: 'aaaaaaaaaaaa',
+    }),
+  );
+  assert.ok(emptyAnchor.includes('本页未定位到原句'), 'source_anchor 没有 page 时按未锚定处理');
 });
 
 test('AC-107：过渡卡显示下一讲标题与倒计时，可跳过', () => {
