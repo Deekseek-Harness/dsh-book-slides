@@ -56,15 +56,56 @@ function validateBrief(item, chapter) {
 }
 
 function mergeBrief(item, fallback) {
+  const sections = Array.isArray(item && item.sections)
+    ? item.sections.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 6)
+    : [];
   return {
     n: Number(fallback.n),
     gist: String((item && item.gist) || fallback.gist).trim().slice(0, 100) || fallback.gist,
-    sections: Array.isArray(item && item.sections)
-      ? item.sections.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 6)
-      : fallback.sections,
+    // 模型留空时用原文标题补齐：空数组不是“有结构”，只是“没写”
+    sections: sections.length ? sections : fallback.sections,
     role: String((item && item.role) || '').trim().slice(0, 120),
     turning: !!(item && item.turning),
   };
+}
+
+/**
+ * 逐章校验一组 brief，不合格的章回退“标题 + 首尾段”。
+ * 模型回复与落盘文件走同一处校验：briefs.json 可人工改，但它不是可信输入。
+ * @returns {{briefs:Array, warnings:string[], rejected:number[]}}
+ */
+function checkBriefs(list, chapters) {
+  const byN = new Map((Array.isArray(list) ? list : []).map((b) => [Number(b && b.n), b]));
+  const warnings = [];
+  const rejected = [];
+  const briefs = chapters.map((chapter) => {
+    const item = byN.get(Number(chapter.n));
+    if (!item) {
+      rejected.push(Number(chapter.n));
+      warnings.push('第 ' + chapter.n + ' 章缺少 brief，已回退标题 + 首尾段。');
+      return fallbackBrief(chapter);
+    }
+    if (!validateBrief(item, chapter)) {
+      rejected.push(Number(chapter.n));
+      warnings.push('第 ' + chapter.n + ' 章 brief 的 sections 未逐字出现在原文，已回退标题 + 首尾段。');
+      return fallbackBrief(chapter);
+    }
+    return mergeBrief(item, fallbackBrief(chapter));
+  });
+  return { briefs, warnings, rejected };
+}
+
+/**
+ * 读盘并校验 briefs.json（不写盘、不覆盖人工修改）。
+ * @returns {{stored:object|null, briefs:Array|null, warnings:string[], rejected:number[]}}
+ */
+export function readBriefs(dir, chapters) {
+  const stored = readJson(path.join(dir, 'briefs.json'), null);
+  if (!stored || !Array.isArray(stored.briefs)) {
+    return { stored: null, briefs: null, warnings: ['briefs.json 缺失或不可读。'], rejected: [] };
+  }
+  const checked = checkBriefs(stored.briefs, chapters);
+  return { stored, briefs: checked.briefs, warnings: checked.warnings, rejected: checked.rejected };
 }
 
 export async function buildBriefs({ ctx, book, dir, chapters, force = false }) {
@@ -72,17 +113,25 @@ export async function buildBriefs({ ctx, book, dir, chapters, force = false }) {
   const cached = readJson(file, null);
   const hash = chapters.map((c) => c.n + ':' + c.chars + ':' + c.title).join('|');
   if (!force && cached && cached.hash === hash && Array.isArray(cached.briefs)) {
-    return { briefs: cached.briefs, cached: true, fallback: false, warnings: [] };
+    // 缓存不是免检通道：人工改过的 briefs.json 同样要过 sections 原文校验
+    const checked = checkBriefs(cached.briefs, chapters);
+    return {
+      briefs: checked.briefs,
+      cached: true,
+      fallback: false,
+      degraded: checked.warnings.length > 0,
+      warnings: checked.warnings,
+    };
   }
 
   const fallback = chapters.map(fallbackBrief);
   if (!ctx) {
-    return { briefs: fallback, cached: false, fallback: true, warnings: ['没有可用模型，briefs 使用标题 + 首尾段。'] };
+    return { briefs: fallback, cached: false, fallback: true, degraded: true, warnings: ['没有可用模型，briefs 使用标题 + 首尾段。'] };
   }
 
   const prompt = promptText();
   if (!prompt) {
-    return { briefs: fallback, cached: false, fallback: true, warnings: ['briefs 提示词缺失，使用标题 + 首尾段。'] };
+    return { briefs: fallback, cached: false, fallback: true, degraded: true, warnings: ['briefs 提示词缺失，使用标题 + 首尾段。'] };
   }
 
   const input = chapters.map((c) => ({
@@ -91,9 +140,8 @@ export async function buildBriefs({ ctx, book, dir, chapters, force = false }) {
     text: String(c.text || '').slice(0, 6000),
   }));
   const user = '【书名】' + (book.title || '') + '\n【章节】\n' + JSON.stringify(input);
-  let briefs = null;
   let lastError = '';
-  for (let attempt = 0; attempt < 2 && !briefs; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     let reply;
     try {
       reply = await callModel(ctx, prompt, attempt === 0 ? user : user + '\n\n上一次输出不合格：' + lastError + '\n只输出 JSON。', {
@@ -104,26 +152,24 @@ export async function buildBriefs({ ctx, book, dir, chapters, force = false }) {
         briefs: fallback,
         cached: false,
         fallback: true,
+        degraded: true,
         warnings: ['briefs 模型调用失败：' + String((err && err.message) || err) + '，已回退标题 + 首尾段。'],
       };
     }
     try {
       const data = readJsonBlock(reply.text);
       if (!Array.isArray(data.briefs)) throw new Error('缺少 briefs 数组');
-      const byN = new Map(data.briefs.map((b) => [Number(b && b.n), b]));
-      const warnings = [];
-      briefs = chapters.map((chapter, i) => {
-        const item = byN.get(Number(chapter.n));
-        if (!item || !validateBrief(item, chapter)) {
-          warnings.push('第 ' + chapter.n + ' 章 brief 不可用，已回退。');
-          return fallback[i];
-        }
-        return mergeBrief(item, fallback[i]);
-      });
+      const checked = checkBriefs(data.briefs, chapters);
       const other = data.briefs.filter((b) => !chapters.some((c) => Number(c.n) === Number(b && b.n)));
       if (other.length) lastError = '出现了不存在的章号';
-      const result = { briefs, cached: false, fallback: false, warnings };
-      writeJson(file, { schema: 1, book_id: book.id, hash, briefs, model: reply.model, at: new Date().toISOString() });
+      const result = {
+        briefs: checked.briefs,
+        cached: false,
+        fallback: false,
+        degraded: checked.warnings.length > 0,
+        warnings: checked.warnings,
+      };
+      writeJson(file, { schema: 1, book_id: book.id, hash, briefs: checked.briefs, model: reply.model, at: new Date().toISOString() });
       return result;
     } catch (err) {
       lastError = String((err && err.message) || err);
@@ -134,6 +180,7 @@ export async function buildBriefs({ ctx, book, dir, chapters, force = false }) {
     briefs: fallback,
     cached: false,
     fallback: true,
+    degraded: true,
     warnings: ['briefs 解析失败：' + lastError + '，已回退标题 + 首尾段。'],
   };
 }

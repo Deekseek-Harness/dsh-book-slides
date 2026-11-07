@@ -190,21 +190,42 @@ export function getPart(bookId, partId) {
   return { ...part, chars: sumChars(loaded, part.chapters || []) };
 }
 
+/**
+ * 章节正文拼装：页文本用 \n 连接。
+ * 讲纲、briefs 校验、验收脚本共用这一处，避免“校验用的文本”和“生成用的文本”不是同一份。
+ */
+export function chapterTextOf(pages, chapter) {
+  return (Array.isArray(pages) ? pages : [])
+    .filter((p) => Number(p.page) >= Number(chapter.from) && Number(p.page) <= Number(chapter.to))
+    .map((p) => String(p.text || ''))
+    .join('\n');
+}
+
+/** 一本书全部章的 {n,title,from,to,chars,text}（按 chapters.json 顺序）。 */
+export function chapterTexts(bookId) {
+  const loaded = loadBook(bookId);
+  if (!loaded) return null;
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  return chaptersOf(loaded).map((c) => {
+    const text = chapterTextOf(pages, c);
+    return {
+      n: Number(c.n),
+      title: String(c.title || ''),
+      from: Number(c.from),
+      to: Number(c.to),
+      chars: Number(c.chars) || text.length,
+      text,
+    };
+  });
+}
+
 export function partChapterTexts(bookId, partId) {
   const loaded = loadBook(bookId);
   if (!loaded) return null;
   const part = readParts(loaded).find((p) => p.id === partId);
   if (!part) return null;
-  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
-  const chapters = chaptersOf(loaded).filter((c) => (part.chapters || []).includes(Number(c.n)));
-  const out = chapters.map((c) => {
-    const text = (Array.isArray(pages) ? pages : [])
-      .filter((p) => Number(p.page) >= Number(c.from) && Number(p.page) <= Number(c.to))
-      .map((p) => String(p.text || ''))
-      .join('\n');
-    return { n: Number(c.n), title: String(c.title || ''), from: Number(c.from), to: Number(c.to), chars: Number(c.chars) || text.length, text };
-  });
-  return { loaded, part, chapters: out };
+  const chapters = (chapterTexts(bookId) || []).filter((c) => (part.chapters || []).includes(Number(c.n)));
+  return { loaded, part, chapters };
 }
 
 export { validateSelection, sumChars };

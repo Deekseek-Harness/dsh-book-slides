@@ -26,7 +26,15 @@ import {
   writeCover,
 } from './books.js';
 import { ChapterError, buildBookChapters, saveBookChapters } from './chapters.js';
-import { PartError, deletePart, listParts, partChapterTexts, savePart, updatePart } from './parts.js';
+import {
+  PartError,
+  chapterTexts,
+  deletePart,
+  listParts,
+  partChapterTexts,
+  savePart,
+  updatePart,
+} from './parts.js';
 import {
   SeriesError,
   createSeries,
@@ -37,6 +45,7 @@ import {
   savePlan,
 } from './series.js';
 import { buildPlan } from './plan.js';
+import { readBriefs } from './briefs.js';
 import {
   cancelSeriesJob,
   getSeriesJob,
@@ -589,7 +598,7 @@ async function handlePlanPreview(req, res, options) {
       ok: true,
       plan: out.plan,
       warnings: out.warnings || [],
-      briefsSource: out.briefs ? (out.briefs.fallback ? 'rule' : 'model') : 'none',
+      briefsSource: out.briefs ? (out.briefs.fallback ? 'rule' : out.briefs.degraded ? 'mixed' : 'model') : 'none',
       partId: body.partId || null,
     });
   } catch (err) {
@@ -665,7 +674,9 @@ function handleBriefsGet(req, res, url) {
     sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
     return;
   }
-  sendJson(res, 200, { ok: true, briefs: readJson(path.join(loaded.dir, 'briefs.json'), null) });
+  // 落盘文件可人工改，但展示前必须过 sections 原文校验；坏条目回退并给出 warnings。
+  const checked = readBriefs(loaded.dir, chapterTexts(bookId) || []);
+  sendJson(res, 200, { ok: true, briefs: checked.stored, warnings: checked.warnings, rejected: checked.rejected });
 }
 
 /* ------------------------------ M3: 生成 / 作业 / 后验缝 ------------------------------ */

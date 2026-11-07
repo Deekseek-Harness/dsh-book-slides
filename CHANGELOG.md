@@ -7,6 +7,8 @@
 
 主题「Part 默认禁选、可编辑」：修正 AC-92 与 AC-129 的文档矛盾，按预防式禁选收敛；补 Part 编辑入口。
 
+主题「AC 判据化：可触发、可观察、可判定」：FR-14 的 AC-99 / AC-100 原先只写“性质”，没有触发失败分支的手段，也没把机检结论暴露成信号；本次补读取侧校验、故障注入与机检退出码。
+
 ### 修复
 
 - 已确认 Part 的章在列表中始终只读且不可反选，从源头避免 Part 冲突；不提供“再勾选已属 Part 的章”或冲突三选弹窗。AC-92 改为结果型验收：UI 无重选路径，API 冲突仍返回 `E_PART_CONFLICT` 且不写盘。
@@ -29,6 +31,13 @@
 - 新增 `test/v2-part-ui.test.mjs`：默认禁选/只读、无重选入口、旧快照徽标、Part 编辑弹窗静态渲染与源码入口。
 - `test/v2-m2.test.mjs` 增加系列 `part_version`/章快照不随 Part 编辑改变的断言。
 - `test/v2-m2.test.mjs` 的 AC-96/97/98 改为表驱动：FR-13.1 夹具 F1–F12 + 6 万整/6 万+1 边界 + 48 章 `E_SERIES_TOO_MANY`。
+
+### 章介绍（FR-14：AC-99 / AC-100）
+
+- SRS v1.6：AC-99 / AC-100 改为“构造 → 断言 → 判定 → 机检入口 → 人工边界”，`sections` 校验明确覆盖落盘 `briefs.json`，坏 JSON 用故障注入判定；§10 / §12.7 / 附录 D 同步。
+- `briefs.json` 读取侧校验：讲纲缓存命中与 `GET /briefs` 都会重跑 `sections` 原文校验；改坏的章回退“标题 + 首尾段”并给 warning，不静默采用，也不覆盖人工修改。
+- `/plan/preview` 的 `briefsSource` 增加 `mixed`（部分章回退）；`GET /briefs` 返回 `warnings` 与 `rejected`。
+- 新增 `npm run verify:briefs`（AC-99 机检，退出码 0/1）与 `test/v2-briefs.test.mjs`（AC-99/100：坏 section 逐章回退、坏 JSON 重试 1 次、route 级 `mixed` 可观察）。
 
 ## [2.0.0-alpha.7] - 2026-11-08
 
