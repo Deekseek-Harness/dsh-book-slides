@@ -73,7 +73,25 @@ body[data-ds-dark-theme] .blm-badge.warn{color:#ffd27a}
 .blm-parts{display:flex;flex-direction:column;gap:6px;margin-top:10px}
 .blm-part{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;border:1px solid var(--blm-line);border-radius:8px;background:color-mix(in oklab,currentColor 3%,transparent)}
 .blm-part-main{flex:1;min-width:0}
-.blm-chapter{display:grid;grid-template-columns:22px 34px 1fr 52px 52px 72px;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--blm-line);font-size:12px;color:var(--blm-text)}
+.blm-chapter{display:grid;grid-template-columns:22px 22px 34px minmax(0,1fr) 52px 52px 56px 88px;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--blm-line);font-size:12px;color:var(--blm-text)}
+.blm-tree-head{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:6px 10px 8px;font-size:12px;color:var(--blm-dim)}
+.blm-single-root{border:1px solid color-mix(in oklab,#f0b400 45%,transparent);background:color-mix(in oklab,#f0b400 10%,transparent);color:#8a5a00;border-radius:8px;padding:8px 10px;margin:8px 10px;font-size:12px;display:flex;flex-direction:column;gap:6px}
+body[data-ds-dark-theme] .blm-single-root{color:#ffd27a}
+.blm-tree-toggle{appearance:none;border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;line-height:1;padding:0;width:20px;height:20px;border-radius:4px;opacity:.65}
+.blm-tree-toggle:hover{background:var(--blm-btn-hover);opacity:1}
+.blm-chapter-child{font-size:11.5px;background:color-mix(in oklab,currentColor 2%,transparent)}
+.blm-chapter-child .t{color:var(--blm-dim);cursor:default}
+.blm-chapters-tree .blm-chapter:last-child{border-bottom:0}
+.blm-build{border:1px solid var(--blm-line);border-radius:10px;padding:10px 12px;margin-top:10px;background:color-mix(in oklab,currentColor 3%,transparent)}
+.blm-build-advanced{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.blm-build-hint{font-size:11px;margin-top:6px}
+.blm-build-preview{max-height:180px;overflow:auto;margin:8px 0 0;padding:8px;border-radius:7px;background:color-mix(in oklab,currentColor 5%,transparent);font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.blm-build-summary{margin-top:10px;border-top:1px dashed var(--blm-line);padding-top:8px;font-size:12px}
+.blm-build-summary-compact{margin-top:10px;border:1px solid var(--blm-line);border-radius:8px;padding:8px 10px;background:var(--blm-card)}
+.blm-build-attempts{margin-top:8px;font-size:11px}
+.blm-build-attempts summary{cursor:pointer;color:var(--blm-dim)}
+.blm-build-attempts div{margin-top:4px}
+.blm-btn.on{background:var(--blm-accent);border-color:var(--blm-accent);color:#fff}
 .blm-chapter.owns{background:color-mix(in oklab,currentColor 4%,transparent)}
 .blm-chapter input[type="checkbox"]{width:14px;height:14px;margin:0;padding:0;accent-color:var(--blm-accent)}
 .blm-selectbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;position:sticky;bottom:0;padding:9px 0;margin-top:10px;background:var(--blm-bg);border-top:1px solid var(--blm-line);z-index:3}
@@ -4147,16 +4165,392 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       );
     }
 
+    /* ------------------------------ 分章面板 ------------------------------ */
+
+    const SOURCE_LABELS = {
+      bookmark: '书签',
+      printed_toc: '目录',
+      mechanical: '机械',
+      manual: '手动',
+      auto: '机械',
+      toc: '目录',
+      mech: '机械',
+    };
+    const ATTEMPT_LABELS = { used: '已用', empty: '无结果', failed: '失败', skipped: '跳过' };
+
+    function sourceLabel(source) {
+      return SOURCE_LABELS[String(source || '')] || '';
+    }
+
+    function chapterSourceLabel(chapter) {
+      if (!chapter) return '';
+      if (chapter.front === true) return '前文';
+      if (chapter.manual === true) return '手动';
+      return sourceLabel(chapter.source);
+    }
+
+    /** AC-157：自动/高级两个入口的请求体，纯函数便于静态测试。 */
+    function chapterBuildRequest({
+      bookId,
+      advancedOpen,
+      advancedSource,
+      tocFrom,
+      tocTo,
+      force,
+      outlineDepth,
+      modeOverride,
+    }) {
+      const mode = modeOverride || (advancedOpen ? advancedSource : 'auto');
+      const body = { bookId, mode };
+      if (force === true) body.force = true;
+      if (Number.isInteger(outlineDepth) && outlineDepth >= 0) body.outlineDepth = outlineDepth;
+      if (mode === 'printed_toc') {
+        body.range = { from: Number(tocFrom) || 0, to: Number(tocTo) || 0 };
+      }
+      return body;
+    }
+
+    function childNodesAtDepth(nodes, depth, out = []) {
+      for (const node of Array.isArray(nodes) ? nodes : []) {
+        if (Number(node && node.depth) === depth) out.push(node);
+        if (node && Array.isArray(node.children) && node.children.length) {
+          childNodesAtDepth(node.children, depth, out);
+        }
+      }
+      return out;
+    }
+
+    /** 从 book.bookmarkTree 恢复单根提示所需的 outline 元信息（重开后也能提示）。 */
+    function outlineInfo(book) {
+      if (!book || book.chapterSource !== 'bookmark') return null;
+      if (!Array.isArray(book.bookmarkTree) || !book.bookmarkTree.length) return null;
+      const rootDepth = Number.isInteger(book.bookmarkRootDepth) ? book.bookmarkRootDepth : 0;
+      const total = Number(book.pages) || 0;
+      const valid = (nodes) => {
+        const lastByPage = new Map();
+        const order = [];
+        for (const node of nodes) {
+          const page = Number(node && node.page) || 0;
+          if (!node || !node.title || page < 1 || page > total) continue;
+          if (!lastByPage.has(page)) order.push(page);
+          lastByPage.set(page, node);
+        }
+        const entries = [];
+        for (const page of order) {
+          const node = lastByPage.get(page);
+          if (entries.length && page <= entries[entries.length - 1].page) continue;
+          entries.push(node);
+        }
+        return entries;
+      };
+      const roots = valid(childNodesAtDepth(book.bookmarkTree, rootDepth));
+      const next = valid(childNodesAtDepth(book.bookmarkTree, rootDepth + 1));
+      return {
+        rootDepth,
+        rootCount: roots.length,
+        canDescend: next.length > 0,
+        nextDepth: rootDepth + 1,
+        nextCount: next.length,
+      };
+    }
+
+    function countDescendants(node) {
+      let count = 0;
+      for (const child of (node && node.children) || []) {
+        count += 1 + countDescendants(child);
+      }
+      return count;
+    }
+
+    /** 书签树：根可勾选/展开，子节点缩进只读；单根提示与回到顶层。 */
+    function ChapterTree({
+      tree,
+      rootDepth,
+      chapters,
+      partOf,
+      selected,
+      busy,
+      expanded,
+      outline,
+      onToggleExpand,
+      onToggleChapter,
+      onDescend,
+      onKeep,
+      onTop,
+    }) {
+      const roots = childNodesAtDepth(tree, rootDepth).filter((node) => Number.isInteger(node.n));
+      if (!roots.length) return null;
+      const chapterOf = (n) => (chapters || []).find((chapter) => Number(chapter.n) === Number(n)) || null;
+      const totalChildren = roots.reduce((sum, node) => sum + countDescendants(node), 0);
+      const firstChapter = chapterOf(roots[0].n);
+      const isOpen = (n) => !!(expanded && typeof expanded.has === 'function' && expanded.has(Number(n)));
+
+      const childRows = (node, level, open) => {
+        const rows = [];
+        for (const child of node.children || []) {
+          rows.push(
+            h(
+              'div',
+              {
+                className: 'blm-chapter blm-chapter-child',
+                key: 'child-' + node.n + '-' + level + '-' + child.page + '-' + child.title,
+                style: { paddingLeft: 10 + level * 18 + 'px' },
+              },
+              h('span'),
+              h('span'),
+              h('span'),
+              h('span', { className: 't', title: child.title }, child.title),
+              h('span', { className: 'blm-dim' }, child.page ? 'p' + child.page : ''),
+              h('span'),
+              h('span'),
+              h('span'),
+            ),
+          );
+          if (open && child.children && child.children.length) {
+            rows.push(...childRows(child, level + 1, open));
+          }
+        }
+        return rows;
+      };
+
+      const rootRows = [];
+      for (const node of roots) {
+        const chapter = chapterOf(node.n);
+        if (!chapter) continue;
+        const owner = partOf && typeof partOf.get === 'function' ? partOf.get(Number(chapter.n)) || null : null;
+        const state = chapterSelectionState({
+          n: Number(chapter.n),
+          front: chapter.front === true,
+          owner,
+          selected,
+          busy,
+        });
+        const open = isOpen(node.n);
+        const canExpand = !!(node.children && node.children.length);
+        rootRows.push(
+          h(
+            'div',
+            { className: 'blm-chapter blm-chapter-root' + (owner ? ' owns' : ''), key: 'root-' + node.n },
+            canExpand
+              ? h(
+                  'button',
+                  {
+                    className: 'blm-tree-toggle',
+                    type: 'button',
+                    'aria-label': open ? '收起子节' : '展开子节',
+                    onClick: () => onToggleExpand && onToggleExpand(Number(node.n)),
+                  },
+                  open ? '▾' : '▸',
+                )
+              : h('span'),
+            h('input', {
+              type: 'checkbox',
+              checked: state.checked,
+              disabled: state.disabled,
+              onChange: () => onToggleChapter && onToggleChapter(Number(chapter.n)),
+              title: state.title,
+            }),
+            h('span', { className: 'blm-dim' }, String(chapter.n)),
+            h('span', { className: 't', title: chapter.title }, chapter.title),
+            h('span', { className: 'blm-dim' }, 'p' + chapter.from),
+            h('span', { className: 'blm-dim' }, 'p' + chapter.to),
+            h(ChapterSourceBadge, { chapter }),
+            h(
+              'span',
+              { className: 'blm-dim', style: { fontSize: 10, textAlign: 'right' } },
+              owner ? '属于 ' + owner.title : canExpand ? countDescendants(node) + ' 节' : '',
+            ),
+          ),
+        );
+        if (open && canExpand) rootRows.push(...childRows(node, 1, true));
+      }
+
+      return h(
+        'div',
+        { className: 'blm-tree' },
+        h(
+          'div',
+          { className: 'blm-tree-head' },
+          h('strong', null, roots.length + ' 章 · ' + totalChildren + ' 节'),
+          h('span', { className: 'blm-dim', style: { fontSize: 10 } }, '子节页码为书签原页'),
+          rootDepth > 0 && onTop
+            ? h('button', { className: 'blm-btn', disabled: busy, onClick: onTop }, '回到顶层')
+            : null,
+        ),
+        outline && outline.rootCount === 1
+          ? h(
+              'div',
+              { className: 'blm-single-root' },
+              h(
+                'div',
+                null,
+                '书签顶层只有 1 条《' +
+                  String((firstChapter && firstChapter.title) || roots[0].title || '') +
+                  '》。' +
+                  (outline.canDescend
+                    ? '是否下移一层（' + outline.nextCount + ' 条）导入？'
+                    : '书签只有 1 个根。'),
+              ),
+              outline.canDescend
+                ? h(
+                    'div',
+                    { className: 'blm-row' },
+                    h('button', { className: 'blm-btn primary', disabled: busy, onClick: onDescend }, '下移一层导入'),
+                    h('button', { className: 'blm-btn', disabled: busy, onClick: onKeep }, '保持 1 章'),
+                  )
+                : null,
+            )
+          : null,
+        h('div', { className: 'blm-chapters blm-chapters-tree' }, rootRows),
+      );
+    }
+
+    function ChapterSourceBadge({ chapter }) {
+      const label = chapterSourceLabel(chapter);
+      if (!label) return null;
+      return h('span', { className: 'blm-badge blm-src' }, label);
+    }
+
+    function ChapterBuildPanel({
+      built, advancedOpen, advancedSource, tocFrom, tocTo, suggested, tocPreview,
+      busy, source, confidence, warnings, attempts, manualCount,
+      onToggleAdvanced, onSource, onFrom, onTo, onPreview, onBuild, onClose,
+    }) {
+      const sourceText = sourceLabel(source);
+      const confidenceValue =
+        confidence === null || confidence === undefined || confidence === '' ? NaN : Number(confidence);
+      const confidenceText = Number.isFinite(confidenceValue) ? confidenceValue.toFixed(2) : '';
+      const warningList = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+      const attemptList = Array.isArray(attempts) ? attempts.filter(Boolean) : [];
+      return h(
+        'div',
+        { className: 'blm-build' },
+        h(
+          'div',
+          { className: 'blm-row' },
+          h(
+            'button',
+            { className: 'blm-btn primary', disabled: busy, onClick: onBuild },
+            busy ? '正在分章…' : advancedOpen ? '按此方式分章' : '自动分章',
+          ),
+          h('button', { className: 'blm-btn', disabled: busy, onClick: onToggleAdvanced }, advancedOpen ? '收起高级' : '高级'),
+          advancedOpen
+            ? h(
+                React.Fragment,
+                null,
+                h('span', { className: 'blm-dim' }, '强制来源'),
+                h(
+                  'button',
+                  {
+                    className: 'blm-btn' + (advancedSource === 'printed_toc' ? ' on' : ''),
+                    disabled: busy,
+                    onClick: () => onSource('printed_toc'),
+                  },
+                  '印刷目录',
+                ),
+                h(
+                  'button',
+                  {
+                    className: 'blm-btn' + (advancedSource === 'mechanical' ? ' on' : ''),
+                    disabled: busy,
+                    onClick: () => onSource('mechanical'),
+                  },
+                  '机械切章',
+                ),
+              )
+            : null,
+          h('div', { style: { flex: 1 } }),
+          built && onClose ? h('button', { className: 'blm-btn', disabled: busy, onClick: onClose }, '收起') : null,
+        ),
+        advancedOpen && advancedSource === 'printed_toc'
+          ? h(
+              'div',
+              { className: 'blm-build-advanced' },
+              h('span', { className: 'blm-dim' }, '目录页'),
+              h('input', {
+                className: 'blm-num',
+                type: 'number',
+                min: 1,
+                placeholder: '起始页',
+                value: tocFrom,
+                disabled: busy,
+                onChange: (event) => onFrom(event.target.value),
+              }),
+              h('span', { className: 'blm-dim' }, '–'),
+              h('input', {
+                className: 'blm-num',
+                type: 'number',
+                min: 1,
+                placeholder: '结束页',
+                value: tocTo,
+                disabled: busy,
+                onChange: (event) => onTo(event.target.value),
+              }),
+              h('button', { className: 'blm-btn', disabled: busy, onClick: onPreview }, '预览这几页'),
+              suggested
+                ? h('span', { className: 'blm-dim' }, '建议 ' + suggested.from + '–' + suggested.to + ' 页')
+                : h('span', { className: 'blm-dim' }, '没猜出目录页，请手填'),
+            )
+          : null,
+        advancedOpen && advancedSource === 'mechanical'
+          ? h('div', { className: 'blm-dim blm-build-hint' }, '机械切章 = 1.x 的页眉/章号行正则；不是按页数/字数切块。')
+          : null,
+        advancedOpen && tocPreview ? h('pre', { className: 'blm-build-preview' }, tocPreview) : null,
+        h('div', { className: 'blm-dim blm-build-hint' }, '自动分章按 书签 → 印刷目录 → 机械切章 依次尝试；无标题长书由讲次规划拆讲。'),
+        manualCount > 0
+          ? h('div', { className: 'blm-dim blm-build-hint' }, '有 ' + manualCount + ' 个手动修改过的章；重新分章会先确认再覆盖。')
+          : null,
+        built && (sourceText || confidenceText || warningList.length)
+          ? h(
+              'div',
+              { className: 'blm-build-summary' },
+              h(
+                'div',
+                { className: 'blm-row' },
+                h('strong', null, '本次来源：' + (sourceText || '未知')),
+                confidenceText ? h('span', { className: 'blm-badge' }, '置信度 ' + confidenceText) : null,
+              ),
+              warningList.map((warning, index) => h('div', { className: 'blm-note warn', key: index }, warning)),
+            )
+          : null,
+        attemptList.length
+          ? h(
+              'details',
+              { className: 'blm-build-attempts' },
+              h('summary', null, '为什么用这个来源'),
+              attemptList.map((item, index) =>
+                h(
+                  'div',
+                  { key: index, className: 'blm-dim' },
+                  sourceLabel(item.source) +
+                    '：' +
+                    (ATTEMPT_LABELS[String(item.result || '')] || String(item.result || '')) +
+                    (item.reason ? '（' + item.reason + '）' : '') +
+                    (item.chapters ? ' · ' + item.chapters + ' 章' : ''),
+                ),
+              ),
+            )
+          : null,
+      );
+    }
+
     function Detail({ bookId, onBack, onChanged, notify, onPlay }) {
       const [data, setData] = useState(null);
       const [parts, setParts] = useState([]);
       const [series, setSeries] = useState([]);
       const [loading, setLoading] = useState(true);
       const [busy, setBusy] = useState(false);
-      const [mode, setMode] = useState('auto');
+      const [buildOpen, setBuildOpen] = useState(false);
+      const [advancedOpen, setAdvancedOpen] = useState(false);
+      const [advancedSource, setAdvancedSource] = useState('printed_toc');
       const [tocFrom, setTocFrom] = useState('');
       const [tocTo, setTocTo] = useState('');
-      const [progress, setProgress] = useState(0);
+      const [tocSuggested, setTocSuggested] = useState(null);
+      const [tocPreview, setTocPreview] = useState('');
+      const [chapterWarnings, setChapterWarnings] = useState([]);
+      const [chapterAttempts, setChapterAttempts] = useState([]);
+      const [chapterOutline, setChapterOutline] = useState(null);
+      const [treeExpanded, setTreeExpanded] = useState(() => new Set());
       const [draft, setDraft] = useState([]);
       const [editing, setEditing] = useState(false);
       const [selected, setSelected] = useState([]);
@@ -4241,6 +4635,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           ]);
           setData(out);
           setDraft(out.chapters || []);
+          setChapterWarnings(
+            out.book && Array.isArray(out.book.chapterWarnings) ? out.book.chapterWarnings : [],
+          );
+          setChapterOutline(outlineInfo(out.book));
           setParts(partOut.parts || []);
           setSeries(seriesOut.series || []);
         } catch (err) {
@@ -4253,20 +4651,28 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         load();
       }, [load]);
 
-      // 重新进入详情页时恢复上次填写的目录范围；改动后防抖落盘。
+      // 重新进入详情页时恢复上次填写的目录范围；没有上次范围就用建议值预填。
       useEffect(() => {
         let alive = true;
         api('/toc?bookId=' + encodeURIComponent(bookId))
           .then((out) => {
             if (!alive) return;
             tocBookRef.current = bookId;
+            const suggested = out && out.suggested;
+            if (suggested && Number(suggested.from) >= 1 && Number(suggested.to) >= Number(suggested.from)) {
+              setTocSuggested({ from: Number(suggested.from), to: Number(suggested.to) });
+            } else {
+              setTocSuggested(null);
+            }
             const range = out && out.range;
-            if (!range) return;
-            const from = Number(range.from) || 0;
-            const to = Number(range.to) || 0;
+            const from = Number(range && range.from) || 0;
+            const to = Number(range && range.to) || 0;
             if (from >= 1 && to >= from) {
               setTocFrom(String(from));
               setTocTo(String(to));
+            } else if (suggested && Number(suggested.from) >= 1) {
+              setTocFrom(String(suggested.from));
+              setTocTo(String(suggested.to));
             }
           })
           .catch(() => {
@@ -4322,37 +4728,118 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         }
       };
 
-      const build = async () => {
+      const build = async (options = {}) => {
+        const current = (data && data.chapters) || [];
+        const manualCount = current.filter((chapter) => chapter && chapter.manual).length;
+        let force = false;
+        if (manualCount > 0) {
+          const ok = await confirmAction(
+            '重新分章会覆盖 ' + manualCount + ' 个手动修改过的章。继续？',
+            { title: '重新分章', okText: '覆盖并重分', danger: true },
+          );
+          if (!ok) return;
+          force = true;
+        }
         setBusy(true);
-        setProgress(0);
         const controller = beginLong('build');
-        const timer = setInterval(() => setProgress((v) => Math.min(0.9, v + 0.06)), 180);
         try {
+          const body = chapterBuildRequest({
+            bookId,
+            advancedOpen,
+            advancedSource,
+            tocFrom,
+            tocTo,
+            force,
+            outlineDepth: options && options.outlineDepth,
+            modeOverride: options && options.mode,
+          });
           const out = await api('/chapters/build', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              bookId,
-              mode,
-              from: mode === 'toc' ? Number(tocFrom) || 0 : 0,
-              to: mode === 'toc' ? Number(tocTo) || 0 : 0,
-            }),
+            body: JSON.stringify(body),
             signal: controller.signal,
           });
-          setProgress(1);
-          const warn = Array.isArray(out.warnings) && out.warnings.length ? '；' + out.warnings.join(' ') : '';
-          notify('已生成 ' + out.chapters.length + ' 章' + warn);
           setSelected([]);
+          setChapterWarnings(Array.isArray(out.warnings) ? out.warnings : []);
+          setChapterAttempts(Array.isArray(out.attempts) ? out.attempts : []);
+          setChapterOutline(out.outline || null);
+          setBuildOpen(false);
+          setAdvancedOpen(false);
+          setTocPreview('');
+          notify('已分章：' + (out.chapters || []).length + ' 章');
           await load();
           onChanged();
         } catch (err) {
-          if (isAbortError(err)) setProgress(0);
-          else notify(err.code === 'E_MANUAL_EDITS' ? '有手动修改过的章；请确认覆盖后重试。' : err.message);
+          if (!isAbortError(err)) {
+            notify(err.code === 'E_MANUAL_EDITS' ? '有手动修改过的章；请确认覆盖后重试。' : err.message);
+          }
         } finally {
-          clearInterval(timer);
           endLong(controller);
           setBusy(false);
         }
+      };
+
+      const toggleAdvanced = () => {
+        const next = !advancedOpen;
+        setAdvancedOpen(next);
+        if (next && advancedSource === 'printed_toc' && !tocFrom && tocSuggested) {
+          setTocFrom(String(tocSuggested.from));
+          setTocTo(String(tocSuggested.to));
+        }
+      };
+
+      const selectAdvancedSource = (source) => {
+        setAdvancedSource(source);
+        if (source === 'printed_toc' && !tocFrom && tocSuggested) {
+          setTocFrom(String(tocSuggested.from));
+          setTocTo(String(tocSuggested.to));
+        }
+      };
+
+      const previewToc = async () => {
+        const from = Number(tocFrom) || 0;
+        const to = Number(tocTo) || 0;
+        if (!(from >= 1 && to >= from)) {
+          notify('先填目录起止页。');
+          return;
+        }
+        try {
+          const out = await api('/toc/preview', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ bookId, from, to }),
+          });
+          setTocPreview(String(out.preview || ''));
+        } catch (err) {
+          notify(err.message);
+        }
+      };
+
+      const openBuild = () => {
+        setBuildOpen(true);
+        setAdvancedOpen(false);
+      };
+
+      const toggleTree = (n) => {
+        setTreeExpanded((current) => {
+          const next = new Set(current);
+          if (next.has(Number(n))) next.delete(Number(n));
+          else next.add(Number(n));
+          return next;
+        });
+      };
+
+      const descendTree = () => {
+        if (!chapterOutline || !chapterOutline.canDescend) return;
+        build({ outlineDepth: chapterOutline.nextDepth, mode: 'auto' });
+      };
+
+      const keepSingleRoot = () => {
+        setChapterOutline(null);
+      };
+
+      const topTree = () => {
+        build({ outlineDepth: 0, mode: 'auto' });
       };
 
       const save = async () => {
@@ -4532,10 +5019,25 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
       const book = data.book || {};
       const chapters = data.chapters || [];
+      const bookmarkTreeReady =
+        book.chapterSource === 'bookmark' &&
+        Array.isArray(book.bookmarkTree) &&
+        book.bookmarkTree.length > 0 &&
+        Number.isInteger(book.bookmarkRootDepth);
       const cover = data.cover ? API + '/cover?bookId=' + encodeURIComponent(bookId) + '&v=' + encodeURIComponent(book.coverUpdatedAt || book.lastOpenedAt || '') : '';
       const partOf = new Map();
       for (const part of parts) for (const n of part.chapters || []) partOf.set(Number(n), part);
       const partSeriesCount = (partId) => series.filter((item) => item.part_id === partId).length;
+      const partSectionCount = (part) => {
+        if (!bookmarkTreeReady) return 0;
+        const roots = childNodesAtDepth(book.bookmarkTree, book.bookmarkRootDepth);
+        let count = 0;
+        for (const n of part.chapters || []) {
+          const node = roots.find((item) => Number(item.n) === Number(n));
+          if (node) count += countDescendants(node);
+        }
+        return count;
+      };
       const selectedChars = chapters.filter((c) => selected.includes(Number(c.n))).reduce((sum, c) => sum + (Number(c.chars) || 0), 0);
       const longOpLabel = longOp === 'build' ? '分章构建' : longOp === 'plan' ? '讲纲预览' : longOp === 'cover' ? '封面生成' : '长任务';
       const toggleChapter = (n) => {
@@ -4577,33 +5079,54 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
             h('div', { className: 'blm-meta' }, data.chaptersBuilt ? chapters.length + ' 章 · ' + parts.length + ' 个 Part · ' + series.length + ' 个系列' : '尚未分章'),
           ),
         ),
-        !data.chaptersBuilt
+        !data.chaptersBuilt || buildOpen
+          ? h(ChapterBuildPanel, {
+              built: data.chaptersBuilt,
+              advancedOpen,
+              advancedSource,
+              tocFrom,
+              tocTo,
+              suggested: tocSuggested,
+              tocPreview,
+              busy,
+              source: book.chapterSource,
+              confidence: book.chapterConfidence,
+              warnings: chapterWarnings,
+              attempts: chapterAttempts,
+              manualCount: chapters.filter((chapter) => chapter && chapter.manual).length,
+              onToggleAdvanced: toggleAdvanced,
+              onSource: selectAdvancedSource,
+              onFrom: setTocFrom,
+              onTo: setTocTo,
+              onPreview: previewToc,
+              onBuild: build,
+              onClose: data.chaptersBuilt ? () => setBuildOpen(false) : null,
+            })
+          : null,
+        data.chaptersBuilt
           ? h(
               'div',
-              { style: { marginTop: 10 } },
-              h(
-                'div',
-                { className: 'blm-row' },
-                h('select', { className: 'blm-select', value: mode, onChange: (e) => setMode(e.target.value), disabled: busy },
-                  h('option', { value: 'auto' }, '自动（书签/标题/机械）'),
-                  h('option', { value: 'toc' }, '目录（书签或印刷目录）'),
-                  h('option', { value: 'mech' }, '机械切分'),
-                ),
-                mode === 'toc'
-                  ? h(React.Fragment, null,
-                      h('input', { className: 'blm-num', type: 'number', min: 1, placeholder: '目录起始页', value: tocFrom, onChange: (e) => setTocFrom(e.target.value), disabled: busy }),
-                      h('span', { className: 'blm-dim' }, '–'),
-                      h('input', { className: 'blm-num', type: 'number', min: 1, placeholder: '目录结束页', value: tocTo, onChange: (e) => setTocTo(e.target.value), disabled: busy }),
-                    )
-                  : null,
-                h('button', { className: 'blm-btn primary', disabled: busy, onClick: build }, busy ? '正在分章…' : '生成章节目录'),
-              ),
-              h('div', { className: 'blm-progress' }, h('i', { style: { width: Math.round(progress * 100) + '%' } })),
-              h('div', { className: 'blm-dim' }, '导入不再自动分章；目录模式在没有书签时会回退自动分章。'),
-            )
-          : h(
-              'div',
               null,
+              !buildOpen
+                ? h(
+                    'div',
+                    { className: 'blm-build-summary blm-build-summary-compact' },
+                    h(
+                      'div',
+                      { className: 'blm-row' },
+                      h('strong', null, '本次来源：' + (sourceLabel(book.chapterSource) || '未知')),
+                      book.chapterConfidence !== null &&
+                        book.chapterConfidence !== undefined &&
+                        book.chapterConfidence !== '' &&
+                        Number.isFinite(Number(book.chapterConfidence))
+                        ? h('span', { className: 'blm-badge' }, '置信度 ' + Number(book.chapterConfidence).toFixed(2))
+                        : null,
+                    ),
+                    (chapterWarnings || []).map((warning, index) =>
+                      h('div', { className: 'blm-note warn', key: index }, warning),
+                    ),
+                  )
+                : null,
               parts.length
                 ? h(
                     'div',
@@ -4628,7 +5151,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                             h('span', { className: 'blm-badge ok' }, '已确认'),
                           ),
                           h('div', { className: 'blm-meta' },
-                            part.chapters.length + ' 章 · ' + (part.chars || 0) + ' 字 · ' +
+                            part.chapters.length + ' 章' +
+                            (partSectionCount(part) ? ' · ' + partSectionCount(part) + ' 节' : '') +
+                            ' · ' + (part.chars || 0) + ' 字 · ' +
                             partSeriesCount(part.id) + ' 个系列 · v' + part.version),
                         ),
                         h('button', { className: 'blm-btn', disabled: busy, onClick: () => previewPlan(part) }, '预览讲纲'),
@@ -4642,41 +5167,69 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 'div',
                 { className: 'blm-row', style: { marginTop: 4 } },
                 h('button', { className: 'blm-btn', onClick: () => setEditing((v) => !v) }, editing ? '取消编辑' : '校准章节'),
+                !buildOpen && !editing
+                  ? h('button', { className: 'blm-btn', disabled: busy, onClick: openBuild }, '重新分章')
+                  : null,
                 editing ? h('button', { className: 'blm-btn primary', disabled: busy, onClick: save }, '保存') : null,
               ),
-              h(
-                'div',
-                { className: 'blm-chapters' },
-                (editing ? draft : chapters).map((c, i) => {
-                  const n = Number(c.n);
-                  const owner = partOf.get(n) || null;
-                  const state = chapterSelectionState({ n, front: c.front === true, owner, selected, busy });
-                  return h(
-                    'div',
-                    { className: 'blm-chapter' + (owner ? ' owns' : ''), key: c.n + '-' + c.from },
-                    editing
-                      ? h('span', null)
-                      : h('input', {
-                          type: 'checkbox',
-                          checked: state.checked,
-                          disabled: state.disabled,
-                          onChange: () => toggleChapter(n),
-                          title: state.title,
-                        }),
-                    h('span', { className: 'blm-dim' }, String(c.n ?? i + 1)),
-                    editing
-                      ? h('input', { value: c.title, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { title: e.target.value }) : x))) })
-                      : h('span', { className: 't', title: c.title, onClick: () => setEditing(true) }, c.title),
-                    editing
-                      ? h('input', { type: 'number', value: c.from, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { from: Number(e.target.value) }) : x))) })
-                      : h('span', { className: 'blm-dim' }, 'p' + c.from),
-                    editing
-                      ? h('input', { type: 'number', value: c.to, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { to: Number(e.target.value) }) : x))) })
-                      : h('span', { className: 'blm-dim' }, 'p' + c.to),
-                    h('span', { className: 'blm-dim', style: { fontSize: 10, textAlign: 'right' } }, c.front === true ? '前文' : owner ? '属于 ' + owner.title : c.manual ? '手动' : ''),
-                  );
-                }),
-              ),
+              bookmarkTreeReady && !editing
+                ? h(ChapterTree, {
+                    tree: book.bookmarkTree,
+                    rootDepth: book.bookmarkRootDepth,
+                    chapters,
+                    partOf,
+                    selected,
+                    busy,
+                    expanded: treeExpanded,
+                    outline: chapterOutline,
+                    onToggleExpand: toggleTree,
+                    onToggleChapter: toggleChapter,
+                    onDescend: descendTree,
+                    onKeep: keepSingleRoot,
+                    onTop: topTree,
+                  })
+                : h(
+                    React.Fragment,
+                    null,
+                    bookmarkTreeReady && editing
+                      ? h('div', { className: 'blm-dim blm-build-hint' }, '书签子节点只读；编辑时只显示根章。')
+                      : null,
+                    h(
+                      'div',
+                      { className: 'blm-chapters' },
+                      (editing ? draft : chapters).map((c, i) => {
+                        const n = Number(c.n);
+                        const owner = partOf.get(n) || null;
+                        const state = chapterSelectionState({ n, front: c.front === true, owner, selected, busy });
+                        return h(
+                          'div',
+                          { className: 'blm-chapter' + (owner ? ' owns' : ''), key: c.n + '-' + c.from },
+                          h('span'),
+                          editing
+                            ? h('span', null)
+                            : h('input', {
+                                type: 'checkbox',
+                                checked: state.checked,
+                                disabled: state.disabled,
+                                onChange: () => toggleChapter(n),
+                                title: state.title,
+                              }),
+                          h('span', { className: 'blm-dim' }, String(c.n ?? i + 1)),
+                          editing
+                            ? h('input', { value: c.title, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { title: e.target.value }) : x))) })
+                            : h('span', { className: 't', title: c.title, onClick: () => setEditing(true) }, c.title),
+                          editing
+                            ? h('input', { type: 'number', value: c.from, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { from: Number(e.target.value) }) : x))) })
+                            : h('span', { className: 'blm-dim' }, 'p' + c.from),
+                          editing
+                            ? h('input', { type: 'number', value: c.to, onChange: (e) => setDraft((list) => list.map((x) => (x === c ? Object.assign({}, x, { to: Number(e.target.value) }) : x))) })
+                            : h('span', { className: 'blm-dim' }, 'p' + c.to),
+                          h(ChapterSourceBadge, { chapter: c }),
+                          h('span', { className: 'blm-dim', style: { fontSize: 10, textAlign: 'right' } }, owner ? '属于 ' + owner.title : ''),
+                        );
+                      }),
+                    ),
+                  ),
               !editing
                 ? h(
                     'div',
@@ -4728,6 +5281,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     })),
                   )
                 : null,
+            )
+          : null,
         partEdit
           ? h(PartEditDialog, {
               draft: partEdit,
@@ -4743,7 +5298,6 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
               },
             })
           : null,
-            ),
       );
     }
 
@@ -6423,6 +6977,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         SeriesCard,
         SeriesDirectory,
         PartEditDialog,
+        ChapterBuildPanel,
+        ChapterTree,
+        ChapterSourceBadge,
         Settings,
         PracticePanel,
         ExportDialog,
@@ -6439,6 +6996,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         formatSeriesProgress,
         formatJobLine,
         chapterSelectionState,
+        chapterSourceLabel,
+        sourceLabel,
+        chapterBuildRequest,
+        outlineInfo,
         seriesSnapshotVersion,
         resolveInitialSlide,
         pdfHighlightRects,

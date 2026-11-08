@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 
-import { makePdf } from './fixture.mjs';
+import { makePdf, makePdfWithOutline } from './fixture.mjs';
 import { coverSvg, hueOf, normalizeHue } from '../cover.js';
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-m1-'));
@@ -119,21 +119,298 @@ test('AC-124：导入只入库，不自动分章/封面', async () => {
   assert.equal(dup.body.code, 'E_DUP_BOOK');
 });
 
-test('AC-116：三种模式可重跑，章校准保存并标 manual', async () => {
-  const books = await json('/dsh-book-slides/books');
-  const id = books.body.books[0].id;
-  for (const mode of ['auto', 'mech', 'toc']) {
-    const out = await json('/dsh-book-slides/chapters/build', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ bookId: id, mode, force: true }),
-    });
-    assert.equal(out.body.ok, true, mode + ': ' + JSON.stringify(out.body));
-    assert.ok(Array.isArray(out.body.chapters) && out.body.chapters.length >= 1);
+test('AC-116：auto 书签级联；mechanical 用 1.x 正则；heading 被拒', async () => {
+  const pageTexts = [];
+  const rawPages = [];
+  const headings = [
+    ['Chapter 1 Functions', 4],
+    ['Chapter 2 Limits', 8],
+    ['Chapter 3 Continuity', 12],
+  ];
+  for (let i = 1; i <= 20; i += 1) {
+    const hit = headings.find((entry) => entry[1] === i);
+    const text = (hit ? hit[0] + '\n' : '') + ('Body page ' + i + '. '.repeat(60));
+    rawPages.push({ page: i, text });
+    pageTexts.push(text.split('\n'));
   }
+  const pdf = makePdfWithOutline(pageTexts, [
+    { title: 'BM Part I', page: 4, children: [{ title: 'BM 1.1', page: 5 }] },
+    { title: 'BM Ch1', page: 4 },
+    { title: 'BM Ch2', page: 8 },
+    { title: 'BM Ch3', page: 12 },
+    { title: 'bad', page: 999 },
+  ]);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('书签书.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.body.ok, true, JSON.stringify(imported.body));
+  const id = imported.body.bookId;
+
+  const auto = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'auto', force: true }),
+  });
+  assert.equal(auto.body.ok, true, JSON.stringify(auto.body));
+  assert.equal(auto.body.source, 'bookmark');
+  assert.equal(auto.body.confidence, 0.95);
+  assert.deepEqual(auto.body.chapters.map((c) => c.title), ['BM Ch1', 'BM Ch2', 'BM Ch3']);
+  assert.ok(!auto.body.chapters.some((c) => /1\.1/.test(c.title)), '子节点小节不得进入章节');
+  assert.equal(auto.body.chapters[0].from, 4);
+  assert.equal(auto.body.attempts.length, 3);
+  assert.equal(auto.body.attempts[0].result, 'used');
+  assert.equal(auto.body.attempts[1].result, 'skipped');
+  assert.equal(auto.body.attempts[2].result, 'skipped');
+  assert.ok(
+    auto.body.warnings.some((warning) => /前 3 页未归入任何章/.test(warning)),
+    JSON.stringify(auto.body.warnings),
+  );
+  assert.ok(auto.body.chapters.every((chapter) => chapter.source === 'bookmark'));
+  assert.equal(auto.body.outline.rootDepth, 0);
+  assert.equal(auto.body.outline.rootCount, 3);
+  const book = await json('/dsh-book-slides/book?bookId=' + id);
+  assert.equal(book.body.book.chapterSource, 'bookmark');
+  assert.equal(book.body.book.chapterConfidence, 0.95);
+  assert.equal(book.body.book.bookmarkRootDepth, 0);
+  const tree = book.body.book.bookmarkTree;
+  assert.equal(tree.filter((node) => Number.isInteger(node.n)).length, 3);
+  const child = tree.flatMap((node) => node.children || []).find((node) => node.title === 'BM 1.1');
+  assert.ok(child, 'bookmarkTree 应保留子节点');
+  assert.equal(child.n, undefined, '子节点没有章号');
+  assert.ok(
+    Array.isArray(book.body.book.chapterWarnings) &&
+      book.body.book.chapterWarnings.some((warning) => /前 3 页未归入任何章/.test(warning)),
+    JSON.stringify(book.body.book.chapterWarnings),
+  );
+
+  const mech = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'mechanical', force: true }),
+  });
+  assert.equal(mech.body.ok, true, JSON.stringify(mech.body));
+  assert.equal(mech.body.source, 'mechanical');
+  assert.equal(mech.body.attempts.length, 1);
+  const mechTitles = mech.body.chapters.filter((chapter) => !chapter.front).map((chapter) => chapter.title);
+  assert.deepEqual(mechTitles, ['Chapter 1 Functions', 'Chapter 2 Limits', 'Chapter 3 Continuity']);
+  assert.ok(mechTitles.every((title) => !/BM/.test(title)), '机械切章走 1.x 正则，不读书签');
+  assert.ok(mech.body.chapters.every((chapter) => chapter.source === 'mechanical'));
+  const mechBook = await json('/dsh-book-slides/book?bookId=' + id);
+  assert.equal(mechBook.body.book.bookmarkTree, null, '非书签来源清空 bookmarkTree');
+  assert.equal(mechBook.body.book.bookmarkRootDepth, null, '非书签来源清空 bookmarkRootDepth');
+
+  const heading = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'heading', force: true }),
+  });
+  assert.equal(heading.body.ok, false);
+  assert.equal(heading.body.code, 'E_BAD_MODE');
+});
+
+test('AC-116：书签单根先导入 1 章，提示后下移一层', async () => {
+  const pageTexts = [
+    ['Book'],
+    ['Chapter 1 Functions', 'alpha '.repeat(40)],
+    ['Chapter 2 Limits', 'beta '.repeat(40)],
+    ['Chapter 3 Continuity', 'gamma '.repeat(40)],
+  ];
+  const pdf = makePdfWithOutline(pageTexts, [
+    {
+      title: 'Book',
+      page: 1,
+      children: [
+        { title: 'Chapter 1 Functions', page: 2 },
+        { title: 'Chapter 2 Limits', page: 3 },
+        { title: 'Chapter 3 Continuity', page: 4 },
+      ],
+    },
+  ]);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('单根书签.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.body.ok, true, JSON.stringify(imported.body));
+  const id = imported.body.bookId;
+
+  const first = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'auto', force: true }),
+  });
+  assert.equal(first.body.ok, true, JSON.stringify(first.body));
+  assert.equal(first.body.source, 'bookmark');
+  assert.deepEqual(first.body.chapters.map((chapter) => chapter.title), ['Book']);
+  assert.deepEqual(first.body.outline, {
+    rootDepth: 0,
+    rootCount: 1,
+    canDescend: true,
+    nextDepth: 1,
+    nextCount: 3,
+  });
+  let book = await json('/dsh-book-slides/book?bookId=' + id);
+  assert.equal(book.body.book.bookmarkRootDepth, 0);
+  assert.equal(book.body.book.bookmarkTree[0].n, 1);
+  assert.equal(book.body.book.bookmarkTree[0].children.length, 3);
+
+  const down = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'auto', outlineDepth: 1, force: true }),
+  });
+  assert.equal(down.body.ok, true, JSON.stringify(down.body));
+  assert.equal(down.body.source, 'bookmark');
+  assert.deepEqual(down.body.chapters.map((chapter) => chapter.title), [
+    'Chapter 1 Functions',
+    'Chapter 2 Limits',
+    'Chapter 3 Continuity',
+  ]);
+  assert.equal(down.body.outline.rootDepth, 1);
+  assert.equal(down.body.outline.rootCount, 3);
+  book = await json('/dsh-book-slides/book?bookId=' + id);
+  assert.equal(book.body.book.bookmarkRootDepth, 1);
+  assert.equal(book.body.book.bookmarkTree[0].n, undefined);
+  assert.equal(book.body.book.bookmarkTree[0].children[0].n, 1);
+
+  const again = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'auto', force: true }),
+  });
+  assert.equal(again.body.ok, true, JSON.stringify(again.body));
+  assert.equal(again.body.outline.rootDepth, 1, '未给 outlineDepth 时沿用已存根层');
+  assert.deepEqual(again.body.chapters.map((chapter) => chapter.title), [
+    'Chapter 1 Functions',
+    'Chapter 2 Limits',
+    'Chapter 3 Continuity',
+  ]);
+});
+
+test('AC-116：auto 无书签无目录 → mechanical 1 章「全文」', async () => {
+  const pageTexts = Array.from({ length: 30 }, (_, index) => [
+    'Prose page ' + (index + 1) + '. ' + 'No chapter heading here. '.repeat(40),
+  ]);
+  const pdf = makePdf(pageTexts);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('散文.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.body.ok, true, JSON.stringify(imported.body));
+  const id = imported.body.bookId;
+
+  const auto = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'auto', force: true }),
+  });
+  assert.equal(auto.body.ok, true, JSON.stringify(auto.body));
+  assert.equal(auto.body.source, 'mechanical');
+  assert.equal(auto.body.chapters.length, 1);
+  assert.equal(auto.body.chapters[0].title, '全文');
+  assert.deepEqual(auto.body.attempts.map((item) => item.result), ['empty', 'skipped', 'used']);
+  assert.ok(auto.body.warnings.some((warning) => /自动识别未命中/.test(warning)));
+
+  const chaptersFile = path.join(LEGACY, 'books', id, 'chapters.json');
+  const beforeText = fs.readFileSync(chaptersFile, 'utf8');
+  const beforeMtime = fs.statSync(chaptersFile).mtimeMs;
+  const beforeBook = await json('/dsh-book-slides/book?bookId=' + id);
+
+  const bookmark = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'bookmark', force: true }),
+  });
+  assert.equal(bookmark.body.ok, false);
+  assert.equal(bookmark.body.code, 'E_CHAPTER_SOURCE');
+
+  const noRange = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'printed_toc', force: true }),
+  });
+  assert.equal(noRange.body.ok, false);
+  assert.equal(noRange.body.code, 'E_BAD_RANGE');
+
+  const noModel = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'printed_toc', range: { from: 1, to: 1 }, force: true }),
+  });
+  assert.equal(noModel.body.ok, false);
+  assert.equal(noModel.body.code, 'E_CHAPTER_SOURCE');
+
+  const heading = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'heading', force: true }),
+  });
+  assert.equal(heading.body.ok, false);
+  assert.equal(heading.body.code, 'E_BAD_MODE');
+
+  assert.equal(fs.readFileSync(chaptersFile, 'utf8'), beforeText, '强制失败不得改写 chapters.json');
+  assert.equal(fs.statSync(chaptersFile).mtimeMs, beforeMtime, '强制失败不得触碰 chapters.json');
+  const afterBook = await json('/dsh-book-slides/book?bookId=' + id);
+  assert.equal(afterBook.body.book.chapterSource, beforeBook.body.book.chapterSource);
+});
+
+test('AC-157：/toc/preview 返回目录页原文前 800 字，非法范围报 E_BAD_RANGE', async () => {
+  const pdf = makePdf([
+    ['Contents', 'Chapter 1 Functions 1', 'Chapter 2 Limits 5', 'Chapter 3 Continuity 9', 'x'.repeat(80)],
+  ]);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('预览.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.body.ok, true, JSON.stringify(imported.body));
+  const id = imported.body.bookId;
+
+  const preview = await json('/dsh-book-slides/toc/preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, from: 1, to: 1 }),
+  });
+  assert.equal(preview.body.ok, true, JSON.stringify(preview.body));
+  assert.ok(preview.body.preview.includes('Contents'));
+  assert.ok(preview.body.preview.length <= 800);
+  assert.ok(preview.body.chars > 0);
+
+  const bad = await json('/dsh-book-slides/toc/preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, from: 5, to: 1 }),
+  });
+  assert.equal(bad.body.ok, false);
+  assert.equal(bad.body.code, 'E_BAD_RANGE');
+});
+
+test('AC-116：章校准保存标 manual；无 force 重分被拒', async () => {
+  const pdf = makePdf([
+    ['Chapter 1 Functions', 'alpha '.repeat(200)],
+    ['Chapter 2 Limits', 'beta '.repeat(200)],
+    ['Chapter 3 Continuity', 'gamma '.repeat(200)],
+  ]);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('校准.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.body.ok, true, JSON.stringify(imported.body));
+  const id = imported.body.bookId;
+
+  const built = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'mechanical', force: true }),
+  });
+  assert.equal(built.body.ok, true, JSON.stringify(built.body));
+
   const current = await json('/dsh-book-slides/chapters?bookId=' + id);
-  const chapters = current.body.chapters;
-  const edited = chapters.map((c) => Object.assign({}, c));
+  const edited = current.body.chapters.map((chapter) => Object.assign({}, chapter));
   edited[0].title = edited[0].title + '（改）';
   const saved = await json('/dsh-book-slides/chapters', {
     method: 'POST',
@@ -151,11 +428,20 @@ test('AC-116：三种模式可重跑，章校准保存并标 manual', async () =
   });
   assert.equal(manual.body.ok, false);
   assert.equal(manual.body.code, 'E_MANUAL_EDITS');
+
+  const forced = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'auto', force: true }),
+  });
+  assert.equal(forced.body.ok, true, JSON.stringify(forced.body));
+  assert.ok(forced.body.chapters.every((chapter) => !chapter.manual));
 });
 
 test('AC-117：书架、改名、回收站、恢复、冲突', async () => {
   const list = await json('/dsh-book-slides/books');
-  assert.equal(list.body.books.length, 1);
+  const before = list.body.books.length;
+  assert.ok(before >= 1);
   const id = list.body.books[0].id;
 
   const renamed = await json('/dsh-book-slides/rename', {
@@ -168,8 +454,8 @@ test('AC-117：书架、改名、回收站、恢复、冲突', async () => {
 
   const deleted = await json('/dsh-book-slides/book?bookId=' + id, { method: 'DELETE' });
   assert.equal(deleted.body.ok, true);
-  assert.equal((await json('/dsh-book-slides/books')).body.books.length, 0);
-  assert.equal((await json('/dsh-book-slides/trash')).body.books.length, 1);
+  assert.equal((await json('/dsh-book-slides/books')).body.books.length, before - 1);
+  assert.ok((await json('/dsh-book-slides/trash')).body.books.some((item) => item.bookId === id));
 
   const restored = await json('/dsh-book-slides/trash/restore', {
     method: 'POST',
@@ -177,7 +463,7 @@ test('AC-117：书架、改名、回收站、恢复、冲突', async () => {
     body: JSON.stringify({ bookId: id }),
   });
   assert.equal(restored.body.ok, true);
-  assert.equal((await json('/dsh-book-slides/books')).body.books.length, 1);
+  assert.equal((await json('/dsh-book-slides/books')).body.books.length, before);
 
   const meta = await json('/dsh-book-slides/meta');
   assert.equal(meta.body.schema, 2);
@@ -185,6 +471,7 @@ test('AC-117：书架、改名、回收站、恢复、冲突', async () => {
 });
 
 test('AC-124：无文字层拒绝，书架不新增', async () => {
+  const before = (await json('/dsh-book-slides/books')).body.books.length;
   const pdf = makePdf([[]]);
   const out = await json('/dsh-book-slides/import', {
     method: 'POST',
@@ -193,15 +480,25 @@ test('AC-124：无文字层拒绝，书架不新增', async () => {
   });
   assert.equal(out.body.ok, false);
   assert.equal(out.body.code, 'E_PDF_NO_TEXT');
-  assert.equal((await json('/dsh-book-slides/books')).body.books.length, 1);
+  assert.equal((await json('/dsh-book-slides/books')).body.books.length, before);
 });
 
-test('AC-116：mech 不用目录标题；重叠/越界被拒；空白章 chars=0', async () => {
+test('AC-116：mechanical 用正文标题，不用目录标题；重叠/越界被拒；空白章 chars=0', async () => {
   const pdf = makePdf([
-    ['目录', '第一章 函数 1', '第二章 极限 5'],
-    ['第一章 函数', '甲'.repeat(200)],
+    [
+      'Contents',
+      'Chapter 1 Functions 1',
+      'Chapter 2 Limits 5',
+      'Chapter 3 Continuity 9',
+      'Chapter 4 Series 13',
+      'Chapter 5 Integrals 17',
+      'Chapter 6 Derivatives 21',
+      'Chapter 7 Limits 25',
+      'Chapter 8 Appendix 29',
+    ],
+    ['Chapter 1 Functions', 'alpha '.repeat(200)],
     [''],
-    ['第二章 极限', '乙'.repeat(200)],
+    ['Chapter 2 Limits', 'beta '.repeat(200)],
   ]);
   const imported = await json('/dsh-book-slides/import', {
     method: 'POST',
@@ -214,13 +511,13 @@ test('AC-116：mech 不用目录标题；重叠/越界被拒；空白章 chars=0
   const mech = await json('/dsh-book-slides/chapters/build', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ bookId: id, mode: 'mech', force: true }),
+    body: JSON.stringify({ bookId: id, mode: 'mechanical', force: true }),
   });
-  assert.equal(mech.body.ok, true);
-  assert.ok(mech.body.chapters.length >= 1);
-  for (const chapter of mech.body.chapters) {
-    assert.match(chapter.title, /^(第 \d+ 部分|全文)$/, 'mech 不得使用“目录”等目录标题');
-  }
+  assert.equal(mech.body.ok, true, JSON.stringify(mech.body));
+  assert.equal(mech.body.source, 'mechanical');
+  const titles = mech.body.chapters.map((chapter) => chapter.title);
+  assert.deepEqual(titles, ['Chapter 1 Functions', 'Chapter 2 Limits']);
+  assert.ok(titles.every((title) => !/Contents|Part \d+/.test(title)), '机械切章不得用目录标题或固定页块');
 
   const saved = await json('/dsh-book-slides/chapters', {
     method: 'POST',
@@ -314,7 +611,7 @@ test('重命名同步刷新封面标题：只换书名，色相不变；旧封�
   await json('/dsh-book-slides/chapters/build', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ bookId: id, mode: 'mech' }),
+    body: JSON.stringify({ bookId: id, mode: 'mechanical' }),
   });
   const made = await json('/dsh-book-slides/cover', {
     method: 'POST',

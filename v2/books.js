@@ -127,6 +127,10 @@ export function createBook({ buffer, fileName, title, author, pages, rawPages })
     lastOpenedAt: now,
     chaptersBuilt: false,
     chapterSource: null,
+    chapterConfidence: null,
+    chapterWarnings: null,
+    bookmarkTree: null,
+    bookmarkRootDepth: null,
     cover: false,
   };
 
@@ -285,13 +289,22 @@ function coverMetaOut(book, meta) {
   };
 }
 
-export function writeChapters(bookId, chapters, source) {
+export function writeChapters(bookId, chapters, source, confidence, warnings, bookmark) {
   const loaded = loadBook(bookId);
   if (!loaded) return null;
   writeJson(path.join(loaded.dir, 'chapters.json'), chapters);
   const book = loaded.book;
   book.chaptersBuilt = true;
   book.chapterSource = String(source || '');
+  if (Number.isFinite(Number(confidence))) {
+    book.chapterConfidence = Math.max(0, Math.min(1, Number(confidence)));
+  }
+  book.chapterWarnings = Array.isArray(warnings)
+    ? warnings.filter(Boolean).map((item) => String(item)).slice(0, 20)
+    : [];
+  book.bookmarkTree = bookmark && Array.isArray(bookmark.tree) ? bookmark.tree : null;
+  book.bookmarkRootDepth =
+    bookmark && Number.isInteger(bookmark.rootDepth) ? bookmark.rootDepth : null;
   book.chapterCount = chapters.length;
   book.lastOpenedAt = new Date().toISOString();
   writeJson(path.join(loaded.dir, 'book.json'), book);

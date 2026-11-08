@@ -3,7 +3,34 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
-## [Unreleased]
+## [2.0.0-alpha.9] - 2026-11-09
+
+主题「书签树 + Part 只选根」：书签原样导入为树，只把根层作为章；子节点只读，不进入 Part/讲纲；Part 只选根。单根书先导入 1 章并提示是否下移一层，由用户决定。v1.16 的自动级联/强制来源与改名同步封面标题一并进入本版。
+
+### 版本与环境
+
+- 包 `2.0.0-alpha.9`（tag `v2.0.0-alpha.9`）、产品 `2.0`、数据 schema `2`、文档 v1.17。
+- 无数据 schema 变更；`book.json` 新增 `bookmarkTree` / `bookmarkRootDepth`（非书签来源为 `null`）。
+- `POST /chapters/build` 新增可选 `outlineDepth`；响应新增 `outline`。旧 bookmark 数据需重新分章才会生成书签树；不影响目录/机械来源。
+- 可直接覆盖 `alpha.8`；旧 bookmark 书重分后章数会从“展平小节”变为“根层章”。
+
+### 书签树 + Part 只选根（SRS v1.17）
+
+- 书签切章与 Part 解耦：PDF outline 原样存 `book.json.bookmarkTree`，只把根层节点导入为章；根节点带 `n`，子节点只读展示，不进入 Part/讲纲/校准。
+- 默认根层 depth 0；根层只有 1 条时不自动下移，先导入 1 章并在响应返回 `outline` 元信息；UI 提示“是否下移一层”，用户确认后带 `outlineDepth` 重跑；根层>0 提供「回到顶层」。未给 `outlineDepth` 时沿用已存 `bookmarkRootDepth`。
+- Part 只选根章；`parts.json` 存根号；子节点没有章号，无法进入 Part。书签来源校准只改根标题/起止页，不提供合并/拆分；目录/机械来源不变。
+- 数据/API：`book.json.bookmarkTree` / `bookmarkRootDepth`；`POST /chapters/build` 接受 `outlineDepth`，响应 `outline:{rootDepth,rootCount,canDescend,nextDepth,nextCount}`；`GET /chapters` 只返回根章。
+- 测试：`v2-m1` 覆盖书签树/单根下移/沿用根层/非书签清空树；`v2-chapter-ui` 覆盖 `ChapterTree`、单根提示与回到顶层；全量 `npm run test:v2` 通过。
+
+### 分章契约：单一自动级联 + 强制来源（SRS v1.16）
+
+- 分章改成 `auto` 一条级联：**书签 → 印刷目录 → 机械切章**，命中即停；高级只保留「强制用印刷目录」与「强制用机械切章」。
+- **概念纠偏**：`mechanical` 恢复 1.x 附录 A 的机械切章（页眉/章号行正则 + 目录页剔除 + 同标题去重；`k<2` → 1 章「全文」），不再按页数/字数切块；`heading` 不再是来源，传 `mode=heading` 返回 `E_BAD_MODE`。1.x D6 的「按 10 页切块」降级不保留，长章由 FR-13 拆讲。
+- **书签按层级选章（v1.17 已取代）**：v1.16 曾优先 `第X章` / `Chapter N` 的章级；v1.17 改为原样导入书签树、只把根层作为章，不再按标题猜层。
+- `POST /chapters/build` 请求改为 `{bookId, mode, range?, force?}`，响应返回 `source / confidence / attempts[] / warnings[]`；`book.json` 落 `chapter_source / chapter_confidence / chapter_warnings`。
+- 新增 `GET /toc` 建议页码与 `POST /toc/preview`（目录页原文前 800 字）；详情页显示每章来源徽标、本次来源/置信度/warnings 常驻，并支持「重新分章」（有手动章时二次确认后带 `force`）。
+- 新增 `E_BAD_MODE` / `E_CHAPTER_SOURCE` / `E_BAD_RANGE`；强制来源失败不写盘。
+- 测试：`v2-m1` 覆盖书签级联/机械正则/全文兜底/失败不写盘/`/toc/preview`；`v2-toc` 覆盖印刷目录与缓存重放；新增 `v2-chapter-ui` 覆盖自动/高级入口与来源徽标。
 
 ### 体验优化（改名同步封面标题）
 

@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { PdfError, PDF_ERROR, extractPages, guessTitle, totalChars } from '../pdfread.js';
 import { coverSvg, hueOf } from '../cover.js';
-import { suggestTocRange } from '../tocparse.js';
+import { suggestTocRange, tocTextOf } from '../tocparse.js';
 import { ROOT, ensureRoot, getMeta, packageVersion, readJson, writeJson } from './root.js';
 import {
   clearTrash,
@@ -337,12 +337,19 @@ async function handleBuildChapters(req, res, ctx) {
     sendError(res, 'E_BAD_ID', '书 ID 非法', '');
     return;
   }
+  const range =
+    body.range && typeof body.range === 'object'
+      ? { from: Number(body.range.from) || 0, to: Number(body.range.to) || 0 }
+      : null;
+  const outlineDepthValue = Number(body.outlineDepth);
+  const outlineDepth =
+    Number.isInteger(outlineDepthValue) && outlineDepthValue >= 0 ? outlineDepthValue : null;
   try {
     const result = await buildBookChapters(String(body.bookId), String(body.mode || 'auto'), {
       force: body.force === true,
       ctx: ctx || null,
-      from: Number(body.from) || 0,
-      to: Number(body.to) || 0,
+      range,
+      outlineDepth,
     });
     sendJson(res, 200, { ok: true, ...result });
   } catch (err) {
@@ -404,6 +411,32 @@ async function handleTocRange(req, res) {
   toc.rangeUpdatedAt = new Date().toISOString();
   writeJson(tocFile, toc);
   sendJson(res, 200, { ok: true, range: toc.range });
+}
+
+/** 目录页原文预览：让用户确认自己选对页了（1.x 的「看这几页」）。 */
+async function handleTocPreview(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const loaded = loadBook(String(body.bookId || ''));
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  const total = Array.isArray(pages) ? pages.length : 0;
+  const from = Math.round(Number(body.from) || 0);
+  const to = Math.round(Number(body.to) || 0);
+  if (!(from >= 1 && to >= from && to <= total && to - from <= 40)) {
+    sendError(res, 'E_BAD_RANGE', '目录页码范围不合法', '范围要在 1–' + total + ' 之间，且不超过 40 页。');
+    return;
+  }
+  const toc = tocTextOf(Array.isArray(pages) ? pages : [], from, to);
+  sendJson(res, 200, {
+    ok: true,
+    chars: toc.chars,
+    truncated: toc.truncated,
+    preview: String(toc.text || '').slice(0, 800),
+  });
 }
 
 async function handleChaptersPost(req, res) {
@@ -2100,6 +2133,14 @@ async function routeM1Inner(req, res, url, options = {}) {
       return true;
     }
     await handleTocRange(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/toc/preview') {
+    if (req.method !== 'POST') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    await handleTocPreview(req, res);
     return true;
   }
   if (pathname === PREFIX + '/chapters/build') {

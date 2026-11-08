@@ -107,7 +107,7 @@ test('插件路由：/meta、导入、分章、封面、回收站', async () => 
   const built = await json('/dsh-book-slides/chapters/build', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ bookId: id, mode: 'mech' }),
+    body: JSON.stringify({ bookId: id, mode: 'mechanical' }),
   });
   assert.equal(built.ok, true);
   assert.ok(built.chapters.length >= 1);
