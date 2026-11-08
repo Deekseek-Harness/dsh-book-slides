@@ -140,6 +140,46 @@ test('插件路由：/meta、导入、分章、封面、回收站', async () => 
   assert.equal((await json('/dsh-book-slides/books')).books.length, 1);
 });
 
+test('P2：目录范围可持久化并在重新读取时恢复', async () => {
+  const pdf = makePdf([
+    ['目录', '第一章 函数 1', '第二章 极限 4'],
+    ['第一章 函数', '函数是输入到输出的机器。'.repeat(40)],
+    ['函数的性质', '单调、奇偶、周期。'.repeat(40)],
+    ['第二章 极限', '极限描述趋势。'.repeat(40)],
+  ]);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('toc.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.ok, true);
+  const id = imported.bookId;
+
+  const before = await json('/dsh-book-slides/toc?bookId=' + id);
+  assert.equal(before.ok, true);
+  assert.equal(before.total, 4);
+  assert.equal(before.range, null);
+
+  const saved = await json('/dsh-book-slides/toc/range', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, from: 1, to: 1 }),
+  });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(saved.range, { from: 1, to: 1 });
+
+  const after = await json('/dsh-book-slides/toc?bookId=' + id);
+  assert.deepEqual(after.range, { from: 1, to: 1 });
+
+  const bad = await json('/dsh-book-slides/toc/range', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, from: 1, to: 99 }),
+  });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.code, 'E_BAD_RANGE');
+});
+
 test.after(() => {
   server.close();
   fs.rmSync(ROOT, { recursive: true, force: true });

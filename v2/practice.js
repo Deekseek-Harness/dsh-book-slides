@@ -337,6 +337,10 @@ export function practiceSummary(seriesId) {
       flagged: questions.filter((question) => question.flagged === true).length,
     },
     topup,
+    job: (() => {
+      const active = activePracticeJob(found.series.id);
+      return active ? jobState(active) : null;
+    })(),
     session: latestRunningSession(bookId, found.series.id),
   };
 }

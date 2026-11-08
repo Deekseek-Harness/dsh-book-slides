@@ -7,7 +7,8 @@ import path from 'node:path';
 
 import { PdfError, PDF_ERROR, extractPages, guessTitle, totalChars } from '../pdfread.js';
 import { coverSvg } from '../cover.js';
-import { ROOT, ensureRoot, getMeta, packageVersion, readJson } from './root.js';
+import { suggestTocRange } from '../tocparse.js';
+import { ROOT, ensureRoot, getMeta, packageVersion, readJson, writeJson } from './root.js';
 import {
   clearTrash,
   createBook,
@@ -59,6 +60,7 @@ import { loadLecture } from './lectures.js';
 import { readPreference, writePreference } from './prefs.js';
 import { progressSummary, readProgress, saveProgress } from './progress.js';
 import {
+  activeRevoiceJob,
   cancelRevoiceJob,
   cancelRevoiceJobsForSeries,
   findAudioFile,
@@ -106,9 +108,11 @@ import {
 } from './images.js';
 import { buildPptx, buildPptxBatch, contentDisposition, planPptx, PptxError } from './pptx.js';
 import {
+  activeImportJob,
   cancelImportJob,
   exportSize,
   getImportJob,
+  isImportJobActive,
   normalizePolicy,
   packageFileName,
   planExport,
@@ -356,6 +360,50 @@ function handleChaptersGet(req, res, url) {
     return;
   }
   sendJson(res, 200, { ok: true, chapters: loaded.chapters, built: loaded.chaptersBuilt });
+}
+
+/** 目录页码范围：重新进入详情页时恢复上次填写值。 */
+function handleTocGet(req, res, url) {
+  ensureRoot();
+  const loaded = loadBook(String(url.searchParams.get('bookId') || ''));
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  const toc = readJson(path.join(loaded.dir, 'toc.json'), null);
+  sendJson(res, 200, {
+    ok: true,
+    total: Array.isArray(pages) ? pages.length : 0,
+    suggested: suggestTocRange(Array.isArray(pages) ? pages : []),
+    range: toc && toc.range ? toc.range : null,
+    toc: toc || null,
+  });
+}
+
+async function handleTocRange(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const loaded = loadBook(String(body.bookId || ''));
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  const total = Array.isArray(pages) ? pages.length : 0;
+  const from = Math.round(Number(body.from) || 0);
+  const to = Math.round(Number(body.to) || 0);
+  if (!(from >= 1 && to >= from && to <= total && to - from <= 40)) {
+    sendError(res, 'E_BAD_RANGE', '目录页码范围不合法', '范围要在 1–' + total + ' 之间，且不超过 40 页。');
+    return;
+  }
+  const tocFile = path.join(loaded.dir, 'toc.json');
+  const toc = readJson(tocFile, {}) || {};
+  toc.range = { from, to };
+  if (!toc.status) toc.status = 'draft';
+  toc.rangeUpdatedAt = new Date().toISOString();
+  writeJson(tocFile, toc);
+  sendJson(res, 200, { ok: true, range: toc.range });
 }
 
 async function handleChaptersPost(req, res) {
@@ -1091,7 +1139,18 @@ async function handleRevoice(req, res, options) {
 
 function handleRevoiceJob(req, res, url) {
   ensureRoot();
-  const job = getRevoiceJob(url.searchParams.get('jobId'));
+  const jobId = url.searchParams.get('jobId');
+  const seriesId = url.searchParams.get('seriesId');
+  if (!jobId && seriesId) {
+    const active = activeRevoiceJob(seriesId);
+    if (!active) {
+      sendJson(res, 200, { ok: true, jobId: null, seriesId: String(seriesId), status: 'none' });
+      return;
+    }
+    sendJson(res, 200, getRevoiceJob(active.id));
+    return;
+  }
+  const job = getRevoiceJob(jobId);
   if (!job) {
     sendError(res, 'E_NOT_FOUND', '找不到这个配音作业', '作业可能已完成并过期。');
     return;
@@ -1589,6 +1648,10 @@ function saveUpload(req, file, limit) {
 
 async function handleImportPackage(req, res) {
   ensureRoot();
+  if (isImportJobActive()) {
+    sendError(res, 'E_PKG_BUSY', '已有书档导入正在运行', '等当前导入结束，或先取消。');
+    return;
+  }
   const staging = path.join(ROOT, '.import');
   fs.mkdirSync(staging, { recursive: true });
   const zipPath = path.join(staging, 'upload-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.zip');
@@ -1621,6 +1684,11 @@ function handleImportJob(req, res, url) {
     return;
   }
   sendJson(res, 200, job);
+}
+
+function handleImportActive(req, res) {
+  ensureRoot();
+  sendJson(res, 200, { ok: true, job: activeImportJob() });
 }
 
 async function handleImportCancel(req, res) {
@@ -1948,6 +2016,10 @@ async function routeM1Inner(req, res, url, options = {}) {
     await handleImportPackage(req, res);
     return true;
   }
+  if (pathname === PREFIX + '/import/package/active') {
+    handleImportActive(req, res);
+    return true;
+  }
   if (pathname === PREFIX + '/import/package/job') {
     handleImportJob(req, res, url);
     return true;
@@ -2006,6 +2078,22 @@ async function routeM1Inner(req, res, url, options = {}) {
       return true;
     }
     await handleImport(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/toc') {
+    if (req.method !== 'GET') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    handleTocGet(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/toc/range') {
+    if (req.method !== 'POST') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    await handleTocRange(req, res);
     return true;
   }
   if (pathname === PREFIX + '/chapters/build') {

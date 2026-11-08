@@ -525,6 +525,31 @@ test('FR-23：浏览器模式不落 WAV，audio_provider=browser', async () => {
   assert.equal(qwen.requests.length, 0);
 });
 
+test('P0：按 seriesId 查询活动配音作业；结束后返回 none', async () => {
+  resetFake();
+  await post('/dsh-book-slides/voice', {
+    provider: 'qwen3-tts',
+    model: 'qwen3-tts-flash',
+    voice: 'Cherry',
+    apiKey: 'sk-test-abcdef1234',
+  });
+  const { found } = makeSeries('active');
+  qwen.delay = 200;
+  const out = await post('/dsh-book-slides/revoice', { seriesId: found.series.id });
+  assert.equal(out.ok, true);
+  const active = await json('/dsh-book-slides/revoice/job?seriesId=' + encodeURIComponent(found.series.id));
+  assert.equal(active.ok, true);
+  assert.equal(active.jobId, out.jobId);
+  assert.ok(['queued', 'voicing', 'cancelling'].includes(String(active.status)), JSON.stringify(active));
+  await post('/dsh-book-slides/revoice/cancel', { jobId: out.jobId });
+  await waitJob(out.jobId, (item) => item.status === 'cancelled');
+  const idle = await json('/dsh-book-slides/revoice/job?seriesId=' + encodeURIComponent(found.series.id));
+  assert.equal(idle.ok, true);
+  assert.equal(idle.jobId, null);
+  assert.equal(idle.status, 'none');
+  qwen.delay = 0;
+});
+
 test.after(() => {
   server.close();
   fake.close();

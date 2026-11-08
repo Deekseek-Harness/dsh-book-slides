@@ -207,13 +207,17 @@ async function waitImport(jobId, timeout = 15000) {
   throw new Error('等待导入作业超时：' + JSON.stringify(last));
 }
 
-async function importZip(buffer, policy = 'merge') {
+async function startImportZip(buffer, policy = 'merge') {
   const { buffer: resBuffer } = await binary('/dsh-book-slides/import/package?policy=' + policy, {
     method: 'POST',
     headers: { 'content-type': 'application/zip', 'x-file-name': 'package.zip' },
     body: buffer,
   });
-  const out = JSON.parse(resBuffer.toString('utf8'));
+  return JSON.parse(resBuffer.toString('utf8'));
+}
+
+async function importZip(buffer, policy = 'merge') {
+  const out = await startImportZip(buffer, policy);
   if (!out.ok) return out;
   return waitImport(out.jobId);
 }
@@ -416,6 +420,37 @@ test('AC-135：书档导入超时 → E_PKG_TIMEOUT，staging 清理', async () 
     assert.deepEqual(leftovers, [], '超时后不得留下 staging');
   } finally {
     delete process.env.DSH_BOOK_SLIDES_PKG_TIMEOUT_MS;
+  }
+});
+
+test('P0：书档导入 active 查询；有作业时重复导入返回 E_PKG_BUSY', async () => {
+  process.env.DSH_BOOK_SLIDES_PKG_STEP_DELAY_MS = '300';
+  try {
+    const started = await startImportZip(packageA);
+    assert.equal(started.ok, true);
+    assert.ok(started.jobId);
+    const active = await json('/dsh-book-slides/import/package/active');
+    assert.equal(active.ok, true);
+    assert.ok(active.job, '运行中应返回活动导入作业');
+    assert.equal(active.job.jobId, started.jobId);
+    assert.ok(['queued', 'running', 'cancelling'].includes(String(active.job.status)));
+
+    const second = await startImportZip(packageA);
+    assert.equal(second.ok, false);
+    assert.equal(second.code, 'E_PKG_BUSY');
+
+    await json('/dsh-book-slides/import/package/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jobId: started.jobId }),
+    });
+    const done = await waitImport(started.jobId);
+    assert.ok(['done', 'cancelled'].includes(String(done.status)), JSON.stringify(done));
+    const idle = await json('/dsh-book-slides/import/package/active');
+    assert.equal(idle.ok, true);
+    assert.equal(idle.job, null);
+  } finally {
+    delete process.env.DSH_BOOK_SLIDES_PKG_STEP_DELAY_MS;
   }
 });
 

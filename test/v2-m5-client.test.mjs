@@ -109,6 +109,30 @@ test('系列卡：练一练 / 导出 / 配图与语音四态入口', () => {
   }
 });
 
+test('P0：刷新后配图 state=running 时仍渲染「配图中… / 取消配图」', () => {
+  const html = renderToString(
+    React.createElement(clientModule.__components.SeriesCard, {
+      series: makeSeries({ images: { status: 'running', done: 2, total: 8, failed: 0 } }),
+      notify: () => {},
+      onReload: () => {},
+      onPlay: () => {},
+    }),
+  );
+  assert.ok(html.includes('配图中…'), '系列卡应显示配图进行中');
+  assert.ok(html.includes('取消配图'), '刷新后仍应提供取消配图入口');
+});
+
+test('P0：作业恢复接线（配音按 seriesId、配图状态、练习 summary.job、书档 active）', () => {
+  for (const text of [
+    "'/revoice/job?seriesId='",
+    "'/image/status?seriesId='",
+    "'/import/package/active'",
+    'out.job && PRACTICE_ACTIVE.includes',
+  ]) {
+    assert.ok(source.includes(text), '客户端应接线「' + text + '」');
+  }
+});
+
 test('练习面板：题库状态与准备/补题/开始练习（源码入口 + 加载态渲染）', () => {
   const html = renderToString(
     React.createElement(clientModule.__components.PracticePanel, { series: makeSeries(), notify: () => {}, onClose: () => {} }),
@@ -206,6 +230,84 @@ test('AC-147：ready 页出「换一张」、failed 页出「重试配图」、�
   const none = stage({ image_status: 'none', image_file: null });
   assert.equal(none.includes('换一张'), false);
   assert.equal(none.includes('重试配图'), false);
+});
+
+test('P1：换图进行中提供「取消换图」入口', () => {
+  const base = {
+    seriesId: 'sabcdefghij',
+    lecture: 1,
+    imageBusy: true,
+    onRegenImage: () => {},
+    slide: { slide_index: 2, layout: 'content_text', title: '页面', bullet_points: [], image_prompt: '一台机器', image_status: 'ready', image_file: 'images/002.png', image_seed: 7 },
+  };
+  const withoutCancel = renderToString(React.createElement(clientModule.__components.SlideStage, base));
+  assert.ok(withoutCancel.includes('生成中…'));
+  assert.equal(withoutCancel.includes('取消换图'), false);
+
+  const withCancel = renderToString(
+    React.createElement(clientModule.__components.SlideStage, Object.assign({}, base, { onCancelImage: () => {} })),
+  );
+  assert.ok(withCancel.includes('取消换图'));
+});
+
+test('P1：分章/讲纲/封面长请求可 abort，并显示取消入口', () => {
+  for (const text of [
+    "beginLong('build')",
+    "beginLong('plan')",
+    "beginLong('cover')",
+    'signal: controller.signal',
+    'isAbortError',
+    '本系列配图作业进行中',
+    'cancelSeriesImage',
+    'onCancelImage: cancelRegenImage',
+  ]) {
+    assert.ok(source.includes(text), '客户端应包含长请求/取消接线「' + text + '」');
+  }
+});
+
+test('P2：目录范围、书档策略与页面 view 持久化助手', () => {
+  const localStore = new Map();
+  const sessionStore = new Map();
+  const oldLocal = globalThis.localStorage;
+  const oldSession = globalThis.sessionStorage;
+  globalThis.localStorage = {
+    getItem: (key) => (localStore.has(key) ? localStore.get(key) : null),
+    setItem: (key, value) => localStore.set(key, String(value)),
+  };
+  globalThis.sessionStorage = {
+    getItem: (key) => (sessionStore.has(key) ? sessionStore.get(key) : null),
+    setItem: (key, value) => sessionStore.set(key, String(value)),
+  };
+  try {
+    clientModule.__helpers.savePackagePolicy('skip');
+    assert.equal(clientModule.__helpers.readPackagePolicy(), 'skip');
+
+    clientModule.__helpers.saveView({ name: 'book', bookId: 'babcdefghij' });
+    assert.deepEqual(clientModule.__helpers.readSavedView(), { name: 'book', bookId: 'babcdefghij' });
+
+    clientModule.__helpers.saveView({ name: 'player', bookId: 'babcdefghij', seriesId: 'sabcdefghij', lecture: 2, slide: 3 });
+    assert.deepEqual(clientModule.__helpers.readSavedView(), {
+      name: 'player',
+      bookId: 'babcdefghij',
+      seriesId: 'sabcdefghij',
+      lecture: 2,
+      slide: 3,
+    });
+
+    globalThis.sessionStorage.setItem('book-slides.view', '{bad json');
+    assert.deepEqual(clientModule.__helpers.readSavedView(), { name: 'shelf' });
+  } finally {
+    if (oldLocal === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = oldLocal;
+    if (oldSession === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = oldSession;
+  }
+});
+
+test('P2：客户端读取/保存目录范围接线', () => {
+  for (const text of ["api('/toc?bookId='", "api('/toc/range'", 'readSavedView', 'saveView']) {
+    assert.ok(source.includes(text), '客户端应包含持久化接线「' + text + '」');
+  }
 });
 
 test('AC-147：换图失败但有旧图时继续显示旧图并给「重试配图」；生成中禁用并提示', () => {

@@ -5,11 +5,31 @@
 
 ## [Unreleased]
 
+## [2.0.0-alpha.8] - 2026-11-09
+
+主题「作业态恢复与长任务可控」：刷新/离开页面后，配音、配图、题库、书档导入仍可看到进度并取消；播放器换图与分章/讲纲/封面长请求补齐取消入口；目录范围、导入策略与页面 view 跨刷新保持。
+
 主题「Part 默认禁选、可编辑」：修正 AC-92 与 AC-129 的文档矛盾，按预防式禁选收敛；补 Part 编辑入口。
 
 主题「AC 判据化：可触发、可观察、可判定」：FR-14 / FR-15 的 AC-99 ~ AC-102 原先只写“性质”，没有触发失败分支的手段，也没把机检结论暴露成信号；本次补读取侧校验、故障注入与机检退出码。
 
-### 修复
+### 版本与环境
+
+- 包 `2.0.0-alpha.8`（tag `v2.0.0-alpha.8`）、产品 `2.0`、数据 schema `2`、文档 v1.15。
+- 无数据 schema / 配置字段变更，可直接覆盖 `alpha.7`。
+- 新增作业恢复查询：`GET /revoice/job?seriesId=`、`GET /practice/summary.job`、`GET /import/package/active`；书档重复导入返回 `E_PKG_BUSY`。
+- 目录范围改用 2.0 路由 `GET /toc`、`POST /toc/range`（仍保留 `suggested` 字段）。
+
+### 作业态恢复与长任务（P0–P2）
+
+- 刷新/离开详情页后，系列卡不再丢失运行中的配音、配图作业：挂载时按 `seriesId` 恢复活动配音 job、按 `/image/status` 恢复配图进度与「取消配音 / 取消配图」按钮；配图 `queued/running` 直接显示为进行中。
+- 练习题库作业、书档导入作业关闭面板/对话框或刷新后可恢复：`/practice/summary` 带回活动 `job`，新增 `/import/package/active` 与书架导入进度条；书档导入重复提交返回 `E_PKG_BUSY`。
+- 活动作业在服务端已结束时（`E_NOT_FOUND`）清掉本地 job，避免按钮永远停在“进行中”。
+- 播放器单页「换一张」运行中可「取消换图」；重新打开播放器时若系列配图作业仍在跑，顶部显示进度与「取消配图」。
+- 分章构建、讲纲预览、封面生成改为可 abort 的请求：详情页显示粘性取消条，离开详情页自动 abort，客户端不再空等。
+- 目录页码范围重新进入详情页时从 `toc.json.range` 恢复，改动后防抖写回；书档冲突策略用 `localStorage` 记住；刷新后保留当前页面 view（书架/详情/播放器/设置）。
+
+### 修复（Part 与验收判据化）
 
 - 已确认 Part 的章在列表中始终只读且不可反选，从源头避免 Part 冲突；不提供“再勾选已属 Part 的章”或冲突三选弹窗。AC-92 改为结果型验收：UI 无重选路径，API 冲突仍返回 `E_PART_CONFLICT` 且不写盘。
 - API/并发冲突只提示“请先在该 Part 的「编辑」中移出冲突章”，不自动并入/移出，不调模型。
@@ -31,6 +51,11 @@
 - 新增 `test/v2-part-ui.test.mjs`：默认禁选/只读、无重选入口、旧快照徽标、Part 编辑弹窗静态渲染与源码入口。
 - `test/v2-m2.test.mjs` 增加系列 `part_version`/章快照不随 Part 编辑改变的断言。
 - `test/v2-m2.test.mjs` 的 AC-96/97/98 改为表驱动：FR-13.1 夹具 F1–F12 + 6 万整/6 万+1 边界 + 48 章 `E_SERIES_TOO_MANY`。
+- `test/v2-revoice.test.mjs` 新增 `GET /revoice/job?seriesId=` 活动作业查询与结束后 `none`。
+- `test/v2-practice.test.mjs` 新增运行中 `summary.job` 恢复、结束后回 `null`。
+- `test/v2-package.test.mjs` 新增导入 `active` 查询与 `E_PKG_BUSY` 并发守卫。
+- `test/v2-m5-client.test.mjs` 新增刷新后配图取消入口、播放器「取消换图」、长请求 abort、目录范围/书档策略/view 持久化助手。
+- `test/v2-m1-server.test.mjs` 新增 `/toc` 范围保存、重新读取恢复与非法范围拒绝。
 
 ### 验收判据化（AC-99 ~ AC-123）
 

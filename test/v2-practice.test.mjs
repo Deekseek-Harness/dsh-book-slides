@@ -110,7 +110,7 @@ function makeSeries(book, chapters) {
   return found.series;
 }
 
-const modelCalls = { bank: 0, explain: 0 };
+const modelCalls = { bank: 0, explain: 0, delay: 0 };
 
 const ctx = {
   get(name) {
@@ -122,6 +122,7 @@ const ctx = {
           config: {},
           async *stream(config) {
             const user = String(config.messages[0].content[0].text || '');
+            if (modelCalls.delay) await new Promise((resolve) => setTimeout(resolve, modelCalls.delay));
             if (user.includes('【题】')) {
               modelCalls.explain += 1;
               yield { type: 'text-delta', text: '正确项 A 的依据在原文里；B、C、D 与原文不符。' };
@@ -441,6 +442,27 @@ test('题库不足时开场给 E_BANK_INSUFFICIENT，不调模型', async () => 
   assert.equal(out.ok, false);
   assert.equal(out.code, 'E_BANK_INSUFFICIENT');
   assert.equal(modelCalls.bank, before);
+});
+
+test('P0：题库作业运行中 summary 带活动 job；结束后回到 null', async () => {
+  const fresh = makeBook();
+  const freshSeries = makeSeries(fresh.book, fresh.chapters);
+  modelCalls.delay = 60;
+  try {
+    const started = await post('/dsh-book-slides/practice/bank', { seriesId: freshSeries.id });
+    assert.equal(started.ok, true);
+    assert.ok(started.jobId);
+    const summary = await json('/dsh-book-slides/practice/summary?seriesId=' + encodeURIComponent(freshSeries.id));
+    assert.equal(summary.ok, true);
+    assert.ok(summary.job, '运行中应返回活动作业');
+    assert.equal(summary.job.jobId, started.jobId);
+    assert.ok(['queued', 'drafting', 'checking', 'anchoring', 'cancelling'].includes(String(summary.job.status)));
+    await waitJob(started.jobId, (job) => ['ready', 'failed', 'cancelled'].includes(String(job.status)));
+    const after = await json('/dsh-book-slides/practice/summary?seriesId=' + encodeURIComponent(freshSeries.id));
+    assert.equal(after.job, null);
+  } finally {
+    modelCalls.delay = 0;
+  }
 });
 
 test.after(() => {

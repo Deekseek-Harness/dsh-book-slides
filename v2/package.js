@@ -627,6 +627,14 @@ export function getImportJob(jobId) {
   return job ? jobState(job) : null;
 }
 
+/** 当前正在跑的书档导入（同一时间只允许一个）。 */
+export function activeImportJob() {
+  for (const job of importJobs.values()) {
+    if (job.active) return jobState(job);
+  }
+  return null;
+}
+
 export function cancelImportJob(jobId) {
   const job = importJobs.get(String(jobId || ''));
   if (!job || !job.active) return false;
@@ -645,7 +653,6 @@ export function isImportJobActive() {
   for (const job of importJobs.values()) if (job.active) return true;
   return false;
 }
-
 function assertActive(job) {
   if (job.cancelled) throw new PackageError('E_CANCELLED', '已取消', '');
 }
@@ -690,6 +697,9 @@ export function cleanupStaleImports() {
  */
 export function startImportPackageJob({ zipPath, policy = DEFAULT_POLICY, fileName = 'package.zip' }) {
   if (!zipPath || !isFile(zipPath)) throw new PackageError('E_PKG_NOT_ZIP', '没有收到书档', '');
+  if (activeImportJob()) {
+    throw new PackageError('E_PKG_BUSY', '已有书档导入正在运行', '等当前导入结束，或先取消。');
+  }
   const jobId = 'i' + crypto.randomBytes(6).toString('hex');
   const job = {
     jobId,
@@ -744,9 +754,13 @@ async function runImportJob(job) {
   const rawBudget = Number(process.env.DSH_BOOK_SLIDES_PKG_TIMEOUT_MS);
   const budgetMs = Number.isFinite(rawBudget) && rawBudget > 0 ? Math.floor(rawBudget) : 30 * 60 * 1000;
   const deadline = Date.parse(job.startedAt) + budgetMs;
+  // 测试注入：让作业在 active 状态停留足够久，便于验证 active 查询与 busy 守卫。
+  const rawStepDelay = Number(process.env.DSH_BOOK_SLIDES_PKG_STEP_DELAY_MS);
+  const stepDelay = Number.isFinite(rawStepDelay) && rawStepDelay > 0 ? Math.floor(rawStepDelay) : 0;
   job.status = 'running';
   job.stage = 'extracting';
   job.message = '正在读取书档';
+  if (stepDelay) await new Promise((resolve) => setTimeout(resolve, stepDelay));
 
   const info = await inspectZip(job.zipPath);
   assertActive(job);

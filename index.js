@@ -238,6 +238,7 @@ export const ROUTE_EXPORT_PPTX = ROUTE_PREFIX + '/export/pptx';
 export const ROUTE_EXPORT_PPTX_PLAN = ROUTE_PREFIX + '/export/pptx/plan';
 export const ROUTE_EXPORT_PPTX_BATCH = ROUTE_PREFIX + '/export/pptx/batch';
 export const ROUTE_IMPORT_PACKAGE = ROUTE_PREFIX + '/import/package';
+export const ROUTE_IMPORT_PACKAGE_ACTIVE = ROUTE_PREFIX + '/import/package/active';
 export const ROUTE_IMPORT_PACKAGE_JOB = ROUTE_PREFIX + '/import/package/job';
 export const ROUTE_IMPORT_PACKAGE_CANCEL = ROUTE_PREFIX + '/import/package/cancel';
 export const ROUTE_REVOICE = ROUTE_PREFIX + '/revoice';
@@ -2865,14 +2866,7 @@ export function apply(ctx) {
 
     route(ROUTE_CHAPTERS, routeV2);
 
-    route(ROUTE_TOC, (req, res) => {
-      if (!methodIs(req, 'GET')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      handleTocGet(req, res);
-    });
+    route(ROUTE_TOC, routeV2);
 
     route(ROUTE_TOC_PREVIEW, (req, res) => {
       if (!methodIs(req, 'POST')) {
@@ -2892,14 +2886,7 @@ export function apply(ctx) {
       return handleTocParse(req, res, ctx);
     });
 
-    route(ROUTE_TOC_RANGE, (req, res) => {
-      if (!methodIs(req, 'POST')) {
-        res.statusCode = 405;
-        res.end();
-        return;
-      }
-      return handleTocRange(req, res);
-    });
+    route(ROUTE_TOC_RANGE, routeV2);
 
     route(ROUTE_GENERATE, (req, res) => {
       if (!methodIs(req, 'POST')) {
@@ -2999,6 +2986,7 @@ export function apply(ctx) {
     route(ROUTE_EXPORT_PPTX_BATCH, routeV2);
 
     route(ROUTE_IMPORT_PACKAGE, routeV2);
+    route(ROUTE_IMPORT_PACKAGE_ACTIVE, routeV2);
     route(ROUTE_IMPORT_PACKAGE_JOB, routeV2);
     route(ROUTE_IMPORT_PACKAGE_CANCEL, routeV2);
 
