@@ -404,6 +404,21 @@ test('AC-133：导入 staging 在作业结束后清理；1.x 包明确拒绝', a
   assert.equal(job.code, 'E_PKG_VERSION');
 });
 
+test('AC-135：书档导入超时 → E_PKG_TIMEOUT，staging 清理', async () => {
+  process.env.DSH_BOOK_SLIDES_PKG_TIMEOUT_MS = '1';
+  try {
+    const job = await importZip(packageA);
+    assert.equal(job.status, 'failed');
+    assert.equal(job.code, 'E_PKG_TIMEOUT');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const importRoot = path.join(ROOT, '.import');
+    const leftovers = fs.existsSync(importRoot) ? fs.readdirSync(importRoot) : [];
+    assert.deepEqual(leftovers, [], '超时后不得留下 staging');
+  } finally {
+    delete process.env.DSH_BOOK_SLIDES_PKG_TIMEOUT_MS;
+  }
+});
+
 test.after(() => {
   server.close();
   fs.rmSync(ROOT, { recursive: true, force: true });

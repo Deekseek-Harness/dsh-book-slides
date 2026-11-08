@@ -235,7 +235,7 @@ export function diagnosticsPayload() {
     dshVersion: dshVersion() || '未知',
     pdfjsVersion: moduleVersion('pdfjs-dist') || '未知',
     errors: recentErrors(5),
-    upgradedFrom: String(readJson(META_FILE(), {}).upgraded_from || ''),
+    upgradedFrom: String(readJson(META_FILE(), {}).upgraded_to || readJson(META_FILE(), {}).upgraded_from || ''),
     voice: {
       provider: voiceConfig.provider,
       model: voiceConfig.model,

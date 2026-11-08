@@ -60,6 +60,7 @@ import { ensureRoot } from './v2/root.js';
 import { reconcileAllSeries } from './v2/generate.js';
 import { cleanupStaleImports } from './v2/package.js';
 import { reconcileImageJobs } from './v2/images.js';
+import { reconcileVoiceJobs } from './v2/voice.js';
 import { runBookCheck } from './check.js';
 import {
   cancelJob,
@@ -2766,6 +2767,11 @@ export function apply(ctx) {
     reconcileImageJobs();
   } catch {
     /* 2.0 配图作业归一失败也不能挡启动 */
+  }
+  try {
+    reconcileVoiceJobs();
+  } catch {
+    /* 2.0 配音作业归一失败也不能挡启动 */
   }
   // 真书对照命令：跑「目录 → 校准」这条路，按严重程度分类报告
   ctx.inject(['commands'], (scoped) => {

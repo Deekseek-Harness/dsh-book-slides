@@ -195,6 +195,97 @@ test('AC-124：无文字层拒绝，书架不新增', async () => {
   assert.equal((await json('/dsh-book-slides/books')).body.books.length, 1);
 });
 
+test('AC-116：mech 不用目录标题；重叠/越界被拒；空白章 chars=0', async () => {
+  const pdf = makePdf([
+    ['目录', '第一章 函数 1', '第二章 极限 5'],
+    ['第一章 函数', '甲'.repeat(200)],
+    [''],
+    ['第二章 极限', '乙'.repeat(200)],
+  ]);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('四页.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.body.ok, true);
+  const id = imported.body.bookId;
+
+  const mech = await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'mech', force: true }),
+  });
+  assert.equal(mech.body.ok, true);
+  assert.ok(mech.body.chapters.length >= 1);
+  for (const chapter of mech.body.chapters) {
+    assert.match(chapter.title, /^(第 \d+ 部分|全文)$/, 'mech 不得使用“目录”等目录标题');
+  }
+
+  const saved = await json('/dsh-book-slides/chapters', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      bookId: id,
+      chapters: [
+        { n: 1, title: '第一章 函数', from: 1, to: 2 },
+        { n: 2, title: '空白页', from: 3, to: 3 },
+        { n: 3, title: '第二章 极限', from: 4, to: 4 },
+      ],
+    }),
+  });
+  assert.equal(saved.body.ok, true);
+  assert.equal(saved.body.chapters[1].chars, 0, '空白章 chars=0（UI 据此置灰）');
+
+  const overlap = await json('/dsh-book-slides/chapters', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, chapters: [{ n: 1, from: 1, to: 3 }, { n: 2, from: 2, to: 4 }] }),
+  });
+  assert.equal(overlap.body.ok, false);
+  assert.equal(overlap.body.code, 'E_CHAPTER_OVERLAP');
+
+  const range = await json('/dsh-book-slides/chapters', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, chapters: [{ n: 1, from: 1, to: 999 }] }),
+  });
+  assert.equal(range.body.ok, false);
+  assert.equal(range.body.code, 'E_CHAPTER_RANGE');
+});
+
+test('AC-124：300 页导入不建章节/封面，删源 PDF 后原文仍可读', async () => {
+  const pages = Array.from({ length: 300 }, (_, index) => ['第' + (index + 1) + ' 页 ' + '文'.repeat(40)]);
+  const pdf = makePdf(pages);
+  const started = Date.now();
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': 'big.pdf', 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(imported.body.ok, true);
+  assert.ok(elapsed < 60000, '300 页导入耗时 ' + elapsed + 'ms（15s 为真机目标，不作 CI 门）');
+  const id = imported.body.bookId;
+
+  const book = await json('/dsh-book-slides/book?bookId=' + id);
+  assert.equal(book.body.chapters.length, 0);
+  assert.equal(book.body.chaptersBuilt, false);
+  assert.equal(book.body.cover, false);
+
+  const dup = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': 'big-again.pdf', 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(dup.body.ok, false);
+  assert.equal(dup.body.code, 'E_DUP_BOOK');
+
+  fs.rmSync(path.join(ROOT, 'books', id, 'source.pdf'), { force: true });
+  const pageOut = await json('/dsh-book-slides/pages?bookId=' + id);
+  assert.equal(pageOut.body.ok, true);
+  assert.equal(pageOut.body.pages.length, 300);
+});
+
 test.after(() => {
   server.close();
   fs.rmSync(ROOT, { recursive: true, force: true });

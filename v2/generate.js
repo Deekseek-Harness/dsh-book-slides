@@ -276,7 +276,13 @@ export function buildLectureMessages({ book, series, lecture, batch, totalBatche
 
 /* ------------------------------ 模型调用 ------------------------------ */
 
-async function ask(job, ctx, system, user, { maxTokens = LLM_MAX_TOKENS, timeoutMs = 180000 } = {}) {
+/** 生成单次模型调用超时；默认 180s，可用 DSH_BOOK_SLIDES_LLM_TIMEOUT_MS 调低（AC-135）。 */
+function llmTimeoutMs() {
+  const raw = Number(process.env.DSH_BOOK_SLIDES_LLM_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 180000;
+}
+
+async function ask(job, ctx, system, user, { maxTokens = LLM_MAX_TOKENS, timeoutMs = llmTimeoutMs() } = {}) {
   assertActive(job);
   try {
     return await callModel(ctx, system, user, { maxTokens, timeoutMs, signal: job.controller.signal });

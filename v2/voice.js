@@ -25,13 +25,60 @@ import {
   writeVoiceConfig,
 } from '../tts.js';
 import { ROOT, writeJson } from './root.js';
-import { lectureDir, loadLecture } from './lectures.js';
-import { findSeries, patchSeriesLecture, persistSeries } from './series.js';
+import { lectureDir, loadLecture, writeLectureMeta } from './lectures.js';
+import { findSeries, listAllSeries, patchSeriesLecture, persistSeries } from './series.js';
 import { recordError } from './errors.js';
 import { prepareComfyVoice, probeComfySpeech, refTablePayload, synthesizeComfyVoicing, workflowPayload } from './comfy-clone.js';
 
 const ACTIVE = ['queued', 'voicing', 'cancelling'];
 const READY = ['ready', 'ready_degraded'];
+
+/**
+ * 启动归一（AC-152）：重启后内存作业丢失，残留的 `voicing` 不能永远转圈。
+ * 已完成页保留；有已完成页 → partial，否则 failed；错误码 E_INTERRUPTED。
+ */
+export function reconcileVoiceJobs() {
+  for (const item of listAllSeries()) {
+    const { series, dir } = item;
+    let changed = false;
+    for (const lec of series.lectures || []) {
+      let doc = null;
+      try {
+        doc = loadLecture(dir, lec.n);
+      } catch {
+        continue;
+      }
+      const status = String((doc.lecture && doc.lecture.voice_status) || lec.voice_status || '');
+      if (status !== 'voicing') continue;
+      let ready = 0;
+      try {
+        const slides = (doc.slidesDoc && doc.slidesDoc.slides) || [];
+        ready = slides.filter((slide) => slide.audio_file && String(slide.audio_provider || '') !== 'none').length;
+        lec.voice_status = ready > 0 ? 'partial' : 'failed';
+        lec.voice_code = 'E_INTERRUPTED';
+        lec.voice_error = '配音被中断（DSH 重启或进程退出），已完成页保留，可补配音';
+        if (doc.lecture) {
+          writeLectureMeta(dir, lec.n, Object.assign({}, doc.lecture, {
+            voice_status: lec.voice_status,
+            voice_code: 'E_INTERRUPTED',
+            voice_error: lec.voice_error,
+          }));
+        }
+      } catch {
+        continue;
+      }
+      changed = true;
+    }
+    if (String(series.voice_status || '') === 'voicing') {
+      const statuses = (series.lectures || []).map((lec) => String(lec.voice_status || ''));
+      series.voice_status = statuses.includes('partial') || statuses.includes('ready') ? 'partial' : 'failed';
+      series.voice_code = 'E_INTERRUPTED';
+      series.voice_error = '配音被中断（DSH 重启或进程退出），可补配音';
+      changed = true;
+    }
+    if (changed) persistSeries(series);
+  }
+}
 
 const jobs = new Map();
 const activeBySeries = new Map();
@@ -93,12 +140,9 @@ export function voicePayload() {
     const known = voiceTable.voices.some((item) => item.id === publicConfig.comfyRefVoice);
     const wanted = known ? publicConfig.comfyRefVoice : voiceTable.defaultVoice;
     if (wanted && wanted !== publicConfig.comfyRefVoice) {
+      // 表外 id 只在本此响应里回落，不改写用户文件（UI 用 fallbackFrom 标注）。
+      publicConfig.fallbackFrom = publicConfig.comfyRefVoice;
       publicConfig.comfyRefVoice = wanted;
-      try {
-        writeVoiceConfig({ comfyRefVoice: wanted });
-      } catch {
-        /* 迁移失败不影响本次显示 */
-      }
     }
   }
   return {

@@ -227,7 +227,7 @@ function handleMeta(req, res) {
     product_version: '2.0',
     schema: 2,
     legacy: false,
-    notice: meta.upgraded_from ? '旧数据已备份到 ' + meta.upgraded_from : '',
+    notice: meta.upgraded_from ? '旧数据已备份到 ' + (meta.upgraded_to || meta.upgraded_from) : '',
   });
 }
 

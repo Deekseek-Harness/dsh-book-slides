@@ -230,6 +230,25 @@ test('AC-135：书档导入 job 可取消/幂等；结束后 staging 清理', as
   assert.equal(again.cancelled, false);
 });
 
+test('AC-135：题库作业超时 → E_QZ_TIMEOUT，不写题库', async () => {
+  process.env.DSH_BOOK_SLIDES_PRACTICE_TIMEOUT_MS = '1';
+  try {
+    const fresh = makeFixture();
+    const started = await post('/dsh-book-slides/practice/bank', { seriesId: fresh.series.id });
+    assert.equal(started.ok, true);
+    const job = await waitJob(started.jobId, (state) => state.status === 'failed' || state.status === 'ready');
+    assert.equal(job.status, 'failed');
+    assert.equal(job.code, 'E_QZ_TIMEOUT');
+    const bankFile = path.join(ROOT, 'books', fresh.book.id, 'practice', 'questions.json');
+    const wrote = fs.existsSync(bankFile) ? (JSON.parse(fs.readFileSync(bankFile, 'utf8')).questions || []) : [];
+    const byChapter = {};
+    for (const question of wrote) byChapter[question.chapter] = (byChapter[question.chapter] || 0) + 1;
+    assert.ok(Object.values(byChapter).every((count) => count >= 4), '超时只能留完整章，不能留半章题');
+  } finally {
+    delete process.env.DSH_BOOK_SLIDES_PRACTICE_TIMEOUT_MS;
+  }
+});
+
 test.after(() => {
   server.close();
   fs.rmSync(ROOT, { recursive: true, force: true });

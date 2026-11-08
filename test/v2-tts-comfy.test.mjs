@@ -21,6 +21,7 @@ const { savePart } = await import('../v2/parts.js');
 const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../v2/series.js');
 const { writeLectureOutputs } = await import('../v2/lectures.js');
 const { getRevoiceJob } = await import('../v2/voice.js');
+const { reconcileVoiceJobs } = await import('../v2/voice.js');
 const { routeM1 } = await import('../v2/api.js');
 const { applyCloneInputs, refTablePayload } = await import('../v2/comfy-clone.js');
 
@@ -49,7 +50,7 @@ function makeWav(ms = 200) {
 }
 
 const WAV = makeWav();
-const state = { prompts: [], uploads: 0, ext: 'flac', lastId: '' };
+const state = { prompts: [], uploads: 0, ext: 'flac', lastId: '', hang: false };
 
 function cloneInputs(body) {
   const prompt = body && body.prompt && typeof body.prompt === 'object' ? body.prompt : {};
@@ -97,6 +98,7 @@ const comfy = http.createServer(async (req, res) => {
     return json({ prompt_id: state.lastId });
   }
   if (url.pathname.startsWith('/history/')) {
+    if (state.hang) return json({}); // 一直没跑完：客户端按 deadline 判超时（AC-135）
     const id = url.pathname.split('/').pop();
     return json({
       [id]: {
@@ -212,6 +214,49 @@ function makeSeries(tag) {
   return { series: found.series, found };
 }
 
+test('AC-153：表外参考回落 default，带 fallbackFrom 且不改写 voice.json', async () => {
+  const voiceFile = path.join(ROOT, 'voice.json');
+  await api('POST', '/voice', { comfyRefVoice: 'missing-voice' });
+  assert.equal(JSON.parse(fs.readFileSync(voiceFile, 'utf8')).comfyRefVoice, 'missing-voice');
+  const out = await api('GET', '/voice');
+  assert.equal(out.data.ok, true);
+  assert.equal(out.data.voice.comfyRefVoice, 'builtin-vivian');
+  assert.equal(out.data.voice.fallbackFrom, 'missing-voice');
+  assert.equal(JSON.parse(fs.readFileSync(voiceFile, 'utf8')).comfyRefVoice, 'missing-voice', '回落不得改写文件');
+  await api('POST', '/voice', { comfyRefVoice: 'builtin-vivian' });
+});
+
+test('AC-148：ComfyUI 未启动 → E_TTS_CONNECT，/prompt 0 次、不落盘', async () => {
+  const probe = http.createServer(() => {});
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const deadPort = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  const cacheDir = path.join(ROOT, 'audio-cache');
+  const booksDir = path.join(ROOT, 'books');
+  const countFiles = (dir) => {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true }).reduce((sum, entry) => (
+        sum + (entry.isDirectory() ? countFiles(path.join(dir, entry.name)) : 1)
+      ), 0);
+    } catch {
+      return 0;
+    }
+  };
+  const filesBefore = countFiles(cacheDir) + countFiles(booksDir);
+  const promptsBefore = state.prompts.length;
+  writeImageConfig({ host: '127.0.0.1', port: deadPort });
+  try {
+    const out = await api('POST', '/voice/comfy/probe');
+    assert.equal(out.data.ok, false);
+    assert.equal(out.data.code, 'E_TTS_CONNECT');
+    assert.ok(String(out.data.hint || out.data.message || '').length > 0, '要给出可读原因');
+    assert.equal(countFiles(cacheDir) + countFiles(booksDir), filesBefore, '连接失败不得落盘');
+    assert.equal(state.prompts.length, promptsBefore, '连接失败不得调 /prompt');
+  } finally {
+    writeImageConfig({ host: '127.0.0.1', port: comfy.address().port });
+  }
+});
+
 test('默认参考库：内置 2 项，默认 Vivian，工作流识别 6/7/8', async () => {
   const voice = await api('GET', '/voice');
   assert.equal(voice.data.ok, true);
@@ -297,6 +342,93 @@ test('工作流校验：x_vector_only=true 拒绝；UI 格式可转换', async (
   await api('POST', '/voice/workflow', { reset: true });
 });
 
+test('AC-154：超时长参考给 warning；不可解码 flac 被拒且旧表不变', async () => {
+  const longTable = { voices: [{ id: 'long', name: 'Long', audio: 'voices/long.wav', ref_text: '参考文本', duration_ms: 40000 }] };
+  const saved = await api('POST', '/voice/refvoices', { table: longTable });
+  assert.equal(saved.data.ok, true);
+  await api('POST', '/voice', { comfyRefVoice: 'long' });
+  const probe = await api('POST', '/voice/comfy/probe');
+  assert.equal(probe.data.ok, true);
+  assert.ok(
+    (probe.data.warnings || []).some((text) => text.includes('超出推荐 5–15s')),
+    '40s 参考应给时长 warning：' + JSON.stringify(probe.data.warnings),
+  );
+
+  const voicesDir = path.join(ROOT, 'voices');
+  fs.mkdirSync(voicesDir, { recursive: true });
+  fs.writeFileSync(path.join(voicesDir, 'bad.flac'), 'not-a-flac');
+  const before = (await api('GET', '/voice/refvoices')).data.table.count;
+  const bad = await api('POST', '/voice/refvoices', {
+    table: { voices: [{ id: 'bad', name: 'Bad', audio: 'voices/bad.flac', ref_text: '参考文本' }] },
+  });
+  assert.equal(bad.data.ok, false);
+  assert.equal(bad.data.code, 'E_TTS_VOICE_REF');
+  assert.equal((await api('GET', '/voice/refvoices')).data.table.count, before, '坏表不得覆盖旧表');
+  await api('POST', '/voice/refvoices', { reset: true });
+  await api('POST', '/voice', { comfyRefVoice: 'builtin-vivian' });
+});
+
+test('AC-152：重启后 voicing 归一为 partial，已完成页保留', async () => {
+  const { series, found } = makeSeries('restart');
+  const slidesPath = path.join(found.dir, 'lectures', '1', 'slides.json');
+  const doc = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  doc.slides[0] = Object.assign({}, doc.slides[0], { audio_file: 'audio/001.wav', audio_provider: 'comfyui-tts' });
+  fs.writeFileSync(slidesPath, JSON.stringify(doc, null, 2));
+  const lecturePath = path.join(found.dir, 'lectures', '1', 'lecture.json');
+  const lecture = JSON.parse(fs.readFileSync(lecturePath, 'utf8'));
+  lecture.voice_status = 'voicing';
+  fs.writeFileSync(lecturePath, JSON.stringify(lecture, null, 2));
+  const foundNow = findSeries(series.id);
+  foundNow.series.voice_status = 'voicing';
+  persistSeries(foundNow.series);
+
+  reconcileVoiceJobs();
+
+  const after = findSeries(series.id);
+  assert.equal(after.series.voice_status, 'partial');
+  assert.equal(after.series.voice_code, 'E_INTERRUPTED');
+  assert.equal(after.series.lectures[0].voice_status, 'partial');
+  const lectureAfter = JSON.parse(fs.readFileSync(lecturePath, 'utf8'));
+  assert.equal(lectureAfter.voice_status, 'partial');
+  assert.equal(lectureAfter.voice_code, 'E_INTERRUPTED');
+  assert.match(lectureAfter.voice_error, /中断/);
+  const slidesAfter = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  assert.equal(slidesAfter.slides[0].audio_file, 'audio/001.wav', '已完成页的音频字段必须保留');
+});
+
+test('AC-150：界面格式缺 widgets / 无 TTS 节点 / 多候选手选落盘', async () => {
+  let out = await api('POST', '/voice/workflow', {
+    workflow: { nodes: [{ id: 1, type: 'FB_Qwen3TTSVoiceClone', mode: 0, inputs: [], outputs: [] }], links: [] },
+  });
+  assert.equal(out.data.ok, false);
+  assert.equal(out.data.code, 'E_TTS_WORKFLOW');
+
+  out = await api('POST', '/voice/workflow', {
+    workflow: {
+      '1': { class_type: 'LoadAudio', inputs: { audio: 'a.flac' } },
+      '2': { class_type: 'SaveAudio', inputs: { audio: ['1', 0] } },
+    },
+  });
+  assert.equal(out.data.code, 'E_TTS_WORKFLOW');
+
+  const twoClones = {
+    '1': { class_type: 'FB_Qwen3TTSVoiceClone', inputs: { target_text: '甲', ref_text: 'r', x_vector_only: false, ref_audio: ['3', 0] } },
+    '2': { class_type: 'FB_Qwen3TTSVoiceClone', inputs: { target_text: '乙', ref_text: 'r', x_vector_only: false, ref_audio: ['4', 0] } },
+    '3': { class_type: 'LoadAudio', inputs: { audio: 'a.flac' } },
+    '4': { class_type: 'LoadAudio', inputs: { audio: 'b.flac' } },
+    '5': { class_type: 'SaveAudio', inputs: { audio: ['1', 0] } },
+  };
+  out = await api('POST', '/voice/workflow', { workflow: twoClones });
+  assert.equal(out.data.code, 'E_TTS_WORKFLOW_NODE');
+  assert.equal(out.data.candidates.length, 2, '多候选要回传 candidates');
+  out = await api('POST', '/voice/workflow', { workflow: twoClones, textNode: '1' });
+  assert.equal(out.data.ok, true);
+  assert.equal(out.data.workflow.textNode, '1');
+  const voice = JSON.parse(fs.readFileSync(path.join(ROOT, 'voice.json'), 'utf8'));
+  assert.equal(voice.textNode, '1', '手选后落盘 voice.json.textNode');
+  await api('POST', '/voice/workflow', { reset: true });
+});
+
 test('逐页配音、缓存与换参考失效', async () => {
   const { series, found } = makeSeries('clone');
   state.prompts = [];
@@ -332,6 +464,26 @@ test('文本入口隔离：只改 target_text，不碰 ref_text', () => {
   assert.equal(out.workflow['1'].inputs.ref_text, '参考文本');
   assert.equal(out.workflow['1'].inputs.x_vector_only, false);
   assert.equal(out.workflow['2'].inputs.audio, 'uploaded.flac');
+});
+
+test('AC-135：ComfyUI 配音超时 → E_TTS_TIMEOUT，不留半截音频', async () => {
+  const { series, found } = makeSeries('tts-timeout');
+  state.hang = true;
+  process.env.DSH_BOOK_SLIDES_TTS_TIMEOUT_MS = '1000';
+  try {
+    const started = await api('POST', '/revoice', { seriesId: series.id, lecture: 1 });
+    assert.equal(started.data.ok, true);
+    const job = await waitJob(started.data.jobId, 20000);
+    assert.ok(['done', 'failed'].includes(String(job.status)), 'job 状态：' + job.status);
+    const seriesOut = await api('GET', '/series?seriesId=' + series.id);
+    assert.equal(seriesOut.data.series.voice_code, 'E_TTS_TIMEOUT');
+    const audioDir = path.join(found.dir, 'lectures', '1', 'audio');
+    const files = fs.existsSync(audioDir) ? fs.readdirSync(audioDir).filter((name) => /\.(wav|mp3|flac|ogg)$/.test(name)) : [];
+    assert.deepEqual(files, [], '超时不得留下半截音频');
+  } finally {
+    state.hang = false;
+    delete process.env.DSH_BOOK_SLIDES_TTS_TIMEOUT_MS;
+  }
 });
 
 test.after(() => {

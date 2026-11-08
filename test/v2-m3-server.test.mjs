@@ -18,7 +18,7 @@ const { createSeries } = await import('../v2/series.js');
 const { routeM1 } = await import('../v2/api.js');
 
 const SEAM = '上一讲把函数当机器；这一讲只问靠近某点时输出去哪。';
-const ctl = { delay: 0, slowLecture: 0, failLecture: 0 };
+const ctl = { delay: 0, slowLecture: 0, failLecture: 0, hangLecture: 0 };
 
 function makeBook(tag) {
   const rawPages = [
@@ -93,6 +93,15 @@ const ctx = {
             const match = /【本讲】第 (\d+)\//.exec(user);
             const lectureNo = match ? Number(match[1]) : 1;
             if (ctl.failLecture === lectureNo) throw new Error('fake lecture failure');
+            if (ctl.hangLecture === lectureNo) {
+              const signal = config.signal;
+              await new Promise((resolve, reject) => {
+                const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+                if (!signal) return;
+                if (signal.aborted) fail();
+                else signal.addEventListener('abort', fail, { once: true });
+              });
+            }
             if (ctl.delay && ctl.slowLecture === lectureNo) await new Promise((resolve) => setTimeout(resolve, ctl.delay));
             yield {
               type: 'text-delta',
@@ -271,6 +280,67 @@ test('M3 解耦：draft 系列不能 start', async () => {
   const blocked = await post('/dsh-book-slides/series/start', { seriesId: draft.id });
   assert.equal(blocked.ok, false);
   assert.equal(blocked.code, 'E_SERIES_UNPLANNED');
+});
+
+test('AC-135：生成超时 → E_LLM_TIMEOUT，不留半截讲', async () => {
+  ctl.delay = 0;
+  ctl.failLecture = 0;
+  ctl.hangLecture = 1;
+  process.env.DSH_BOOK_SLIDES_LLM_TIMEOUT_MS = '200';
+  try {
+    const { book, series } = makeBook('timeout');
+    const started = await post('/dsh-book-slides/series/start', { seriesId: series.id });
+    assert.equal(started.ok, true);
+    const job = await waitJob(series.id, (j) => ['partial', 'failed', 'ready'].includes(j.status));
+    assert.notEqual(job.status, 'ready');
+    const failures = (job.error && job.error.failures) || [];
+    assert.equal(failures[0] && failures[0].code, 'E_LLM_TIMEOUT');
+    const slidesOne = path.join(ROOT, 'books', book.id, 'series', series.id, 'lectures', '1', 'slides.json');
+    assert.equal(fs.existsSync(slidesOne), false, '超时不得留下半截 slides.json');
+  } finally {
+    ctl.hangLecture = 0;
+    delete process.env.DSH_BOOK_SLIDES_LLM_TIMEOUT_MS;
+  }
+});
+
+test('AC-114：N=1 系列只有 1 讲；删除后该讲不可访问', async () => {
+  const rawPages = [{ page: 1, text: '第1章 独讲\n' + '丁'.repeat(11000) }];
+  const book = createBook({
+    buffer: Buffer.from('m3-solo-' + Date.now()),
+    fileName: 'solo.pdf',
+    title: '独讲书',
+    author: '',
+    pages: 1,
+    rawPages,
+  });
+  writeChapters(book.id, [{ n: 1, title: '第1章 独讲', from: 1, to: 1, chars: 11000, front: false }], 'manual');
+  const part = savePart({ bookId: book.id, chapters: [1], title: '独讲部分' });
+  const series = createSeries({
+    bookId: book.id,
+    partId: part.id,
+    title: '独讲系列',
+    plan: {
+      throughline: '只讲一章',
+      lectures: [{ n: 1, chapters: [1], title: '第 1 讲', goal: '', in: '', out: '', pages: 6, chars: 11000 }],
+      seams: [],
+      terms: [],
+      cut_notes: [],
+      source: 'rule',
+      stitched: true,
+      totalChars: 11000,
+      totalPages: 6,
+      estMinutes: 6,
+    },
+  });
+  const list = await json('/dsh-book-slides/series?bookId=' + book.id);
+  assert.equal(list.ok, true);
+  assert.equal(list.series.length, 1);
+  assert.equal(list.series[0].lectures.length, 1);
+  const del = await json('/dsh-book-slides/series?seriesId=' + series.id, { method: 'DELETE' });
+  assert.equal(del.ok, true);
+  const gone = await json('/dsh-book-slides/lecture?seriesId=' + series.id + '&n=1');
+  assert.equal(gone.ok, false);
+  assert.equal(gone.code, 'E_NOT_FOUND');
 });
 
 test.after(() => {

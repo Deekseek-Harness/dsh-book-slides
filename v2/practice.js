@@ -711,7 +711,9 @@ export function startPracticeBankJob({ seriesId, chapters = null, topup = false,
 }
 
 async function runBankJob(job, found, scope, planned, topup, roundCount, ctx, options) {
-  const deadline = Date.parse(job.startedAt) + 5 * 60 * 1000;
+  const raw = Number(process.env.DSH_BOOK_SLIDES_PRACTICE_TIMEOUT_MS);
+  const budgetMs = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5 * 60 * 1000;
+  const deadline = Date.parse(job.startedAt) + budgetMs;
   const modelCall = (system, user, callOptions) =>
     callModel(ctx, system, user, Object.assign({ signal: job.controller.signal }, callOptions || {}));
   const prompt = promptText(PROMPT_FILE);

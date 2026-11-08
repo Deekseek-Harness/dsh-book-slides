@@ -216,7 +216,7 @@ export function ensureRoot() {
 
   fs.mkdirSync(root, { recursive: true });
   ensureLayout();
-  writeMeta({ upgraded_from: path.basename(target), backup_at: new Date().toISOString() });
+  writeMeta({ upgraded_from: path.basename(target), upgraded_to: target, backup_at: new Date().toISOString() });
   return { root, meta: readJson(META_FILE(), {}), backup: target, upgraded: true };
 }
 

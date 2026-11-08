@@ -26,6 +26,12 @@ export const TTS_VOICES_DIR = path.join(ROOT, 'voices');
 export const TTS_DEFAULT_MODEL = 'Qwen3-TTS-12Hz-1.7B-Base';
 export const TTS_DEFAULT_REF_ID = 'builtin-vivian';
 export const TTS_TIMEOUT_MS = 180000;
+
+/** 配音单次/整作业超时；默认 180s，可用 DSH_BOOK_SLIDES_TTS_TIMEOUT_MS 调低（AC-135）。 */
+export function ttsTimeoutMs() {
+  const raw = Number(process.env.DSH_BOOK_SLIDES_TTS_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? Math.max(1000, Math.floor(raw)) : TTS_TIMEOUT_MS;
+}
 export const TTS_PROBE_TIMEOUT_MS = 10000;
 export const TTS_QUEUE_WAIT_MS = 10000;
 export const TTS_MAX_AUDIO_BYTES = 32 * 1024 * 1024;
@@ -272,6 +278,22 @@ export function saveRefTable(body) {
     model: raw && raw.model,
     savedAt: nowIso(),
   });
+  // 已存在的本地 wav/flac 必须能解码（AC-154）；不存在的文件留待上传后再校验。
+  for (const voice of table.voices) {
+    const ext = String(voice.audio || '').split('.').pop().toLowerCase();
+    if (ext !== 'wav' && ext !== 'flac') continue;
+    const abs = path.join(ROOT, 'voices', path.basename(voice.audio));
+    if (!fs.existsSync(abs)) continue;
+    let duration = 0;
+    try {
+      duration = audioDurationMs(abs);
+    } catch {
+      duration = 0;
+    }
+    if (!duration) {
+      throw new TtsError('E_TTS_VOICE_REF', '参考音频无法解码：' + voice.name, '换一个可正常播放的 wav/flac。');
+    }
+  }
   writeAtomic(
     TTS_REFVOICES_FILE,
     JSON.stringify(
@@ -684,7 +706,7 @@ async function fetchWithTimeout(fetchImpl, url, init, timeoutMs, signal) {
     } catch {
       /* 已结束 */
     }
-  }, Math.max(1000, Number(timeoutMs) || TTS_TIMEOUT_MS));
+  }, Math.max(1000, Number(timeoutMs) || ttsTimeoutMs()));
   const onAbort = () => {
     try {
       controller.abort();
@@ -905,7 +927,7 @@ async function submitAndWait(options) {
   const promptId = String((submitData && submitData.prompt_id) || '');
   if (!promptId) throw new TtsError('E_TTS_BAD_RESPONSE', 'ComfyUI 没有返回 prompt_id', '');
 
-  const timeoutMs = Math.max(10000, Number(opts.timeoutMs) || TTS_TIMEOUT_MS);
+  const timeoutMs = Math.max(1000, Number(opts.timeoutMs) || ttsTimeoutMs());
   const deadline = Date.now() + timeoutMs;
   let entry = null;
   while (Date.now() < deadline) {

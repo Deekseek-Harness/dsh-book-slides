@@ -741,7 +741,9 @@ export function startImportPackageJob({ zipPath, policy = DEFAULT_POLICY, fileNa
 
 async function runImportJob(job) {
   const signal = job.controller.signal;
-  const deadline = Date.parse(job.startedAt) + 30 * 60 * 1000;
+  const rawBudget = Number(process.env.DSH_BOOK_SLIDES_PKG_TIMEOUT_MS);
+  const budgetMs = Number.isFinite(rawBudget) && rawBudget > 0 ? Math.floor(rawBudget) : 30 * 60 * 1000;
+  const deadline = Date.parse(job.startedAt) + budgetMs;
   job.status = 'running';
   job.stage = 'extracting';
   job.message = '正在读取书档';

@@ -76,7 +76,7 @@ function isUpgradeFailure(err) {
   return true;
 }
 
-test('AC-112：旧根自动备份，备份内文件与 mtime 保持，/meta 提示备份目录名', async () => {
+test('AC-112：旧根自动备份，备份内文件与 mtime 保持，/meta 提示完整备份路径', async () => {
   wipe();
   const bookFile = path.join(ROOT, 'books', 'oldbook1', 'book.json');
   writeFile(bookFile, '{"schema":1,"title":"旧书"}');
@@ -97,11 +97,12 @@ test('AC-112：旧根自动备份，备份内文件与 mtime 保持，/meta 提�
   assert.equal(meta.schema, 2);
   assert.equal(meta.product_version, '2.0');
   assert.equal(meta.upgraded_from, path.basename(out.backup));
+  assert.equal(meta.upgraded_to, out.backup);
   assert.equal(fs.existsSync(path.join(ROOT, 'books')), true);
 
   const metaRes = await (await fetch(base + '/dsh-book-slides/meta')).json();
   assert.equal(metaRes.ok, true);
-  assert.equal(metaRes.notice, '旧数据已备份到 ' + path.basename(out.backup));
+  assert.equal(metaRes.notice, '旧数据已备份到 ' + out.backup, '提示必须带完整备份路径');
 });
 
 test('AC-113：备份为空（0 字节旧根）→ E_UPGRADE_BACKUP_FAILED，原根复原，修正后成功', async () => {

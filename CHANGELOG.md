@@ -42,6 +42,8 @@
 - FR-18 修复（v1.11）：未锚定提示移入 sticky 容器，原文窗格滚动后不再消失；`unanchored` 判据补上 `anchor_status='unanchored'` 与空锚点（`{}`）；窗口重新聚焦/可见时刷新当前讲与系列，注入后无需整页刷新。
 - SRS v1.12：AC-110 / AC-111 / AC-119 / AC-121 改为可注入判据——7 章组卷覆盖、`mastery.json` 注入到期/盒子、`questions.json` 改名造空题库；合并页数 = Σ页数 + (N−1) 且过渡页接缝句逐字；缺音频/flac 用改名注入，超限用 `DSH_PPT_MAX_BYTES` 调低触发，提示按导出模式区分。
 - SRS v1.13：AC-113 改为两条可注入失败（旧根只含 0 字节文件 → 备份校验失败；`rename` 注入 `EPERM` → 重命名失败），断言原根文件与 mtime 不变、无半截 2.0 数据、修正后不重启可重试；新增 `test/v2-isolation.test.mjs`（AC-112/AC-113 + 零模型依赖）。AC-132 去掉“清理临时文件”（批量导出全内存、无临时文件），改为 abort 后数据根无残留并补用例；AC-135 写明取消矩阵与超时缺口；附录 D 清理 6 个幽灵测试文件。
+- SRS v1.14：B2 完成——23 条 AC（112/117/118/122/125/126/127/130/131/133/134/137/138/139/140/144/147/148/149/151/153/156/120）改为构造→断言→判定→机检入口→人工边界；AC-112 备份提示补 `upgraded_to` 与面板一次性提示，FR-21.6 断网超时改 180s；新增 `npm run verify:plugin`（AC-115）与 AC-114 N=1 用例；AC-135 增四个 `DSH_*_TIMEOUT_MS` 注入与生成/配音/书档/题库超时用例；AC-153 表外参考回落不改写文件（`fallbackFrom`）。
+- SRS v1.15：B3 收尾——AC-116 补 mech 标题/重叠/越界/空白章断言；AC-124 补 300 页导入与删源可读用例；AC-145/146 拆分机检与人工边界；AC-150 补多候选/缺 widgets/无节点用例；AC-152 新增 `reconcileVoiceJobs` 启动归一（voicing → partial/failed + `E_INTERRUPTED`）；AC-154 坏 flac 导入即 `E_TTS_VOICE_REF`、时长告警只对 <3s/>30s；AC-155 新增 `npm run verify:prosody` 与合成音频自测。
 - `briefs.json` 读取侧校验：讲纲缓存命中与 `GET /briefs` 都会重跑 `sections` 原文校验；改坏的章回退“标题 + 首尾段”并给 warning，不静默采用，也不覆盖人工修改。
 - `/plan/preview` 的 `briefsSource` 增加 `mixed`（部分章回退）；`GET /briefs` 返回 `warnings` 与 `rejected`。
 - 新增 `npm run verify:briefs`（AC-99 机检，退出码 0/1）、`test/v2-briefs.test.mjs`（AC-99/100）与 `test/v2-plan-ac.test.mjs`（AC-101/102，含降级后过生成门与 briefs 术语放行的反向用例）。

@@ -54,6 +54,12 @@ function makeSeries(patch) {
   }, patch || {});
 }
 
+test('AC-112：升级提示一次性显示（读 /meta.notice，sessionStorage 去重）', () => {
+  assert.ok(source.includes("api('/meta')"), '面板启动时读 /meta');
+  assert.ok(source.includes('blm-upgrade-notice'), '用 sessionStorage 保证只提示一次');
+  assert.ok(source.includes('data.notice') || source.includes('.notice'), '提示文案取自 /meta.notice');
+});
+
 test('系列卡：练一练 / 导出 / 配图与语音四态入口', () => {
   const html = renderToString(
     React.createElement(clientModule.__components.SeriesCard, { series: makeSeries(), notify: () => {}, onReload: () => {}, onPlay: () => {} }),

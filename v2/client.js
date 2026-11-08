@@ -5675,6 +5675,26 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         loadBooks();
       }, [loadBooks]);
 
+      // 升级提示（AC-112）：旧根已备份时显示一次，路径来自 /meta.notice。
+      useEffect(() => {
+        let alive = true;
+        (async () => {
+          try {
+            const data = await api('/meta');
+            const notice = String((data && data.notice) || '');
+            if (!alive || !notice) return;
+            if (sessionStorage.getItem('blm-upgrade-notice') === notice) return;
+            sessionStorage.setItem('blm-upgrade-notice', notice);
+            notify(notice);
+          } catch {
+            /* 提示失败不影响书架 */
+          }
+        })();
+        return () => {
+          alive = false;
+        };
+      }, [notify]);
+
       const importFile = async (file) => {
         if (!file) return;
         if (!/\.pdf$/i.test(file.name)) {
