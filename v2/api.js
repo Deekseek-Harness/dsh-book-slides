@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { PdfError, PDF_ERROR, extractPages, guessTitle, totalChars } from '../pdfread.js';
-import { coverSvg } from '../cover.js';
+import { coverSvg, hueOf } from '../cover.js';
 import { suggestTocRange } from '../tocparse.js';
 import { ROOT, ensureRoot, getMeta, packageVersion, readJson, writeJson } from './root.js';
 import {
@@ -448,14 +448,20 @@ async function handleCover(req, res, url) {
     sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
     return;
   }
+  const title = String(loaded.book.title || '未命名');
   const svg = coverSvg({
-    title: loaded.book.title,
+    title: title,
     author: loaded.book.author,
     chapters: loaded.chapters.length,
     chars: loaded.book.chars,
     id: bookId,
   });
-  writeCover(bookId, svg);
+  writeCover(bookId, svg, {
+    title: title,
+    author: loaded.book.author,
+    chapters: loaded.chapters.length,
+    hue: hueOf(title),
+  });
   sendJson(res, 200, { ok: true, cover: true });
 }
 

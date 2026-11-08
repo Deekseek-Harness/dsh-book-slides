@@ -22,6 +22,17 @@ export function hueOf(seed) {
   return Math.round((digest[0] / 255) * 360);
 }
 
+/**
+ * 色相归一到 0–359；非法值返回 null。
+ * 改名同步封面标题时传入原色相，避免整张封面换色（FR-21.1）。
+ */
+export function normalizeHue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return ((Math.round(num) % 360) + 360) % 360;
+}
+
 /** 按字数切行：中文 1 字算 1，英文半角算 0.55。 */
 export function wrapTitle(title, perLine, maxLines) {
   const text = String(title || '未命名').replace(/\s+/g, ' ').trim();
@@ -51,13 +62,14 @@ export function wrapTitle(title, perLine, maxLines) {
 
 /**
  * 生成 300×420 的书封 SVG。
- * @param {{title:string, author?:string, chapters?:number, chars?:number, id?:string}} book
+ * @param {{title:string, author?:string, chapters?:number, chars?:number, id?:string, hue?:number}} book
  */
 export function coverSvg(book) {
   const title = String((book && book.title) || '未命名');
   const author = String((book && book.author) || '').trim();
   const chapterCount = Number((book && book.chapters) || 0);
-  const hue = hueOf(title);
+  const requestedHue = normalizeHue(book && book.hue);
+  const hue = requestedHue === null ? hueOf(title) : requestedHue;
   const hue2 = (hue + 36) % 360;
   const lines = wrapTitle(title, 6, 4);
   const fontSize = lines.length >= 4 ? 26 : lines.length === 3 ? 29 : 32;

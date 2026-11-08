@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { BOOKS_DIR, TRASH_DIR, ensureRoot, readJson, writeJson } from './root.js';
+import { coverSvg, hueOf, normalizeHue } from '../cover.js';
 
 const ID_RE = /^[a-z0-9]{8,16}$/;
 
@@ -207,6 +208,7 @@ export function listBooks() {
       chapters: loaded.chaptersBuilt ? chapters.length : 0,
       chaptersBuilt: loaded.chaptersBuilt,
       cover: loaded.cover,
+      coverUpdatedAt: String(book.coverUpdatedAt || ''),
       seriesCount: series.count,
       lastSeries: series.last,
       sha256: String(book.sha256 || ''),
@@ -218,15 +220,69 @@ export function listBooks() {
   return books;
 }
 
+/**
+ * 重命名。卡面下半的书名由 `book.json.title` 驱动，上半的封面标题写死在 cover.svg 里；
+ * 这里同时只重排封面的书名，沿用生成时的色相，避免改名把整张封面换掉（FR-21.1）。
+ */
 export function renameBook(bookId, title) {
   const loaded = loadBook(bookId);
   if (!loaded) return null;
   const next = String(title || '').trim().slice(0, 120);
   if (!next) return null;
+  const previousTitle = String(loaded.book.title || '');
   loaded.book.title = next;
   loaded.book.renamedAt = new Date().toISOString();
+  if (loaded.cover && next !== previousTitle) {
+    try {
+      const meta = coverMetaFor(loaded, previousTitle);
+      const out = coverMetaOut(loaded.book, { ...meta, title: next });
+      fs.writeFileSync(path.join(loaded.dir, 'cover.svg'), coverSvg(out));
+      loaded.book.coverMeta = out;
+      touchCover(loaded.book);
+    } catch {
+      /* 封面标题刷新失败不阻断改名；下次「重生成封面」会补上 */
+    }
+  }
   writeJson(path.join(loaded.dir, 'book.json'), loaded.book);
   return loaded.book;
+}
+
+/**
+ * 改名重排封面时要沿用的参数。
+ * 新封面在 book.json.coverMeta 里留了色相/章数；老封面没有 meta 时，
+ * 按生成时的规则（色相 = 旧书名哈希）回退，保证第一次改名也不换色。
+ */
+function coverMetaFor(loaded, previousTitle) {
+  const book = loaded.book || {};
+  const stored = book.coverMeta && typeof book.coverMeta === 'object' ? book.coverMeta : null;
+  if (stored) {
+    const hue = normalizeHue(stored.hue);
+    if (hue !== null) {
+      return {
+        author: String(stored.author || ''),
+        chapters: Math.max(0, Math.round(Number(stored.chapters) || 0)),
+        hue: hue,
+      };
+    }
+  }
+  return {
+    author: String(book.author || ''),
+    chapters: Array.isArray(loaded.chapters) ? loaded.chapters.length : 0,
+    hue: hueOf(previousTitle),
+  };
+}
+
+/** 归一化后写入 book.json 的封面参数（只含重排书名需要的字段）。 */
+function coverMetaOut(book, meta) {
+  const source = meta && typeof meta === 'object' ? meta : {};
+  const title = String(source.title || (book && book.title) || '');
+  const hue = normalizeHue(source.hue);
+  return {
+    title: title,
+    author: String(source.author || ''),
+    chapters: Math.max(0, Math.round(Number(source.chapters) || 0)),
+    hue: hue === null ? hueOf(title) : hue,
+  };
 }
 
 export function writeChapters(bookId, chapters, source) {
@@ -242,14 +298,22 @@ export function writeChapters(bookId, chapters, source) {
   return chapters;
 }
 
-export function writeCover(bookId, svg) {
+export function writeCover(bookId, svg, meta) {
   const loaded = loadBook(bookId);
   if (!loaded) return null;
   fs.writeFileSync(path.join(loaded.dir, 'cover.svg'), String(svg || ''));
   const book = loaded.book;
   book.cover = true;
+  touchCover(book);
+  if (meta && typeof meta === 'object') book.coverMeta = coverMetaOut(book, meta);
   writeJson(path.join(loaded.dir, 'book.json'), book);
   return true;
+}
+
+/** 封面版本单调递增到毫秒：同一毫秒内连续改名/重生成也能换掉卡面的缓存 URL。 */
+function touchCover(book) {
+  const previous = Date.parse(book.coverUpdatedAt || '') || 0;
+  book.coverUpdatedAt = new Date(Math.max(Date.now(), previous + 1)).toISOString();
 }
 
 export function readCover(bookId) {

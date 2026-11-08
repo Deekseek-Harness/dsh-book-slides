@@ -10,6 +10,7 @@ import path from 'node:path';
 import http from 'node:http';
 
 import { makePdf } from './fixture.mjs';
+import { coverSvg, hueOf, normalizeHue } from '../cover.js';
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-m1-'));
 const LEGACY = path.join(ROOT, 'legacy-root');
@@ -284,6 +285,92 @@ test('AC-124：300 页导入不建章节/封面，删源 PDF 后原文仍可读'
   const pageOut = await json('/dsh-book-slides/pages?bookId=' + id);
   assert.equal(pageOut.body.ok, true);
   assert.equal(pageOut.body.pages.length, 300);
+});
+
+test('封面色相归一：缺省回退书名哈希，0 是合法色相', () => {
+  assert.equal(normalizeHue(null), null);
+  assert.equal(normalizeHue(undefined), null);
+  assert.equal(normalizeHue(''), null);
+  assert.equal(normalizeHue(0), 0);
+  assert.equal(normalizeHue(360), 0);
+  assert.equal(normalizeHue(-10), 350);
+  assert.equal(coverSvg({ title: '甲' }), coverSvg({ title: '甲', hue: hueOf('甲') }));
+});
+
+test('重命名同步刷新封面标题：只换书名，色相不变；旧封面无 meta 也能回退', async () => {
+  const pdf = makePdf([
+    ['第一章 旧书', '旧书正文。'.repeat(40)],
+    ['第二章 续', '续页正文。'.repeat(40)],
+  ]);
+  const imported = await json('/dsh-book-slides/import', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent('旧名.pdf'), 'content-type': 'application/pdf' },
+    body: pdf,
+  });
+  assert.equal(imported.body.ok, true);
+  const id = imported.body.bookId;
+  assert.equal(imported.body.book.title, '旧名');
+
+  await json('/dsh-book-slides/chapters/build', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, mode: 'mech' }),
+  });
+  const made = await json('/dsh-book-slides/cover', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id }),
+  });
+  assert.equal(made.body.ok, true);
+
+  const coverText = async () => (await fetch(base + '/dsh-book-slides/cover?bookId=' + id)).text();
+  const stops = (svg) => Array.from(svg.matchAll(/stop-color="([^"]+)"/g)).map((match) => match[1]);
+  const bookFile = path.join(LEGACY, 'books', id, 'book.json');
+  const readBookJson = () => JSON.parse(fs.readFileSync(bookFile, 'utf8'));
+  const before = await coverText();
+  assert.ok(before.includes('旧名'), '生成封面时写入旧书名');
+  assert.equal(stops(before).length, 2, '封面渐变有两个 stop');
+  const generated = readBookJson();
+  assert.equal(generated.coverMeta.title, '旧名');
+
+  // 模拟 alpha.8 老数据：封面已生成，但没有 coverMeta / coverUpdatedAt。
+  delete generated.coverMeta;
+  delete generated.coverUpdatedAt;
+  fs.writeFileSync(bookFile, JSON.stringify(generated, null, 2) + '\n');
+
+  const renamed = await json('/dsh-book-slides/rename', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, title: '新名' }),
+  });
+  assert.equal(renamed.body.ok, true);
+  const afterFirst = await coverText();
+  assert.ok(afterFirst.includes('新名'), '改名后封面标题立即更新');
+  assert.ok(!afterFirst.includes('旧名'), '封面不再残留旧书名');
+  assert.deepEqual(stops(afterFirst), stops(before), '改名不得换封面配色');
+  const firstJson = readBookJson();
+  assert.equal(firstJson.coverMeta.title, '新名');
+  assert.ok(firstJson.coverUpdatedAt, '改名后补写 coverUpdatedAt 供卡面换 URL');
+  const firstHue = Number(firstJson.coverMeta.hue);
+
+  const renamedAgain = await json('/dsh-book-slides/rename', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId: id, title: '定名' }),
+  });
+  assert.equal(renamedAgain.body.ok, true);
+  const afterSecond = await coverText();
+  assert.ok(afterSecond.includes('定名'));
+  assert.ok(!afterSecond.includes('新名') && !afterSecond.includes('旧名'));
+  assert.deepEqual(stops(afterSecond), stops(before), '后续改名沿用已保存的色相');
+  const secondJson = readBookJson();
+  assert.equal(secondJson.coverMeta.title, '定名');
+  assert.equal(Number(secondJson.coverMeta.hue), firstHue);
+  assert.notEqual(secondJson.coverUpdatedAt, firstJson.coverUpdatedAt);
+
+  const listed = (await json('/dsh-book-slides/books')).body.books.find((item) => item.id === id);
+  assert.equal(listed.title, '定名');
+  assert.equal(listed.coverUpdatedAt, secondJson.coverUpdatedAt, '书架返回封面版本供卡面换缓存');
 });
 
 test.after(() => {

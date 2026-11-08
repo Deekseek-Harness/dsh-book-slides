@@ -60,6 +60,34 @@ test('AC-112：升级提示一次性显示（读 /meta.notice，sessionStorage �
   assert.ok(source.includes('data.notice') || source.includes('.notice'), '提示文案取自 /meta.notice');
 });
 
+test('卡面封面用 coverUpdatedAt 换缓存（改名后上半标题即时刷新）', () => {
+  const base = {
+    id: 'babcdefghij',
+    title: '新名',
+    pages: 12,
+    chapters: 3,
+    chaptersBuilt: true,
+    cover: true,
+    coverUpdatedAt: '2026-11-09T00:00:00.000Z',
+    lastOpenedAt: '2026-11-08T00:00:00.000Z',
+  };
+  const props = {
+    onOpen: () => {},
+    onRename: () => {},
+    onDelete: () => {},
+    onContinue: () => {},
+    onExport: () => {},
+  };
+  const html = renderToString(React.createElement(clientModule.__components.Card, { book: base, ...props }));
+  assert.ok(html.includes('v=2026-11-09T00%3A00%3A00.000Z'), '封面 URL 带上 coverUpdatedAt');
+  assert.ok(!html.includes('2026-11-08T00%3A00%3A00.000Z'), '有封面版本时不再用 lastOpenedAt');
+
+  const legacy = renderToString(
+    React.createElement(clientModule.__components.Card, { book: { ...base, coverUpdatedAt: undefined }, ...props }),
+  );
+  assert.ok(legacy.includes('v=2026-11-08T00%3A00%3A00.000Z'), '老数据回退到 lastOpenedAt');
+});
+
 test('系列卡：练一练 / 导出 / 配图与语音四态入口', () => {
   const html = renderToString(
     React.createElement(clientModule.__components.SeriesCard, { series: makeSeries(), notify: () => {}, onReload: () => {}, onPlay: () => {} }),

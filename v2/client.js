@@ -1068,7 +1068,9 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [menu, setMenu] = useState(false);
       const moreRef = useRef(null);
       const menuRef = useRef(null);
-      const cover = book.cover ? API + '/cover?bookId=' + encodeURIComponent(book.id) + '&v=' + encodeURIComponent(book.lastOpenedAt) : '';
+      // 改名会重写 cover.svg 并 bump coverUpdatedAt：用它换 URL，卡面上半的封面标题立即刷新。
+      const coverVersion = book.coverUpdatedAt || book.lastOpenedAt || '';
+      const cover = book.cover ? API + '/cover?bookId=' + encodeURIComponent(book.id) + '&v=' + encodeURIComponent(coverVersion) : '';
       const last = book.lastSeries || null;
       const resume = last && ['ready', 'ready_degraded', 'partial'].includes(String(last.status));
 
@@ -4530,7 +4532,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
       const book = data.book || {};
       const chapters = data.chapters || [];
-      const cover = data.cover ? API + '/cover?bookId=' + encodeURIComponent(bookId) + '&v=' + encodeURIComponent(book.lastOpenedAt || '') : '';
+      const cover = data.cover ? API + '/cover?bookId=' + encodeURIComponent(bookId) + '&v=' + encodeURIComponent(book.coverUpdatedAt || book.lastOpenedAt || '') : '';
       const partOf = new Map();
       for (const part of parts) for (const n of part.chapters || []) partOf.set(Number(n), part);
       const partSeriesCount = (partId) => series.filter((item) => item.part_id === partId).length;
