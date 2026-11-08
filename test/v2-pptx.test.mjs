@@ -287,6 +287,19 @@ test('AC-132：批量导出返回 ZIP（每讲一个 .pptx + manifest.json）', 
   assert.deepEqual(manifest.files.map((file) => file.lecture).sort(), [1, 2]);
 });
 
+test('AC-132：批量导出在内存构建，客户端 abort 后数据根无新增/残留', async () => {
+  const before = snapshot(ROOT);
+  const controller = new AbortController();
+  const res = await fetch(baseUrl + '/dsh-book-slides/export/pptx/batch?seriesId=' + series.id + '&lectures=all', { signal: controller.signal });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/zip');
+  const reader = res.body.getReader();
+  await reader.read();
+  controller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(snapshot(ROOT), before, 'abort 后不得留下临时 ZIP 或半截文件');
+});
+
 test('AC-121：导出只读，books/ 的 size+mtime 不变', async () => {
   const before = snapshot(path.join(ROOT, 'books'));
   await binary('/dsh-book-slides/export/pptx?seriesId=' + series.id + '&lecture=all');
