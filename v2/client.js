@@ -48,6 +48,10 @@ body[data-ds-dark-theme] .blm-root{color-scheme:dark}
 .blm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:14px}
 .blm-card{border:1px solid var(--blm-line);border-radius:10px;overflow:hidden;background:var(--blm-card);color:var(--blm-text);cursor:pointer;position:relative}
 .blm-card:hover{border-color:var(--blm-accent)}
+.blm-card:focus-visible{outline:2px solid var(--blm-accent);outline-offset:2px}
+.blm-card-hit{border-color:var(--blm-accent);box-shadow:0 0 0 3px color-mix(in oklab,var(--blm-accent) 30%,transparent),0 10px 26px rgba(0,0,0,.18);animation:blm-card-hit 1.1s ease-in-out 2}
+@keyframes blm-card-hit{0%,100%{transform:translateY(0)}35%{transform:translateY(-3px)}}
+@media (prefers-reduced-motion:reduce){.blm-card-hit{animation:none}}
 .blm-cover{aspect-ratio:5/7;background:linear-gradient(135deg,#536,#213);display:flex;align-items:center;justify-content:center;overflow:hidden}
 .blm-cover img{width:100%;height:100%;object-fit:cover;display:block}
 .blm-cover span{font-size:28px;color:rgba(255,255,255,.8);font-family:serif}
@@ -429,6 +433,66 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
+    }
+
+    /** 导入响应归类：成功 / 重复（已在书架）/ 失败；重复也要拿 bookId 去定位书卡（AC-158）。 */
+    function importOutcome(out) {
+      if (out && out.ok) {
+        return { kind: 'created', bookId: String(out.bookId || ''), title: String((out.book && out.book.title) || '') };
+      }
+      if (out && out.code === 'E_DUP_BOOK') {
+        return { kind: 'duplicate', bookId: String(out.bookId || ''), title: String(out.title || '') };
+      }
+      return { kind: 'failed', message: String((out && (out.message || out.error)) || '导入失败') };
+    }
+
+    /** 书 ID 只允许安全字符；避免把服务端值拼进选择器时改变语义。 */
+    const BOOK_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+    /**
+     * 重复导入后留在书架，把已存在的书卡滚进视野并聚焦（AC-158）。
+     * 找不到卡片（200 本上限/列表尚未刷新）或嵌入环境不支持滚动时静默放弃。
+     */
+    function focusBookCard(root, bookId) {
+      if (!root || !bookId || typeof root.querySelector !== 'function') return false;
+      const id = String(bookId);
+      if (!BOOK_ID_PATTERN.test(id)) return false;
+      let node = null;
+      try {
+        node = root.querySelector('[data-book-id="' + id + '"]');
+      } catch {
+        return false;
+      }
+      if (!node) return false;
+      if (typeof node.scrollIntoView === 'function') {
+        let reduceMotion = false;
+        try {
+          reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+        } catch {
+          /* 忽略：取不到媒体查询就按普通滚动 */
+        }
+        try {
+          node.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+        } catch {
+          try {
+            node.scrollIntoView({ block: 'center' });
+          } catch {
+            /* 忽略：某些嵌入环境不接受参数 */
+          }
+        }
+      }
+      if (typeof node.focus === 'function') {
+        try {
+          node.focus({ preventScroll: true });
+        } catch {
+          try {
+            node.focus();
+          } catch {
+            /* 忽略：焦点由浏览器自己决定 */
+          }
+        }
+      }
+      return true;
     }
 
     /* ------------------------------ M4 纯函数（可单测） ------------------------------ */
@@ -1082,7 +1146,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       };
     }
 
-    function Card({ book, onOpen, onRename, onDelete, onContinue, onExport }) {
+    function Card({ book, highlight, onOpen, onRename, onDelete, onContinue, onExport }) {
       const [menu, setMenu] = useState(false);
       const moreRef = useRef(null);
       const menuRef = useRef(null);
@@ -1113,7 +1177,21 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
 
       return h(
         'div',
-        { className: 'blm-card', onClick: onOpen, title: book.title },
+        {
+          className: 'blm-card' + (highlight ? ' blm-card-hit' : ''),
+          'data-book-id': book.id,
+          tabIndex: 0,
+          role: 'button',
+          'aria-label': book.title,
+          title: book.title,
+          onClick: onOpen,
+          onKeyDown: (event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            onOpen();
+          },
+        },
         h(
           'div',
           { className: 'blm-cover' },
@@ -6565,6 +6643,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [packageFile, setPackageFile] = useState(null);
       const [importJob, setImportJob] = useState(null);
       const [drag, setDrag] = useState(false);
+      /** 重复导入后要定位的已存在书卡：{id, nonce}；nonce 让同一张卡再次导入也重新触发定位。 */
+      const [focusBook, setFocusBook] = useState(null);
+      const shelfRef = useRef(null);
+      const focusTimer = useRef(null);
       const toastTimer = useRef(null);
       const notify = useCallback((text) => {
         setToast(String(text || ''));
@@ -6592,6 +6674,15 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       useEffect(() => {
         loadBooks();
       }, [loadBooks]);
+
+      // 重复导入：留在书架，滚动到并聚焦已存在的书卡；3 秒后收起高亮（AC-158）。
+      useEffect(() => {
+        if (!focusBook || !focusBook.id) return undefined;
+        if (view.name === 'shelf') focusBookCard(shelfRef.current, focusBook.id);
+        clearTimeout(focusTimer.current);
+        focusTimer.current = setTimeout(() => setFocusBook(null), 3000);
+        return () => clearTimeout(focusTimer.current);
+      }, [focusBook, view.name, books]);
 
       // 升级提示（AC-112）：旧根已备份时显示一次，路径来自 /meta.notice。
       useEffect(() => {
@@ -6686,14 +6777,20 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         setProgress(0);
         try {
           const out = await uploadPdf(file, setProgress);
-          if (out && out.ok) {
-            notify('已导入《' + (out.book.title || file.name) + '》，下一步生成章节目录。');
+          const result = importOutcome(out);
+          if (result.kind === 'created') {
+            notify('已导入《' + (result.title || file.name) + '》，下一步生成章节目录。');
             await loadBooks();
-            setView({ name: 'book', bookId: out.bookId });
-          } else if (out && out.code === 'E_DUP_BOOK') {
-            notify('这本书已在书架：' + (out.title || ''));
+            setView({ name: 'book', bookId: result.bookId });
+          } else if (result.kind === 'duplicate') {
+            // 不跳详情页：留在/回到书架，定位并高亮已存在的那张书卡（AC-158）。
+            notify('这本书已在书架：' + (result.title || ''));
+            setView((prev) => (prev.name === 'shelf' ? prev : { name: 'shelf' }));
+            // 书卡已在当前列表时不重载书架，避免 loading 把卡片卸掉、定位闪一下。
+            if (result.bookId && !books.some((book) => String(book.id) === result.bookId)) await loadBooks();
+            if (result.bookId) setFocusBook({ id: result.bookId, nonce: Date.now() });
           } else {
-            notify((out && (out.message || out.error)) || '导入失败');
+            notify(result.message);
           }
         } catch (err) {
           notify(err.message);
@@ -6839,7 +6936,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         shelf
           ? h(
               'div',
-              { className: 'blm-body' },
+              { className: 'blm-body', ref: shelfRef },
               loading
                 ? h('div', { className: 'blm-dim' }, '加载书架…')
                 : books.length
@@ -6847,6 +6944,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                       h(Card, {
                         key: book.id,
                         book,
+                        highlight: !!(focusBook && focusBook.id === book.id),
                         onOpen: () => setView({ name: 'book', bookId: book.id }),
                         onRename: () => rename(book),
                         onDelete: () => remove(book),
@@ -7013,6 +7111,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         promptAction,
         cancelPendingConfirm,
         downloadUrl,
+        importOutcome,
+        focusBookCard,
         uploadZip,
         readPackagePolicy,
         savePackagePolicy,

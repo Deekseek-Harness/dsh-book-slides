@@ -3,6 +3,22 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [Unreleased]
+
+主题「重复导入定位书卡」：导入同一份 PDF 不再只弹一句提示，也不跳详情页；留在书架，把已存在的那张书卡滚进视野、聚焦并高亮 3 秒。
+
+### 变更
+
+- **重复导入（AC-158 / SRS v1.18）**：`E_DUP_BOOK` 分支改为书架内定位——按响应 `bookId` 找到 `[data-book-id]` 卡，`scrollIntoView({block:'center'})` + 聚焦 + `blm-card-hit` 高亮；3 秒后收起，短时间内重复导入重新触发并重新计时。
+- 卡片新增 `data-book-id`、`tabIndex=0`、`role=button` 与 Enter/Space 打开；`focusBookCard` 对老嵌入环境退回普通滚动/无参聚焦，非法 ID 与找不到卡都安全放弃。
+- 找不到该卡（书架 200 条上限、列表刷新失败）时只显示原提示，不跳详情页、不报错。
+- 无数据 schema / HTTP 接口变更；1.x 的“提示 + 去重 + 不新增书”保留，仅落点从详情页改为书架书卡。
+
+### 测试
+
+- 新增 `test/v2-shelf-focus.test.mjs`（6 项）并接入 `npm run test:v2`：导入响应归类、duplicate 分支不跳详情页、书卡定位/高亮渲染、定位 helper 的滚动/聚焦/降级/非法 ID。
+- 真机上的居中滚动观感、3 秒时长与 `prefers-reduced-motion` 静态高亮留 M6 人工复核。
+
 ## [2.0.0-alpha.9] - 2026-11-09
 
 主题「书签树 + Part 只选根」：书签原样导入为树，只把根层作为章；子节点只读，不进入 Part/讲纲；Part 只选根。单根书先导入 1 章并提示是否下移一层，由用户决定。v1.16 的自动级联/强制来源与改名同步封面标题一并进入本版。
