@@ -5,7 +5,7 @@
  * OOXML 实现复用 1.x pptx.js（原生文本框/形状、音频、备注、配图）。
  *
  * 页数严格等于 slides.length；整套合并时在讲之间插入过渡页（讲标题 + 接缝句），
- * 因此「删除过渡页后与按讲导出的页数一致」（AC-111）。
+ * 页序 = 讲序 + 页序，页数 = Σ各讲页数 + (N−1)（AC-111）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +23,18 @@ const READY = ['ready', 'ready_degraded'];
 const ACTIVE = ['queued', 'structuring', 'validate', 'anchor', 'drafting', 'stitching', 'cancelling'];
 const MAX_BYTES = 150 * 1024 * 1024;
 export const PPT_MAX_BYTES = MAX_BYTES;
+
+/** 导出上限；默认 150MB。验收可用 DSH_PPT_MAX_BYTES 调低以触发同一分支（AC-121）。 */
+function limitBytes() {
+  const raw = Number(process.env.DSH_PPT_MAX_BYTES);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : MAX_BYTES;
+}
+
+function limitLabel(bytes) {
+  return bytes >= 1024 * 1024
+    ? Math.max(1, Math.round(bytes / (1024 * 1024))) + ' MB'
+    : Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
 
 export class PptxError extends Error {
   constructor(code, message, hint) {
@@ -309,9 +321,14 @@ function buildDeckForLecture(found, n, options) {
   };
 }
 
-function assertBytes(bytes) {
-  if (bytes > MAX_BYTES) {
-    throw new PptxError('E_EXPORT_SERIES_LIMIT', 'PPT 会超过 150 MB', '去掉音频或按讲导出。');
+function assertBytes(bytes, merged) {
+  const limit = limitBytes();
+  if (bytes > limit) {
+    throw new PptxError(
+      'E_EXPORT_SERIES_LIMIT',
+      'PPT 会超过上限 ' + limitLabel(limit),
+      merged ? '按讲导出，或勾掉「含音频」再试。' : '勾掉「含音频」，或减少页数。',
+    );
   }
 }
 
@@ -361,7 +378,7 @@ export function planPptx({ seriesId, lecture = 'all', includeAudio = true, inclu
   const bytes = built.reduce((sum, item) => sum + item.lecture.bytes, 0) + transitionPages * 8 * 1024;
   const warnings = built.flatMap((item) => item.lecture.warnings);
   if (merged) warnings.push('整套合并含 ' + transitionPages + ' 个过渡页（讲标题 + 接缝句）');
-  assertBytes(bytes);
+  assertBytes(bytes, merged);
 
   return {
     seriesId: found.series.id,

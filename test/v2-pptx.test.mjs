@@ -212,6 +212,10 @@ test('AC-121 / FR-19.2：单讲导出页数、备注逐字、音频与配图内�
 
   const notes2 = (await readEntryBuffer(zipPath, 'ppt/notesSlides/notesSlide2.xml', 1024 * 1024)).toString('utf8');
   assert.ok(notes2.includes('第1讲第2页朗读稿'), '备注必须逐字包含 audio_script');
+  const notes1 = (await readEntryBuffer(zipPath, 'ppt/notesSlides/notesSlide1.xml', 1024 * 1024)).toString('utf8');
+  assert.ok(notes1.includes('第1讲第1页朗读稿'), '封面页也要写备注');
+  const notes4 = (await readEntryBuffer(zipPath, 'ppt/notesSlides/notesSlide4.xml', 1024 * 1024)).toString('utf8');
+  assert.ok(notes4.includes('第1讲第4页朗读稿'), '引文页也要写备注');
   const slide1 = (await readEntryBuffer(zipPath, 'ppt/slides/slide1.xml', 1024 * 1024)).toString('utf8');
   assert.ok(slide1.includes('第 1 讲 第 1 页'));
   const slide4 = (await readEntryBuffer(zipPath, 'ppt/slides/slide4.xml', 1024 * 1024)).toString('utf8');
@@ -289,6 +293,74 @@ test('AC-121：导出只读，books/ 的 size+mtime 不变', async () => {
   await binary('/dsh-book-slides/export/pptx/batch?seriesId=' + series.id + '&lectures=all');
   await json('/dsh-book-slides/export/pptx/plan?seriesId=' + series.id + '&lecture=all');
   assert.deepEqual(snapshot(path.join(ROOT, 'books')), before);
+});
+
+test('AC-121：缺音频文件 → plan warning + 导出成功且缺 audio2.wav', async () => {
+  const found = findSeries(series.id);
+  const audioDir = path.join(found.dir, 'lectures', '1', 'audio');
+  fs.renameSync(path.join(audioDir, '002.wav'), path.join(audioDir, '002.wav.bak'));
+  try {
+    const plan = await json('/dsh-book-slides/export/pptx/plan?seriesId=' + series.id + '&lecture=1');
+    assert.equal(plan.ok, true);
+    assert.ok(plan.plan.warnings.some((text) => text.includes('5/6 页没有音频')), '缺音频要给页数 warning：' + JSON.stringify(plan.plan.warnings));
+    assert.ok(plan.plan.lectures[0].missingAudio.includes(2), '缺文件的第 2 页要计入 missingAudio');
+    const { res, buffer } = await binary('/dsh-book-slides/export/pptx?seriesId=' + series.id + '&lecture=1');
+    assert.equal(res.status, 200);
+    const zipPath = path.join(ROOT, 'missing-audio.pptx');
+    fs.writeFileSync(zipPath, buffer);
+    const names = (await inspectZip(zipPath)).entries.map((entry) => entry.name);
+    assert.equal(names.filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).length, 6);
+    assert.ok(!names.includes('ppt/media/audio2.wav'), '缺文件的页不嵌音频');
+    assert.ok(names.includes('ppt/media/audio3.wav'));
+  } finally {
+    fs.renameSync(path.join(audioDir, '002.wav.bak'), path.join(audioDir, '002.wav'));
+  }
+});
+
+test('AC-121：flac 不嵌入、warning 可见、导出仍成功', async () => {
+  const found = findSeries(series.id);
+  const doc1 = path.join(found.dir, 'lectures', '1');
+  const slidesPath = path.join(doc1, 'slides.json');
+  const doc = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  const original = doc.slides[1];
+  fs.renameSync(path.join(doc1, 'audio', '002.wav'), path.join(doc1, 'audio', '002.flac'));
+  doc.slides[1] = Object.assign({}, original, { audio_file: 'audio/002.flac' });
+  fs.writeFileSync(slidesPath, JSON.stringify(doc, null, 2));
+  try {
+    const plan = await json('/dsh-book-slides/export/pptx/plan?seriesId=' + series.id + '&lecture=1');
+    assert.ok(plan.plan.warnings.some((text) => text.includes('flac')), 'flac 要提示未嵌入');
+    const { res, buffer } = await binary('/dsh-book-slides/export/pptx?seriesId=' + series.id + '&lecture=1');
+    assert.equal(res.status, 200);
+    const zipPath = path.join(ROOT, 'flac-audio.pptx');
+    fs.writeFileSync(zipPath, buffer);
+    const names = (await inspectZip(zipPath)).entries.map((entry) => entry.name);
+    assert.ok(!names.some((name) => name.startsWith('ppt/media/audio2.')), 'flac 不得嵌入');
+  } finally {
+    fs.renameSync(path.join(doc1, 'audio', '002.flac'), path.join(doc1, 'audio', '002.wav'));
+    doc.slides[1] = original;
+    fs.writeFileSync(slidesPath, JSON.stringify(doc, null, 2));
+  }
+});
+
+test('AC-121：超上限按导出模式提示，且不产出半截文件', async () => {
+  process.env.DSH_PPT_MAX_BYTES = '4096';
+  try {
+    const merged = await json('/dsh-book-slides/export/pptx/plan?seriesId=' + series.id + '&lecture=all');
+    assert.equal(merged.ok, false);
+    assert.equal(merged.code, 'E_EXPORT_SERIES_LIMIT');
+    assert.match(merged.hint, /按讲导出/);
+    const single = await json('/dsh-book-slides/export/pptx/plan?seriesId=' + series.id + '&lecture=1');
+    assert.equal(single.code, 'E_EXPORT_SERIES_LIMIT');
+    assert.match(single.hint, /含音频|减少页数/);
+    const res = await fetch(baseUrl + '/dsh-book-slides/export/pptx?seriesId=' + series.id + '&lecture=all');
+    assert.equal(res.status, 200);
+    assert.ok(!String(res.headers.get('content-type') || '').includes('presentationml'), '超限不得产出 PPT');
+    const body = JSON.parse(await res.text());
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'E_EXPORT_SERIES_LIMIT');
+  } finally {
+    delete process.env.DSH_PPT_MAX_BYTES;
+  }
 });
 
 test('资格判定：未就绪讲 E_PPT_NOT_READY；生成中 E_PPT_BUSY', async () => {

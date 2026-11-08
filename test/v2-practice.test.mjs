@@ -221,6 +221,17 @@ test('AC-110：7 章系列准备题库，覆盖全部章，不受 5 章限制', 
   assert.equal(cached.ok, true);
   assert.equal(cached.cached, true);
   assert.equal(modelCalls.bank, before);
+
+  // 组卷覆盖 7 章（章数 ≤ 题数时每章 ≥1），且场次落盘带 series_id
+  const opened = await post('/dsh-book-slides/practice/session', { seriesId: series.id, mode: 'mixed', count: 10 });
+  assert.equal(opened.ok, true);
+  assert.deepEqual(opened.session.chapters, [1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(new Set(opened.questions.map((question) => Number(question.chapter))).size, 7, '组卷必须覆盖 7 章');
+  const sessionFile = path.join(ROOT, 'books', book.id, 'practice', 'sessions', opened.sessionId + '.json');
+  const saved = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+  assert.equal(saved.series_id, series.id);
+  const closed = await post('/dsh-book-slides/practice/finish', { seriesId: series.id, sessionId: opened.sessionId });
+  assert.equal(closed.ok, true);
 });
 
 test('AC-119：组卷、判题、幂等、讲解、结束与续做', async () => {
@@ -290,6 +301,7 @@ test('AC-119：组卷、判题、幂等、讲解、结束与续做', async () =>
   assert.equal(finished.ok, true);
   assert.equal(finished.summary.answered, 2);
   assert.equal(finished.summary.correct, 1);
+  assert.equal(finished.summary.accuracy, 0.5, '正确率分母 = 已答数');
   const noSession = await json('/dsh-book-slides/practice/session?seriesId=' + series.id);
   assert.equal(noSession.ok, false);
   assert.equal(noSession.code, 'E_NO_SESSION');
@@ -312,6 +324,96 @@ test('AC-119：标记题不再组卷；补题受 30 题/轮上限约束；错题
   const review = await post('/dsh-book-slides/practice/review', { seriesId: series.id });
   assert.equal(review.ok, true);
   assert.ok(Array.isArray(review.questions));
+});
+
+test('AC-119：Leitner 到期优先与盒子升级（注入 mastery.json）', async () => {
+  const practiceDir = path.join(ROOT, 'books', book.id, 'practice');
+  const masteryPath = path.join(practiceDir, 'mastery.json');
+  const original = fs.existsSync(masteryPath) ? fs.readFileSync(masteryPath, 'utf8') : null;
+  const bank = JSON.parse(fs.readFileSync(path.join(practiceDir, 'questions.json'), 'utf8'));
+  const byQid = new Map(bank.questions.map((question) => [question.qid, question]));
+  const readItems = () => JSON.parse(fs.readFileSync(masteryPath, 'utf8')).items;
+  const writeItems = (items) => fs.writeFileSync(masteryPath, JSON.stringify({ schema_version: 1, updated_at: new Date().toISOString(), items }, null, 2));
+  try {
+    // 结束上一场（review 留下的 running 场次），否则开场会复用
+    const running = await json('/dsh-book-slides/practice/session?seriesId=' + series.id);
+    if (running && running.ok && running.sessionId) {
+      await post('/dsh-book-slides/practice/finish', { seriesId: series.id, sessionId: running.sessionId });
+    }
+
+    const dueQids = [1, 2, 3].map((n) => bank.questions.find((question) => Number(question.chapter) === n && question.flagged !== true).qid);
+    const items = {};
+    for (const qid of dueQids) items[qid] = { attempts: 2, correct: 2, last: 'correct', box: 3, due_at: '2020-01-01T00:00:00.000Z' };
+    writeItems(items);
+
+    const first = await post('/dsh-book-slides/practice/session', { seriesId: series.id, mode: 'mixed', count: 10 });
+    assert.equal(first.ok, true);
+    const dueCount = first.session.plan.filter((item) => item.source === 'due').length;
+    assert.ok(dueCount >= 1, '到期题不能被新题完全挤出去');
+    assert.ok(dueCount <= 4, 'due 配额 ≤ 40%');
+    await post('/dsh-book-slides/practice/finish', { seriesId: series.id, sessionId: first.sessionId });
+
+    // review 只取到期/错题，且注入的到期题全部出现
+    const review = await post('/dsh-book-slides/practice/review', { seriesId: series.id });
+    assert.equal(review.ok, true);
+    assert.ok(review.session.plan.every((item) => item.source === 'due' || item.source === 'weak'), 'review 只取 due/weak');
+    assert.ok(dueQids.every((qid) => review.session.plan.some((item) => item.qid === qid)), 'review 必须取到全部到期题');
+    await post('/dsh-book-slides/practice/finish', { seriesId: series.id, sessionId: review.sessionId });
+
+    // 新场次做盒子升级（到期题仍在，逐题覆盖初值）
+    const opened = await post('/dsh-book-slides/practice/session', { seriesId: series.id, mode: 'mixed', count: 10 });
+    const plan = opened.session.plan;
+
+    const answer = (qid, correct) => {
+      const question = byQid.get(qid);
+      const picked = correct
+        ? question.answer.map((value) => String(value))
+        : question.options.map((option) => String(option.key)).filter((key) => !question.answer.map(String).includes(key));
+      return post('/dsh-book-slides/practice/answer', { seriesId: series.id, sessionId: opened.sessionId, qid, picked });
+    };
+
+    // box 2 → 3，间隔 7 天
+    const up3 = plan[0].qid;
+    writeItems(Object.assign({}, readItems(), { [up3]: { attempts: 2, correct: 2, last: 'correct', box: 2, due_at: '2020-01-01T00:00:00.000Z' } }));
+    assert.equal((await answer(up3, true)).correct, true);
+    const state3 = readItems()[up3];
+    assert.equal(state3.box, 3);
+    assert.equal(state3.last, 'correct');
+    assert.ok(Math.abs((Date.parse(state3.due_at) - Date.parse(state3.last_at)) / 86400000 - 7) < 0.01, 'box=3 → 7 天');
+
+    // 幂等提交不重复升级
+    const duplicate = await answer(up3, true);
+    assert.equal(duplicate.duplicate, true);
+    const state3b = readItems()[up3];
+    assert.equal(state3b.attempts, state3.attempts, '幂等提交不再累计 attempts');
+    assert.equal(state3b.box, 3);
+
+    // box 0 → 1，间隔 1 天
+    const up1 = plan[1].qid;
+    writeItems(Object.assign({}, readItems(), { [up1]: { attempts: 0, correct: 0, last: 'correct', box: 0, due_at: '2020-01-01T00:00:00.000Z' } }));
+    assert.equal((await answer(up1, true)).correct, true);
+    const state1 = readItems()[up1];
+    assert.equal(state1.box, 1);
+    assert.ok(Math.abs((Date.parse(state1.due_at) - Date.parse(state1.last_at)) / 86400000 - 1) < 0.01, 'box=1 → 1 天');
+
+    // 答错回盒 0，且判题不返回 explanation
+    const down = plan[2].qid;
+    writeItems(Object.assign({}, readItems(), { [down]: { attempts: 2, correct: 2, last: 'correct', box: 3, due_at: '2020-01-01T00:00:00.000Z' } }));
+    const wrong = await answer(down, false);
+    assert.equal(wrong.correct, false);
+    assert.equal(wrong.explanation, undefined, '判题不生成讲解');
+    const state0 = readItems()[down];
+    assert.equal(state0.box, 0);
+    assert.equal(state0.last, 'wrong');
+
+    const finished = await post('/dsh-book-slides/practice/finish', { seriesId: series.id, sessionId: opened.sessionId });
+    assert.equal(finished.summary.answered, 3);
+    assert.equal(finished.summary.correct, 2);
+    assert.ok(Math.abs(finished.summary.accuracy - 2 / 3) < 1e-9, '正确率分母 = 已答数');
+  } finally {
+    if (original == null) fs.rmSync(masteryPath, { force: true });
+    else fs.writeFileSync(masteryPath, original);
+  }
 });
 
 test('题库不足时开场给 E_BANK_INSUFFICIENT，不调模型', async () => {

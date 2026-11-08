@@ -40,6 +40,7 @@
 - SRS v1.9：AC-105 / AC-106 改为可执行判据——术语/重复率定位到页并定点修复、第 1 讲 mtime 不变；补“修复幂等”与“ρ 只告警”规则与用例；新增 `npm run verify:stitch`（六指标表 + 失败项，退出码 0/1）。
 - SRS v1.10：AC-109 / AC-123 改为可注入判据——新增 `npm run inject:player`（`--fail` 置 failed 讲、`--unanchor` 清锚点、`--restore` 还原，备份在系列目录）；新增 `test/v2-inject-state.test.mjs` 证明注入能到 `/series` / `/lecture` 接口且可恢复。
 - FR-18 修复（v1.11）：未锚定提示移入 sticky 容器，原文窗格滚动后不再消失；`unanchored` 判据补上 `anchor_status='unanchored'` 与空锚点（`{}`）；窗口重新聚焦/可见时刷新当前讲与系列，注入后无需整页刷新。
+- SRS v1.12：AC-110 / AC-111 / AC-119 / AC-121 改为可注入判据——7 章组卷覆盖、`mastery.json` 注入到期/盒子、`questions.json` 改名造空题库；合并页数 = Σ页数 + (N−1) 且过渡页接缝句逐字；缺音频/flac 用改名注入，超限用 `DSH_PPT_MAX_BYTES` 调低触发，提示按导出模式区分。
 - `briefs.json` 读取侧校验：讲纲缓存命中与 `GET /briefs` 都会重跑 `sections` 原文校验；改坏的章回退“标题 + 首尾段”并给 warning，不静默采用，也不覆盖人工修改。
 - `/plan/preview` 的 `briefsSource` 增加 `mixed`（部分章回退）；`GET /briefs` 返回 `warnings` 与 `rejected`。
 - 新增 `npm run verify:briefs`（AC-99 机检，退出码 0/1）、`test/v2-briefs.test.mjs`（AC-99/100）与 `test/v2-plan-ac.test.mjs`（AC-101/102，含降级后过生成门与 briefs 术语放行的反向用例）。
