@@ -323,6 +323,59 @@ test('AC-120 / AC-135：配图作业可取消，状态 cancelled，已生成页�
   ctl.slowHistory = 0;
 });
 
+test('并发回归：配图作业按 slide_index 合并，不覆盖配音写入的 audio/voice 字段', async () => {
+  ctl.failSubmit = false;
+  ctl.slowHistory = 800;
+  const started = await post('/dsh-book-slides/image/regen', {
+    seriesId: fixture.series.id,
+    lecture: 1,
+    slide: 3,
+    force: true,
+  });
+  assert.equal(started.ok, true);
+
+  // 作业已加载快照并在等 ComfyUI；此时模拟配音作业完成并写入音频字段
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const slidesPath = path.join(fixture.dir, 'lectures', '1', 'slides.json');
+  const lecturePath = path.join(fixture.dir, 'lectures', '1', 'lecture.json');
+  const seriesPath = path.join(fixture.dir, 'series.json');
+
+  const slidesDoc = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  const page = slidesDoc.slides.find((item) => Number(item.slide_index) === 3);
+  page.audio_file = 'audio/003.wav';
+  page.audio_provider = 'qwen3-tts';
+  page.audio_ms = 1200;
+  slidesDoc.voice_status = 'ready';
+  slidesDoc.voice = { provider: 'qwen3-tts', mode: 'file', degraded: false };
+  fs.writeFileSync(slidesPath, JSON.stringify(slidesDoc, null, 2));
+
+  const lectureDoc = JSON.parse(fs.readFileSync(lecturePath, 'utf8'));
+  lectureDoc.voice_status = 'ready';
+  fs.writeFileSync(lecturePath, JSON.stringify(lectureDoc, null, 2));
+
+  const seriesDoc = JSON.parse(fs.readFileSync(seriesPath, 'utf8'));
+  seriesDoc.lectures[0].voice_status = 'ready';
+  seriesDoc.voice_status = 'ready';
+  fs.writeFileSync(seriesPath, JSON.stringify(seriesDoc, null, 2));
+
+  const done = await waitImage(fixture.series.id, (job) => ['done', 'failed', 'cancelled'].includes(job.status));
+  assert.equal(done.status, 'done', JSON.stringify(done));
+
+  const afterSlides = JSON.parse(fs.readFileSync(slidesPath, 'utf8'));
+  const afterPage = afterSlides.slides.find((item) => Number(item.slide_index) === 3);
+  assert.equal(afterPage.audio_file, 'audio/003.wav', '配图写回不能抹掉 audio_file');
+  assert.equal(afterPage.audio_provider, 'qwen3-tts', '配图写回不能抹掉 audio_provider');
+  assert.equal(afterPage.image_status, 'ready', '图片字段仍应更新');
+  assert.equal(afterSlides.voice_status, 'ready', 'slides.json 的 voice_status 不能被覆盖');
+
+  const afterSeries = JSON.parse(fs.readFileSync(seriesPath, 'utf8'));
+  assert.equal(afterSeries.lectures[0].voice_status, 'ready', 'series.lectures 的配音状态不能被覆盖');
+  assert.equal(afterSeries.voice_status, 'ready', 'series.voice_status 不能被覆盖');
+  assert.equal(afterSeries.images.status === 'done' || afterSeries.images.status === 'partial', true);
+
+  ctl.slowHistory = 0;
+});
+
 test.after(() => {
   server.close();
   fs.rmSync(ROOT, { recursive: true, force: true });

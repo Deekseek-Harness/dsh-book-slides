@@ -272,7 +272,11 @@ function summarizeImages(found) {
 
 function saveSummary(found, job) {
   try {
-    const counts = summarizeImages(found);
+    // 作业可能跑很久：汇总必须基于「此刻的」series，不能拿作业启动时的快照整份写回，
+    // 否则会把配音刚写入的 lectures[].voice_status 覆盖掉。
+    const fresh = findSeries(String(found.series.id || ''));
+    if (!fresh) return;
+    const counts = summarizeImages(fresh);
     const active = ['queued', 'running', 'cancelling'].includes(String(job.status || ''));
     let status;
     if (active) status = job.status === 'queued' ? 'queued' : 'running';
@@ -281,9 +285,9 @@ function saveSummary(found, job) {
     else if (counts.ready > 0) status = 'partial';
     else if (counts.failed > 0) status = 'failed';
     else status = 'none';
-    found.series.images = Object.assign(
+    fresh.series.images = Object.assign(
       {},
-      found.series.images && typeof found.series.images === 'object' ? found.series.images : {},
+      fresh.series.images && typeof fresh.series.images === 'object' ? fresh.series.images : {},
       {
         provider: 'comfyui',
         total: counts.total,
@@ -295,7 +299,7 @@ function saveSummary(found, job) {
         updatedAt: nowIso(),
       },
     );
-    persistSeries(found.series);
+    persistSeries(fresh.series);
   } catch {
     /* 汇总写不进去只影响列表显示 */
   }
@@ -307,9 +311,28 @@ function loadSlides(found, n) {
   return doc;
 }
 
+/** 配图只拥有这些字段；写回时按 slide_index 合并，绝不整份覆盖 slides.json。 */
+const IMAGE_FIELDS = ['image_status', 'image_file', 'image_seed', 'image_provider', 'image_error', 'image_nonce'];
+
 function saveSlides(doc) {
   try {
-    writeJson(path.join(doc.dir, 'slides.json'), doc.slidesDoc);
+    const file = path.join(doc.dir, 'slides.json');
+    const fresh = readJson(file, null);
+    if (!fresh || !Array.isArray(fresh.slides)) {
+      // 首次落盘（文件还不存在）：只能写作业自己的文档
+      writeJson(file, doc.slidesDoc);
+      return true;
+    }
+    const byIndex = new Map(fresh.slides.map((slide) => [Number(slide.slide_index), slide]));
+    for (const local of doc.slidesDoc.slides || []) {
+      const target = byIndex.get(Number(local.slide_index));
+      if (!target) continue;
+      for (const field of IMAGE_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(local, field)) target[field] = local[field];
+      }
+    }
+    // fresh 里的文字、audio_* 与 voice 元数据原样保留，配音作业的写入不会被配图覆盖
+    writeJson(file, fresh);
     return true;
   } catch {
     return false;

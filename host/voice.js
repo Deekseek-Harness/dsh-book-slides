@@ -24,7 +24,7 @@ import {
   synthesizeVoicing,
   writeVoiceConfig,
 } from '../lib/tts.js';
-import { ROOT, writeJson } from './root.js';
+import { ROOT, readJson, writeJson } from './root.js';
 import { lectureDir, loadLecture, writeLectureMeta } from './lectures.js';
 import { findSeries, listAllSeries, patchSeriesLecture, persistSeries } from './series.js';
 import { recordError } from './errors.js';
@@ -326,6 +326,7 @@ async function runRevoiceJob(job, found, options) {
   const config = readVoiceConfig();
   const cacheDir = path.join(ROOT, 'audio-cache');
   const failedLectures = [];
+  const touchedLectures = new Set();
   let comfyCtx = null;
   try {
     if (config.provider === 'qwen3-tts' && !config.apiKey) {
@@ -455,31 +456,34 @@ async function runRevoiceJob(job, found, options) {
         degraded,
       };
       const at = nowIso();
-      writeJson(
-        path.join(doc.dir, 'slides.json'),
-        Object.assign({}, doc.slidesDoc, {
-          slides,
-          voice: voiceMeta,
-          voice_status: voiceStatus,
-          voice_code: code,
-          voice_error: voiceError,
-          voice_pages: pageTotal,
-          voice_failed: failedPages,
-          voiced_at: at,
-        }),
-      );
-      writeJson(
-        path.join(doc.dir, 'lecture.json'),
-        Object.assign({}, doc.lecture, {
-          voice_status: voiceStatus,
-          voice_code: code,
-          voice_error: voiceError,
-          voice_pages: pageTotal,
-          voice_failed: failedPages,
-          voice: voiceMeta,
-          voiced_at: at,
-        }),
-      );
+      const voiceFields = {
+        voice: voiceMeta,
+        voice_status: voiceStatus,
+        voice_code: code,
+        voice_error: voiceError,
+        voice_pages: pageTotal,
+        voice_failed: failedPages,
+        voiced_at: at,
+      };
+
+      // 只合并 audio_* 与 voice 元数据：slides.json 可能刚被配图作业写过 image_*，
+      // 整份写回会把它抹掉；按 slide_index 读-改-写，双方各管各的字段。
+      const slidesPath = path.join(doc.dir, 'slides.json');
+      const freshSlides = readJson(slidesPath, null);
+      const slidesBase = freshSlides && Array.isArray(freshSlides.slides) ? freshSlides : doc.slidesDoc;
+      const bySlideIndex = new Map((slidesBase.slides || []).map((slide) => [Number(slide.slide_index), slide]));
+      for (const item of slides) {
+        const target = bySlideIndex.get(Number(item.slide_index));
+        if (!target) continue;
+        target.audio_file = item.audio_file;
+        target.audio_provider = item.audio_provider;
+        target.audio_ms = item.audio_ms;
+      }
+      writeJson(slidesPath, Object.assign({}, slidesBase, voiceFields));
+
+      const lecturePath = path.join(doc.dir, 'lecture.json');
+      const freshLecture = readJson(lecturePath, null) || doc.lecture || {};
+      writeJson(lecturePath, Object.assign({}, freshLecture, voiceFields));
       patchSeriesLecture(series, n, {
         voice_status: voiceStatus,
         voice_code: code,
@@ -487,13 +491,29 @@ async function runRevoiceJob(job, found, options) {
         voice_pages: pageTotal,
         voice_failed: failedPages,
       });
+      touchedLectures.add(Number(n));
       if (degraded) {
         failedLectures.push({ n, code, status: voiceStatus, failed: failedPages, pages: pageTotal, message: voiceError });
       }
       job.current = job.total;
     }
 
-    const readyLectures = (series.lectures || []).filter((item) => READY.includes(String(item.status)));
+    // series.json 也可能刚被配图作业写过 images；重新读一份，只 patch 本次作业
+    // 涉及的讲的 voice 字段，再算汇总，避免把并发写入的其它字段覆盖掉。
+    const fresh = findSeries(String(series.id || ''));
+    const targetSeries = fresh ? fresh.series : series;
+    for (const n of touchedLectures) {
+      const snap = (series.lectures || []).find((item) => Number(item.n) === Number(n));
+      if (!snap) continue;
+      patchSeriesLecture(targetSeries, n, {
+        voice_status: snap.voice_status,
+        voice_code: snap.voice_code,
+        voice_error: snap.voice_error,
+        voice_pages: snap.voice_pages,
+        voice_failed: snap.voice_failed,
+      });
+    }
+    const readyLectures = (targetSeries.lectures || []).filter((item) => READY.includes(String(item.status)));
     const statuses = readyLectures.map((item) => String(item.voice_status || 'none'));
     const countOf = (value) => statuses.filter((item) => item === value).length;
     let status;
@@ -504,17 +524,17 @@ async function runRevoiceJob(job, found, options) {
     else if (statuses.some((item) => item === 'ready' || item === 'partial')) status = 'partial';
     else if (statuses.some((item) => item === 'failed')) status = 'failed';
     else status = 'none';
-    series.voice_status = status;
-    series.voiced_at = nowIso();
-    series.voice_failed = failedLectures.reduce((sum, item) => sum + (item.failed || 0), 0);
+    targetSeries.voice_status = status;
+    targetSeries.voiced_at = nowIso();
+    targetSeries.voice_failed = failedLectures.reduce((sum, item) => sum + (item.failed || 0), 0);
     if (status === 'ready' || !failedLectures.length) {
-      delete series.voice_code;
-      delete series.voice_error;
+      delete targetSeries.voice_code;
+      delete targetSeries.voice_error;
     } else {
-      series.voice_code = failedLectures[0].code || 'E_TTS_FAIL';
-      series.voice_error = failedLectures.map((item) => item.message).join('；');
+      targetSeries.voice_code = failedLectures[0].code || 'E_TTS_FAIL';
+      targetSeries.voice_error = failedLectures.map((item) => item.message).join('；');
     }
-    persistSeries(series);
+    persistSeries(targetSeries);
 
     job.status = 'done';
     job.stage = 'done';

@@ -3,6 +3,23 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.1.2] - 2026-11-10
+
+**并发写入修复**。无功能、数据 schema、HTTP 契约变更，可直接覆盖 2.1.0 / 2.1.1；无需数据迁移。
+
+### 版本与环境
+
+- 包 `2.1.2`（tag `v2.1.2`）、产品 `2.1`、数据 schema `2`、文档 v1.22。
+- 历史上已被覆盖的配音元数据不需要迁移：`audio/` 文件仍在，重新配音会命中缓存、不重复计费。
+
+### 修复
+
+- **配音 + 配图并发写回互相覆盖（2.1.1 已知问题）**：配图作业此前持有启动时的 `slides.json` / `series.json` 快照并整文件写回，作业运行期间配音写入的 `audio_file` 与 `voice_status` 会在结束时被抹掉，表现为“系列显示已配音、重新进入后变未配音”，但音频文件仍在、重新配音必然缓存命中。现在双侧都改为按稳定下标读-改-写：
+  - 配图：`saveSlides()` 重新读取 `slides.json`，按 `slide_index` 只合并 `image_status / image_file / image_seed / image_provider / image_error / image_nonce`；`saveSummary()` 重新读取 `series.json`，只更新 `series.images`。
+  - 配音：写 `slides.json` 时按 `slide_index` 只合并 `audio_file / audio_provider / audio_ms` 与顶层 `voice*`；`lecture.json` 只覆盖 voice 字段；`series.json` 重新读取后只 patch 本次实际处理的讲的 voice 字段。
+  - 因为读-改-写全部是同步调用，Node 单线程下不会在两个作业之间交错，不需要额外文件锁。
+- 测试：`test/v2-images.test.mjs` 新增并发回归——配图作业卡在 ComfyUI 时写入配音字段，作业结束后断言 `audio_file`、`audio_provider`、`slides.voice_status`、`series.lectures[].voice_status`、`series.voice_status` 全部保留，同时 `image_*` 正常更新。全量门禁 42 文件 / 365 项。
+
 ## [2.1.1] - 2026-11-10
 
 **清理版**。无功能、数据 schema、HTTP 契约变更，可直接覆盖安装 2.1.0；本次只做 1.x 代码/测试下线、目录与共享内核收口，并修复一处 pdf.js 静态资源回归。
@@ -30,7 +47,7 @@
 
 ### 已知问题
 
-- **配音 + 配图并发写回会互相覆盖元数据**：两个作业都持有启动时的 `slides.json` / `series.json` 快照并整文件写回；配图作业后写时会抹掉 `audio_file` 与 `voice_status`，表现为重新进入播放/系列页显示“未配音”，但 `audio/` 文件仍在、重新配音必然缓存命中。计划在后续版本改为读-改-写并按字段合并（配图只写 `image_*`，配音只写 `audio_*` / `voice_*`），并补并发回归。
+- **配音 + 配图并发写回会互相覆盖元数据**：两个作业都持有启动时的 `slides.json` / `series.json` 快照并整文件写回；配图作业后写时会抹掉 `audio_file` 与 `voice_status`，表现为重新进入播放/系列页显示“未配音”，但 `audio/` 文件仍在、重新配音必然缓存命中。计划在后续版本改为读-改-写并按字段合并（配图只写 `image_*`，配音只写 `audio_*` / `voice_*`），并补并发回归。（已在 2.1.2 修复。）
 
 ## [2.1.0] - 2026-11-10
 
