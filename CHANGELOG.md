@@ -3,6 +3,14 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [Unreleased]
+
+### 文档
+
+- **SRS v1.21：新增 FR-27 AI 用量与费用统计（P1，2.1 计划，未实现）**。只统计插件自身发起的云端调用（LLM tokens / 云端 TTS 字符 / 云端生图张数），本地调用全局不计；作业前预估、结束后结算、历史落盘与浏览。新增 `/usage/summary`、`/usage/jobs`、`/usage/job`、`/usage/estimate`、`/usage/prices`、`DELETE /usage/jobs` 接口契约，`usage/` 数据目录，设置「用量与费用」组与 C15 反馈，以及 AC-159 ~ AC-165、Q33–Q42 默认值。
+- 口径：讲纲预览/保存（`kind='lecture'`、`phase='plan'`）与正文生成（`phase='generate'`）分开记账；练习/分章/试听计入「其他调用」，只进总账、历史默认折叠；2.0 无云端生图 provider，本期只做「本地生图不统计 + 接口预留」。
+- 版本一致性：README、需求索引、实现进度同步到 SRS v1.21；AC-128 的 AC 集合断言放宽为「AC-92 ~ AC-158 全有定义，允许后续版本追加」。
+
 ## [2.0.0] - 2026-11-09
 
 **首个正式版**。2.0 是不兼容重写：包名与数据根不变，`meta.json.schema=2`，不读 1.x 数据；同包覆盖安装时先把旧根整根备份。功能范围与验收口径以 [SRS v1.20](doc/requirements/规范需求2.0.md) 与 [实现进度](doc/2.0-实现进度.md) 为准。

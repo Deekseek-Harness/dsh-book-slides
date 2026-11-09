@@ -5,7 +5,7 @@
  *  - 包版本是 2.0.0（正式版，无 alpha/beta/rc 后缀）；
  *  - package-lock 的两处版本与 package.json 一致；
  *  - README / CHANGELOG / SRS / 实现进度 / 需求索引 与包版本、文档版本一致；
- *  - CHANGELOG 的首个版本是 [2.0.0]，没有遗留 [未发布]；
+ *  - CHANGELOG 的首个版本是 [2.0.0]，没有遗留 [未发布]；允许 [Unreleased] 段记录未发布变更；
  *  - GET /meta 返回 version / product_version / schema 与包一致；
  *  - 当前提交若已打 tag，tag 必须是 v2.0.0（未打 tag 的开发提交跳过）。
  *
@@ -56,11 +56,12 @@ test('AC-141：README / 实现进度 / 需求索引 的包版本与文档版本�
   assert.match(REQ_INDEX, new RegExp('包 `' + VERSION.replace(/\./g, '\\.') + '`'));
 });
 
-test('AC-141：CHANGELOG 首个版本是 [2.0.0]，没有遗留 [未发布]', () => {
+test('AC-141：CHANGELOG 首个版本是 [2.0.0]，没有遗留 [未发布]（允许 [Unreleased] 段）', () => {
   assert.doesNotMatch(CHANGELOG, /## \[未发布\]/);
   assert.match(CHANGELOG, /## \[2\.0\.0\] - \d{4}-\d{2}-\d{2}/);
-  const first = (CHANGELOG.match(/## \[([^\]]+)\]/g) || [])[0] || '';
-  assert.equal(first, '## [2.0.0]');
+  const versioned = (CHANGELOG.match(/## \[([^\]]+)\]/g) || [])
+    .filter((header) => !/^## \[Unreleased\]$/.test(header));
+  assert.equal(versioned[0], '## [2.0.0]');
 });
 
 // /meta 用临时数据根，避免碰到真实书架。

@@ -86,9 +86,10 @@ test('AC-128：§2.5 引用的 AC 都在 SRS 中有定义', () => {
   }
 });
 
-test('AC-128：AC-92 ~ AC-158 在 SRS 中全部有定义', () => {
-  assert.deepEqual([...definedAcs].map(Number).sort((a, b) => a - b),
-    Array.from({ length: 158 - 92 + 1 }, (_, i) => 92 + i));
+test('AC-128：AC-92 ~ AC-158 在 SRS 中全部有定义（允许后续版本追加 AC）', () => {
+  const expected = Array.from({ length: 158 - 92 + 1 }, (_, i) => 92 + i);
+  const missing = expected.filter((id) => !definedAcs.has(String(id)));
+  assert.deepEqual(missing, [], 'AC-128：以下 AC 在 SRS 中没有定义：' + missing.join(', '));
 });
 
 test('AC-128：发布门点名的子能力在基线表/对等表中列名', () => {
