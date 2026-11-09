@@ -252,6 +252,8 @@ body[data-ds-dark-theme] .blm-player-alert{color:#ffd27a}
 .blm-backup .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .blm-note.warn{border-color:color-mix(in oklab,#c62828 30%,transparent);color:#c62828}
 body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
+.blm-note.tip{border-color:color-mix(in oklab,#a86400 35%,transparent);color:#8a5300}
+body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 .blm-errline{font-size:11px;color:var(--blm-dim)}
 
 /* ---------- M5 练习 / 导出 / 书档 / 配图 ---------- */
@@ -5417,6 +5419,32 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
     }
 
     /**
+     * 参考音频时长提示（AC-154）：
+     *   warn = <3s 或 >30s，红色 warning，进 probe warnings；
+     *   tip  = 3–5s / 15–30s，在容忍区但超出推荐 5–15s，中性提示，不算 warning。
+     * 优先用服务端 duration_level/duration_text（改文案只改一处），缺字段时按同一阈值本地兜底。
+     * 返回 { level: 'warn'|'tip', text } 或 null。
+     */
+    function refDurationNotice(voice) {
+      if (!voice || typeof voice !== 'object') return null;
+      const ms = Math.max(0, Math.round(Number(voice.duration_ms) || 0));
+      if (!ms) return null;
+      const level = ms < 3000 || ms > 30000 ? 'warn' : ms < 5000 || ms > 15000 ? 'tip' : '';
+      if (!level) return null;
+      const text = String(voice.duration_text || '').trim();
+      if (text) return { level, text };
+      const name = String(voice.name || '').trim();
+      const who = name ? '参考「' + name + '」' : '参考音频';
+      const seconds = (ms / 1000).toFixed(1) + 's';
+      return {
+        level,
+        text: who + '时长 ' + seconds + (level === 'warn'
+          ? '，超出推荐 5–15s（容忍区 3–30s）；可继续使用，建议截短到 5–15s 后重新导入。'
+          : '，超出推荐 5–15s，但在容忍区（3–30s）内，不影响配音。'),
+      };
+    }
+
+    /**
      * 试听按钮/状态行的唯一派生入口：phase 决定文案、禁用与状态行。
      * 返回 { label, disabled, busy, title, tone, note }；tone 为 'progress' | 'ok' | 'warn' | ''。
      */
@@ -5694,7 +5722,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           const res = await fetch(API + '/voice/comfy/probe', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: '{}',
+            // 带上当前下拉选中项：导入后尚未保存也能检查“眼前这一项”，而不是 voice.json 里的旧值。
+            body: JSON.stringify({ comfyRefVoice: comfyRefVoiceValue }),
           });
           const raw = await res.text();
           let out = null;
@@ -5716,9 +5745,13 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           setTtsProbe(out);
           const missed = out.missing && Array.isArray(out.missing.nodes) ? out.missing.nodes : [];
           const ref = out.refVoice || {};
+          const refNotice = refDurationNotice(ref);
+          const refFlag = refNotice
+            ? '（' + (refNotice.level === 'warn' ? '超出推荐 5–15s，建议截短' : '超出推荐 5–15s，容忍区内') + '）'
+            : '';
           setTtsMsg(
             '连接成功（ComfyUI ' + (out.version || '未知版本') + '）' +
-              (ref.name ? '；参考：' + ref.name + (ref.duration_ms ? ' ' + (ref.duration_ms / 1000).toFixed(1) + 's' : '') : '') +
+              (ref.name ? '；参考：' + ref.name + (ref.duration_ms ? ' ' + (ref.duration_ms / 1000).toFixed(1) + 's' : '') + refFlag : '') +
               (missed.length ? '；缺节点：' + missed.slice(0, 3).join('、') : ''),
           );
         } catch (err) {
@@ -5762,10 +5795,18 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           const out = await api('/voice/refvoices/import', { method: 'POST', body: form });
           setTtsTable(out.table || null);
           setTtsProbe(null);
-          if (out.entry && out.entry.id) {
-            setForm((prev) => Object.assign({}, prev, { comfyRefVoice: out.entry.id }));
+          const entry = out.entry || null;
+          if (entry && entry.id) {
+            setForm((prev) => Object.assign({}, prev, { comfyRefVoice: entry.id }));
+            // 选中项落盘：连接测试/配音读 voice.json；只改本地 state 会继续检查旧参考。
+            const saved = await save({ comfyRefVoice: entry.id });
+            setTtsMsg(
+              '已导入参考 voice「' + (entry.name || audio.name) + '」' +
+                (saved ? '' : '（选中项没保存成功，请点「保存」重试）'),
+            );
+          } else {
+            setTtsMsg('已导入参考 voice「' + audio.name + '」');
           }
-          setTtsMsg('已导入参考 voice「' + ((out.entry && out.entry.name) || audio.name) + '」');
         } catch (err) {
           const detail = (err && err.detail) || {};
           setTtsMsg((detail.code || err.code || 'E_TTS_VOICE_REF') + '：' + (detail.message || detail.error || err.message));
@@ -6062,6 +6103,10 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         ? form.comfyRefVoice
         : (ttsTable && ttsTable.defaultVoice) || '';
       const selectedRef = ttsRefs.find((item) => item.id === comfyRefVoiceValue) || null;
+      const selectedRefNotice = refDurationNotice(selectedRef);
+      const probeWarnings = ttsProbe && Array.isArray(ttsProbe.warnings)
+        ? ttsProbe.warnings.filter((item) => !selectedRefNotice || String(item) !== selectedRefNotice.text)
+        : [];
 
       const removeVoiceRef = async () => {
         if (!selectedRef || selectedRef.source === 'builtin') return;
@@ -6776,9 +6821,25 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     { className: 'blm-dim', style: { fontSize: 11, lineHeight: 1.5 } },
                     '一个参考 voice = 参考音频 + 它的逐字转写（.txt）；一次选两个文件导入，音频会复制到数据根 voices/。',
                   ),
+                  selectedRefNotice
+                    ? h(
+                        'div',
+                        {
+                          className: 'blm-note ' + (selectedRefNotice.level === 'warn' ? 'warn' : 'tip'),
+                          role: 'status',
+                          'aria-live': 'polite',
+                          'data-ref-duration': selectedRefNotice.level,
+                        },
+                        selectedRefNotice.text,
+                      )
+                    : null,
                   ttsMsg ? h('div', { className: 'blm-note' }, ttsMsg) : null,
-                  ttsProbe && ttsProbe.warnings && ttsProbe.warnings.filter((item) => /参考/.test(String(item))).length
-                    ? h('div', { className: 'blm-note warn' }, ttsProbe.warnings.filter((item) => /参考/.test(String(item))).slice(0, 2).join('；'))
+                  probeWarnings.length
+                    ? h(
+                        'div',
+                        { className: 'blm-note warn', role: 'status', 'aria-live': 'polite' },
+                        '连接测试提示：' + probeWarnings.join('；'),
+                      )
                     : null,
                   ttsWorkflow && ttsWorkflow.warnings && ttsWorkflow.warnings.length
                     ? h('div', { className: 'blm-note warn' }, ttsWorkflow.warnings.join('；'))
@@ -7561,6 +7622,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         formatJobLine,
         probeView,
         probeTiming,
+        refDurationNotice,
         chapterSelectionState,
         chapterSourceLabel,
         sourceLabel,

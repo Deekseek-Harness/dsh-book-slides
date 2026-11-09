@@ -1189,8 +1189,12 @@ async function handleVoiceRefVoiceImport(req, res) {
 
 async function handleVoiceComfyProbe(req, res, options) {
   ensureRoot();
+  const body = await readJsonBody(req, 4 * 1024);
   try {
-    const out = await probeComfyTts({ fetchImpl: options && options.voiceFetch });
+    const out = await probeComfyTts({
+      fetchImpl: options && options.voiceFetch,
+      comfyRefVoice: String((body && body.comfyRefVoice) || ''),
+    });
     sendJson(res, 200, Object.assign({ ok: true }, out));
   } catch (err) {
     sendError(res, (err && err.code) || 'E_TTS_CONNECT', String((err && err.message) || err), (err && err.hint) || '');

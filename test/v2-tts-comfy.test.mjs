@@ -394,13 +394,43 @@ test('AC-154：超时长参考给 warning；不可解码 flac 被拒且旧表不
   const longTable = { voices: [{ id: 'long', name: 'Long', audio: 'voices/long.wav', ref_text: '参考文本', duration_ms: 40000 }] };
   const saved = await api('POST', '/voice/refvoices', { table: longTable });
   assert.equal(saved.data.ok, true);
-  await api('POST', '/voice', { comfyRefVoice: 'long' });
-  const probe = await api('POST', '/voice/comfy/probe');
-  assert.equal(probe.data.ok, true);
-  assert.ok(
-    (probe.data.warnings || []).some((text) => text.includes('超出推荐 5–15s')),
-    '40s 参考应给时长 warning：' + JSON.stringify(probe.data.warnings),
+  const longEntry = (saved.data.table.voices || []).find((item) => item.id === 'long');
+  assert.equal(longEntry.duration_level, 'warn', '40s 表项应带 warn 级别');
+  assert.match(longEntry.duration_text, /超出推荐 5–15s/, '表项要带可渲染的 warning 文案');
+  assert.match(longEntry.duration_text, /建议截短/, 'warning 要给出处理建议');
+
+  // 21.3s 内置参考在容忍区：连接测试不告警，只给中性提示（AC-154 ①）。
+  await api('POST', '/voice/refvoices', { reset: true });
+  await api('POST', '/voice', { comfyRefVoice: 'builtin-vivian' });
+  const calm = await api('POST', '/voice/comfy/probe', { comfyRefVoice: 'builtin-vivian' });
+  assert.equal(calm.data.ok, true);
+  assert.equal(calm.data.refVoice.duration_level, 'tip');
+  assert.match(calm.data.refVoice.duration_text, /容忍区/);
+  assert.equal(
+    (calm.data.warnings || []).some((text) => String(text).includes('超出推荐')),
+    false,
+    '21.3s 属容忍区，不得告警：' + JSON.stringify(calm.data.warnings),
   );
+
+  // 连接测试按请求里的 comfyRefVoice（当前下拉选中项）检查，而不是 voice.json 里的旧值。
+  await api('POST', '/voice/refvoices', { table: longTable });
+  const explicit = await api('POST', '/voice/comfy/probe', { comfyRefVoice: 'long' });
+  assert.equal(explicit.data.ok, true);
+  assert.equal(explicit.data.refVoice.id, 'long');
+  const probeText = (explicit.data.warnings || []).join('；');
+  assert.match(probeText, /超出推荐 5–15s/, '40s 参考应给时长 warning：' + JSON.stringify(explicit.data.warnings));
+  assert.match(probeText, /Long/, 'warning 要点名是哪个参考');
+  assert.match(probeText, /建议截短/, 'warning 要给出处理建议');
+
+  // 导入接口直接回传时长提示，UI 不需要自己算（也不会因为没跑连接测试而看不到）。
+  const formData = new FormData();
+  formData.append('audio', new Blob([makeWav(40000)], { type: 'audio/wav' }), 'long-import.wav');
+  formData.append('ref_text', '参考文本');
+  const importedRes = await fetch(baseUrl + '/dsh-book-slides/voice/refvoices/import', { method: 'POST', body: formData });
+  const imported = await importedRes.json();
+  assert.equal(imported.ok, true);
+  assert.equal(imported.entry.duration_level, 'warn');
+  assert.match(imported.entry.duration_text, /超出推荐 5–15s/);
 
   const voicesDir = path.join(ROOT, 'voices');
   fs.mkdirSync(voicesDir, { recursive: true });

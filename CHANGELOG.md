@@ -3,6 +3,24 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [未发布]
+
+主题「参考 voice 时长提示可见」：把 AC-154 的时长提示从“只有连接测试结果里可能看到”改为参考 voice 库常驻可见；导入后自动保存选中项，连接测试按当前选中项检查。
+
+### 修复
+
+- **AC-154 时长 warning 不可见（阻断人工边界）**：此前阈值与文案只在 `POST /voice/comfy/probe` 的 `warnings[]` 里，设置页也只在连接测试结果块过滤 `/参考/` 后取前 2 条；导入 40s 参考后只有“已导入”，21–22s 参考（容忍区）连提示都没有，ComfyUI 不在线时 warning 更是完全看不到。现在：
+  - `refTablePayload()` 为每个参考项补 `duration_level` / `duration_text`；`POST /voice/refvoices/import` 直接回传同一字段，UI 不需要自己判阈值。
+  - 设置页在参考 voice 库常驻显示：`<3s` / `>30s` 为红色 warning（`.blm-note.warn`），`3–5s` / `15–30s` 为琥珀色中性提示（`.blm-note.tip`）；文案含参考名、当前时长、推荐 5–15s、容忍区与处理建议。
+  - 21.3s / 22.0s 内置参考仍**不**进入 `warnings`（AC-154 容忍区），只显示“不影响配音”的中性提示；超阈值仍可在连接测试 `warnings[]` 机器断言。
+- **连接测试检查旧参考**：导入参考后只改本地 `form.comfyRefVoice`，没有落盘 `voice.json`，而 probe 读已保存值，导致刚导入 40s 参考点连接测试仍检查旧的 21.3s 内置参考、看不到警告。现在导入成功后自动保存选中项；`POST /voice/comfy/probe` 也接受请求体 `comfyRefVoice`（UI 传当前下拉选中项），显示与检查对象一致。
+- 连接测试结果不再只显示过滤后的 2 条参考警告，改为“连接测试提示：…”展示全部 `warnings`（与常驻时长提示去重）；连接成功摘要行也带“（超出推荐 5–15s，容忍区内/建议截短）”短标记，避免用户只盯着成功行时漏看。
+
+### 测试
+
+- `test/v2-tts-comfy.test.mjs`（AC-154）扩为：40s 表项/导入响应带 `duration_level=warn` 与含名称/建议的可读文案；21.3s 连接测试 `warnings` 不含“超出推荐”；probe 显式 `comfyRefVoice` 优先于 `voice.json`，40s 警告点名参考并给建议。
+- `test/v2-m5-client.test.mjs` 新增设置页渲染断言：40s 出现红色 warning；22.2s 只出现中性 tip；5–15s 不提示；`refDurationNotice()` 边界（2s/10s/21s/22.2s/31s/50s）。
+
 ## [2.0.0-alpha.10] - 2026-11-09
 
 主题「参考 voice 成对导入」：设置页不再让用户导入 JSON，改为一次选择参考音频 + 逐字转写 `.txt`；修复 `/voice/refvoices` 宿主路由缺失导致的 HTTP 405。

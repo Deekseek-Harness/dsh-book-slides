@@ -43,6 +43,9 @@ export const TTS_REF_TEXT_MAX = 2000;
 export const TTS_REF_AUDIO_MAX_BYTES = 32 * 1024 * 1024;
 export const TTS_REF_DURATION_WARN_LOW = 3000;
 export const TTS_REF_DURATION_WARN_HIGH = 30000;
+/** 推荐时长 5–15s；在容忍区（3–30s）但超出推荐时只给中性提示，不算 warning（AC-154）。 */
+export const TTS_REF_DURATION_RECOMMEND_LOW = 5000;
+export const TTS_REF_DURATION_RECOMMEND_HIGH = 15000;
 export const AUDIO_EXTS = ['wav', 'flac', 'mp3', 'ogg'];
 export const AUDIO_CONTENT_TYPES = { wav: 'audio/wav', flac: 'audio/flac', mp3: 'audio/mpeg', ogg: 'audio/ogg' };
 export const TTS_TEST_TEXT = '你好，这是一段试听，用来确认 ComfyUI 的 Qwen3-TTS 克隆配音能出声。';
@@ -234,7 +237,34 @@ export function readRefTable() {
   }
 }
 
-/** 对外 payload：不返回绝对路径；补时长/哈希/来源。 */
+/**
+ * 参考音频时长提示（AC-154）。
+ *   warn = 不在容忍区（<3s 或 >30s），需要用户处理（进入 probe warnings）；
+ *   tip  = 在容忍区（3–30s）但超出推荐 5–15s，只作中性提示，不阻断、不算 warning。
+ * 没有时长（0）时返回空提示。
+ */
+export function refDurationNotice(voice) {
+  const ms = Math.max(0, Math.round(Number(voice && voice.duration_ms) || 0));
+  if (!ms) return { level: '', text: '' };
+  const name = String((voice && (voice.label || voice.name)) || '').trim();
+  const who = name ? '参考「' + name + '」' : '参考音频';
+  const seconds = (ms / 1000).toFixed(1) + 's';
+  if (ms < TTS_REF_DURATION_WARN_LOW || ms > TTS_REF_DURATION_WARN_HIGH) {
+    return {
+      level: 'warn',
+      text: who + '时长 ' + seconds + '，超出推荐 5–15s（容忍区 3–30s）；可继续使用，建议截短到 5–15s 后重新导入。',
+    };
+  }
+  if (ms < TTS_REF_DURATION_RECOMMEND_LOW || ms > TTS_REF_DURATION_RECOMMEND_HIGH) {
+    return {
+      level: 'tip',
+      text: who + '时长 ' + seconds + '，超出推荐 5–15s，但在容忍区（3–30s）内，不影响配音。',
+    };
+  }
+  return { level: '', text: '' };
+}
+
+/** 对外 payload：不返回绝对路径；补时长/哈希/来源/时长提示。 */
 export function refTablePayload() {
   const table = readRefTable();
   return {
@@ -246,17 +276,22 @@ export function refTablePayload() {
     voices: table.voices
       .slice()
       .sort((a, b) => (a.id === table.defaultVoice ? -1 : b.id === table.defaultVoice ? 1 : a.name.localeCompare(b.name)))
-      .map((item) => ({
-      id: item.id,
-      name: item.label || item.name,
-      audio: item.audio,
-      ref_text: item.ref_text,
-      lang: item.lang,
-      duration_ms: item.duration_ms,
-      sha256: item.sha256,
-      source: item.source,
-      default: item.id === table.defaultVoice,
-    })),
+      .map((item) => {
+        const notice = refDurationNotice(item);
+        return {
+          id: item.id,
+          name: item.label || item.name,
+          audio: item.audio,
+          ref_text: item.ref_text,
+          lang: item.lang,
+          duration_ms: item.duration_ms,
+          duration_level: notice.level,
+          duration_text: notice.text,
+          sha256: item.sha256,
+          source: item.source,
+          default: item.id === table.defaultVoice,
+        };
+      }),
     warning: table.warning || '',
   };
 }
@@ -462,11 +497,14 @@ export function refVoiceSha(voice) {
 }
 
 export function refVoiceSummary(voice) {
+  const notice = refDurationNotice(voice);
   return {
     id: voice.id,
     name: voice.label || voice.name,
     lang: voice.lang || '',
     duration_ms: Number(voice.duration_ms) || 0,
+    duration_level: notice.level,
+    duration_text: notice.text,
     source: voice.source || '',
   };
 }
@@ -953,22 +991,24 @@ export async function probeComfyTts(options) {
   const classes = Array.from(new Set(Object.keys(store.prepared.api).map((id) => String(store.prepared.api[id].class_type))));
   const missingNodes = [];
   if (objectInfo) for (const cls of classes) if (!objectInfo[cls]) missingNodes.push(cls);
+  const warnings = [store.warning, inspect.outputWarning].filter(Boolean);
   let refVoice;
+  const wantedRef = String(opts.comfyRefVoice || readVoiceConfig().comfyRefVoice || '').trim();
   try {
-    refVoice = resolveRefVoice(table, String(readVoiceConfig().comfyRefVoice || ''));
+    refVoice = resolveRefVoice(table, wantedRef);
   } catch (err) {
+    // 选中项不在表内（或表外 id）时回落默认；只告警，不改写 voice.json。
     refVoice = resolveRefVoice(table, '');
+    warnings.push('参考 voice 未选中：' + String((err && err.message) || err));
   }
   let refFile = '';
-  const warnings = [store.warning, inspect.outputWarning].filter(Boolean);
   try {
     refFile = refVoiceFile(refVoice).file;
   } catch (err) {
     warnings.push(String((err && err.message) || err));
   }
-  if (Number(refVoice.duration_ms) && (refVoice.duration_ms < TTS_REF_DURATION_WARN_LOW || refVoice.duration_ms > TTS_REF_DURATION_WARN_HIGH)) {
-    warnings.push('参考音频 ' + (refVoice.duration_ms / 1000).toFixed(1) + 's，超出推荐 5–15s。');
-  }
+  const durationNotice = refDurationNotice(refVoice);
+  if (durationNotice.level === 'warn') warnings.push(durationNotice.text);
   if (!objectInfo) warnings.push('没能读取 /object_info，节点/模型未校验。');
   return {
     ok: true,

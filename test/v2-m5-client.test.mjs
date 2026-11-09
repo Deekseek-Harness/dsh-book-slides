@@ -242,6 +242,62 @@ test('设置页：参考 voice 一次导入音频 + .txt（不再导入 JSON）'
   assert.ok(!source.includes("id: 'blm-tts-table-input'"), '不应再出现 JSON 清单文件选择');
 });
 
+test('AC-154：参考时长 warning / 容忍区提示在设置页可见（不依赖连接测试）', () => {
+  const initialFor = (voice) => ({
+    voice: { provider: 'comfyui-tts', comfyRefVoice: voice.id, model: 'qwen3-tts-flash', textNode: '' },
+    voiceTable: {
+      name: '自定义参考',
+      model: '',
+      source: 'imported',
+      count: 1,
+      defaultVoice: voice.id,
+      voices: [voice],
+    },
+  });
+  const render = (voice) =>
+    renderToString(
+      React.createElement(clientModule.__components.Settings, {
+        onBack: () => {},
+        notify: () => {},
+        initial: initialFor(voice),
+      }),
+    );
+
+  const warn = render({
+    id: 'long',
+    name: 'Long',
+    source: 'imported',
+    default: true,
+    duration_ms: 40000,
+    duration_level: 'warn',
+    duration_text: '参考「Long」时长 40.0s，超出推荐 5–15s（容忍区 3–30s）；可继续使用，建议截短到 5–15s 后重新导入。',
+  });
+  assert.match(warn, /参考「Long」/, 'warning 要点名是哪个参考');
+  assert.match(warn, /超出推荐 5–15s/);
+  assert.match(warn, /建议截短/, 'warning 要给处理建议');
+  assert.match(warn, /blm-note warn/, '超阈值用红色 warning');
+
+  const tip = render({ id: 'anna', name: 'Ono_anna-22s', source: 'imported', default: true, duration_ms: 22200 });
+  assert.match(tip, /Ono_anna-22s/, '容忍区提示也要点名参考');
+  assert.match(tip, /22\.2s/);
+  assert.match(tip, /容忍区/);
+  assert.match(tip, /blm-note tip/, '21–22s 用中性提示，不是红色 warning');
+  assert.equal(/；可继续使用/.test(tip), false, '22.2s 不得渲染超阈值 warning');
+
+  const { refDurationNotice } = clientModule.__helpers;
+  assert.equal(refDurationNotice({ duration_ms: 10000 }), null, '5–15s 不提示');
+  assert.equal(refDurationNotice({ duration_ms: 2000 }).level, 'warn');
+  assert.equal(refDurationNotice({ duration_ms: 31000 }).level, 'warn');
+  assert.equal(refDurationNotice({ duration_ms: 21000 }).level, 'tip');
+  assert.match(refDurationNotice({ duration_ms: 22200, name: 'Ono' }).text, /参考「Ono」时长 22\.2s/);
+  assert.match(refDurationNotice({ duration_ms: 50000 }).text, /建议截短/);
+
+  assert.ok(source.includes('超出推荐 5–15s，容忍区内'), '连接成功摘要要带时长标记');
+  assert.ok(source.includes('连接测试提示：'), '连接测试要展示全部 warnings，不再过滤前 2 条');
+  assert.ok(source.includes('comfyRefVoice: comfyRefVoiceValue'), '连接测试按当前下拉选中项检查');
+  assert.ok(source.includes('const saved = await save({ comfyRefVoice: entry.id })'), '导入后要落盘选中项');
+});
+
 test('播放器配图：image_status=ready 时渲染 img，占位时渲染提示词入口', () => {
   const ready = renderToString(
     React.createElement(clientModule.__components.SlideStage, {
