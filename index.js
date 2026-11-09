@@ -61,6 +61,7 @@ import { reconcileAllSeries } from './v2/generate.js';
 import { cleanupStaleImports } from './v2/package.js';
 import { reconcileImageJobs } from './v2/images.js';
 import { reconcileVoiceJobs } from './v2/voice.js';
+import { reconcileUsageJobs } from './v2/usage.js';
 import { runBookCheck } from './check.js';
 import {
   cancelJob,
@@ -2775,6 +2776,12 @@ export function apply(ctx) {
   } catch {
     /* 2.0 配音作业归一失败也不能挡启动 */
   }
+  // FR-27：上次退出时未收口的用量账本 running → interrupted
+  try {
+    reconcileUsageJobs();
+  } catch {
+    /* 账本归一失败不能挡启动 */
+  }
   // 真书对照命令：跑「目录 → 校准」这条路，按严重程度分类报告
   ctx.inject(['commands'], (scoped) => {
     scoped.commands.register({
@@ -3013,6 +3020,12 @@ export function apply(ctx) {
     route(ROUTE_PREFIX + '/backups', routeV2);
     route(ROUTE_PREFIX + '/backups/delete', routeV2);
     route(ROUTE_PREFIX + '/backups/open', routeV2);
+    // FR-27 用量与费用（2.1）：路由必须逐个注册，routeM1 才能收到请求
+    route(ROUTE_PREFIX + '/usage/summary', routeV2);
+    route(ROUTE_PREFIX + '/usage/jobs', routeV2);
+    route(ROUTE_PREFIX + '/usage/job', routeV2);
+    route(ROUTE_PREFIX + '/usage/estimate', routeV2);
+    route(ROUTE_PREFIX + '/usage/prices', routeV2);
 
     ctx.on('dispose', () => {
       for (const off of offs) {

@@ -388,6 +388,7 @@ async function enrichSplitPlan({ ctx, book, part, chapters, base, dir, force }) 
     try {
       reply = await callModel(ctx, prompt, attempt === 0 ? user : user + '\n\n上一次输出不合格：' + lastError + '\n只输出 JSON。', {
         maxTokens: 6000,
+        stage: 'plan',
       });
     } catch (err) {
       return { plan: base, briefs: briefOut, warnings: ['超长章已拆分；讲纲模型调用失败：' + String((err && err.message) || err) + '，系列保持 unstitched。'] };
@@ -475,6 +476,7 @@ export async function buildPlan({ ctx, book, part, chapters, dir = '', force = f
     try {
       reply = await callModel(ctx, prompt, attempt === 0 ? user : user + '\n\n上一次输出不合格：' + lastError + '\n只输出 JSON。', {
         maxTokens: 12000,
+        stage: 'plan',
       });
     } catch (err) {
       return { plan: base, briefs: briefOut, warnings: ['讲纲模型调用失败：' + String((err && err.message) || err) + '，已使用规则 planning。'] };

@@ -363,12 +363,16 @@ export async function synthesizeQwen(options) {
   }
   if (!buffer.length) throw new TtsError('E_TTS_BAD_RESPONSE', 'Qwen 返回了空音频', '');
   if (buffer.length > QWEN_MAX_AUDIO_BYTES) throw new TtsError('E_TTS_BAD_RESPONSE', 'Qwen 音频文件过大', '');
+  const usage = payload && payload.usage && typeof payload.usage === 'object' ? payload.usage : null;
+  const billedRaw = usage && usage.characters != null ? Number(usage.characters) : null;
   return {
     buffer: buffer,
     contentType: 'audio/wav',
     audioMs: wavDurationMs(buffer) || estimateAudioMs(text, 1),
     model: config.model,
     voice: config.voice,
+    usage: usage,
+    characters: Number.isFinite(billedRaw) && billedRaw >= 0 ? Math.round(billedRaw) : null,
   };
 }
 
@@ -429,6 +433,8 @@ export async function probeVoice(config, text, options) {
       model: result.model,
       voice: result.voice,
       audio: result.buffer,
+      usage: result.usage || null,
+      characters: result.characters == null ? null : result.characters,
       contentType: result.contentType,
       audio_ms: result.audioMs,
       note: 'Qwen3-TTS 试听；不落盘、不缓存。',
@@ -459,6 +465,19 @@ function readCache(file) {
     return buffer;
   } catch {
     return null;
+  }
+}
+
+/** 估算用：这页文本是否已有可复用的云端音频缓存（不产生费用）。 */
+export function audioCacheHit(config, text, cacheDir = AUDIO_CACHE_DIR) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  try {
+    const voiceConfig = normalizeVoiceConfig(config);
+    if (voiceConfig.provider !== 'qwen3-tts') return false;
+    return !!readCache(path.join(cacheDir, audioCacheKey(voiceConfig, value) + '.wav'));
+  } catch {
+    return false;
   }
 }
 
@@ -495,21 +514,25 @@ function sleep(ms, signal) {
 
 async function synthesizeQwenWithRetry(text, voiceConfig, options) {
   let last = null;
+  let attempts = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    attempts += 1;
     try {
-      return await synthesizeQwen({
+      const out = await synthesizeQwen({
         config: voiceConfig,
         text: text,
         fetchImpl: options.fetchImpl,
         signal: options.signal,
         timeoutMs: options.timeoutMs,
       });
+      return Object.assign({}, out, { attempts });
     } catch (err) {
       last = err;
       if (err && (err.code === 'E_CANCELLED' || err.code === 'E_TTS_AUTH' || err.code === 'E_TTS_UNCONFIGURED')) break;
       if (attempt === 0) await sleep(400, options.signal);
     }
   }
+  if (last && typeof last === 'object') last.attempts = attempts;
   throw last || new TtsError('E_TTS_FAIL', '语音合成失败', '');
 }
 
@@ -559,12 +582,16 @@ export async function synthesizeVoicing(slides, config, options) {
       if (signal && signal.aborted) throw new TtsError('E_CANCELLED', '已取消', '');
       const slide = out[index];
       const text = String(slide.audio_script || '').trim();
+      let cached = false;
+      let attempts = 1;
       try {
         if (!text) throw new TtsError('E_TTS_FAIL', '这一页没有朗读稿', '');
         const cacheKey = audioCacheKey(voiceConfig, text);
         const cacheFile = path.join(cacheDir, cacheKey + '.wav');
         // force 重配音（长按 3s）必须忽略缓存，否则「强制」与「重新配音」没有区别
         let buffer = opts.ignoreCache ? null : readCache(cacheFile);
+        cached = Boolean(buffer);
+        let billedChars = null;
         if (!buffer) {
           const result = await synthesizeQwenWithRetry(text, voiceConfig, {
             fetchImpl: opts.fetchImpl,
@@ -572,6 +599,8 @@ export async function synthesizeVoicing(slides, config, options) {
             timeoutMs: opts.timeoutMs,
           });
           buffer = result.buffer;
+          attempts = Number(result.attempts) || 1;
+          billedChars = result.characters == null ? null : Number(result.characters);
           writeBinary(cacheFile, buffer);
         }
         if (signal && signal.aborted) throw new TtsError('E_CANCELLED', '已取消', '');
@@ -581,6 +610,17 @@ export async function synthesizeVoicing(slides, config, options) {
         slide.audio_file = 'audio/' + fileName;
         slide.audio_provider = 'qwen3-tts';
         slide.audio_ms = wavDurationMs(buffer) || estimateAudioMs(text, voiceConfig.rate);
+        if (typeof opts.onPage === 'function') {
+          opts.onPage({
+            slide: index,
+            chars: billedChars == null ? Array.from(text).length : billedChars,
+            charsSource: billedChars == null ? 'text' : 'provider',
+            cached: cached,
+            ok: true,
+            failedAttempts: Math.max(0, attempts - 1),
+            model: voiceConfig.model,
+          });
+        }
       } catch (err) {
         if (err && err.code === 'E_CANCELLED') throw err;
         slide.audio_file = null;
@@ -590,6 +630,17 @@ export async function synthesizeVoicing(slides, config, options) {
           code: (err && err.code) || 'E_TTS_FAIL',
           message: String((err && err.message) || err).slice(0, 200),
         });
+        if (typeof opts.onPage === 'function') {
+          opts.onPage({
+            slide: index,
+            chars: 0,
+            cached: false,
+            ok: false,
+            failedAttempts: Number(err && err.attempts) || 1,
+            code: (err && err.code) || 'E_TTS_FAIL',
+            model: voiceConfig.model,
+          });
+        }
       }
       completed += 1;
       if (typeof opts.onProgress === 'function') opts.onProgress(completed, total);

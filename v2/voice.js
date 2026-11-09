@@ -28,6 +28,8 @@ import { ROOT, writeJson } from './root.js';
 import { lectureDir, loadLecture, writeLectureMeta } from './lectures.js';
 import { findSeries, listAllSeries, patchSeriesLecture, persistSeries } from './series.js';
 import { recordError } from './errors.js';
+import { billingForTts, codepoints, recordTtsPage, runUsageJob } from './usage.js';
+import { estimateTts } from './usage-estimate.js';
 import { prepareComfyVoice, probeComfySpeech, refTablePayload, synthesizeComfyVoicing, workflowPayload } from './comfy-clone.js';
 
 const ACTIVE = ['queued', 'voicing', 'cancelling'];
@@ -117,6 +119,8 @@ function jobState(job) {
     message: job.message,
     skipped: job.skipped || [],
     error: job.error || null,
+    usageJobId: job.usageJobId || job.id,
+    usageBilling: job.usageBilling || 'cloud',
   };
 }
 
@@ -166,7 +170,19 @@ export async function probeVoiceConfig(text, options) {
   if (config.provider === 'comfyui-tts') return probeComfySpeech(text, options);
   const opts = options && typeof options === 'object' ? options : {};
   const override = String(opts.voice || '').trim();
-  return probeVoice(override ? Object.assign({}, config, { voice: override }) : config, text, opts);
+  const result = await probeVoice(override ? Object.assign({}, config, { voice: override }) : config, text, opts);
+  if (config.provider === 'qwen3-tts') {
+    const ok = !(result && result.ok === false);
+    const providerChars = result && result.characters != null ? Number(result.characters) : null;
+    recordTtsPage({
+      chars: ok ? (providerChars == null ? codepoints(text) : providerChars) : 0,
+      charsSource: providerChars == null ? 'text' : 'provider',
+      ok,
+      cached: false,
+      model: config.model,
+    });
+  }
+  return result;
 }
 
 export function hasApiKey() {
@@ -267,11 +283,33 @@ export function startRevoiceJob({ seriesId, lecture = null, force = false, missi
     active: true,
     promise: null,
   };
+  const billing = billingForTts(readVoiceConfig().provider);
+  let usageEstimate = null;
+  try {
+    usageEstimate = estimateTts({ seriesId: job.seriesId, lecture, missingOnly: job.missingOnly, force: job.force });
+  } catch {
+    usageEstimate = null;
+  }
+  job.usageBilling = billing;
+  job.usageJobId = job.id;
   jobs.set(job.id, job);
   activeBySeries.set(job.seriesId, job);
   pruneJobs();
 
-  job.promise = runRevoiceJob(job, found, options).catch((err) => {
+  job.promise = runUsageJob(
+    {
+      jobId: job.id,
+      kind: 'tts',
+      phase: 'revoice',
+      billing,
+      book: { id: String(found.series.book_id), title: '' },
+      series: { id: String(found.series.id), title: String(found.series.title || '') },
+      estimate: usageEstimate,
+      scope: { lectures: scope.map(Number) },
+    },
+    () => runRevoiceJob(job, found, options),
+    () => (job.status === 'cancelled' ? 'cancelled' : job.status === 'failed' ? 'failed' : 'done'),
+  ).catch((err) => {
     // runRevoiceJob 自己收口；这里兜底，别让进程挂
     job.status = job.cancelled ? 'cancelled' : 'failed';
     job.stage = 'done';
@@ -358,6 +396,7 @@ async function runRevoiceJob(job, found, options) {
                   fetchImpl: options.fetchImpl,
                   timeoutMs: options.timeoutMs,
                   ignoreCache: job.force,
+                  onPage: (page) => recordTtsPage(page),
                   onProgress: (done, total) => {
                     job.current = done;
                     job.total = total;

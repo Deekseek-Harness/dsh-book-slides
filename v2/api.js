@@ -47,6 +47,19 @@ import {
 } from './series.js';
 import { buildPlan } from './plan.js';
 import { readBriefs } from './briefs.js';
+import { resolveModel } from './llm.js';
+import {
+  billingForLlm,
+  clearUsageJobs,
+  listUsageJobs,
+  readJob as readUsageJob,
+  readPrices,
+  readUsageConfig,
+  runUsageJob,
+  usageSummary,
+  writePrices,
+} from './usage.js';
+import { estimateUsage } from './usage-estimate.js';
 import {
   cancelSeriesJob,
   getSeriesJob,
@@ -230,7 +243,7 @@ function handleMeta(req, res) {
   sendJson(res, 200, {
     ok: true,
     version: packageVersion(),
-    product_version: '2.0',
+    product_version: '2.1',
     schema: 2,
     legacy: false,
     notice: meta.upgraded_from ? '旧数据已备份到 ' + (meta.upgraded_to || meta.upgraded_from) : '',
@@ -347,13 +360,23 @@ async function handleBuildChapters(req, res, ctx) {
   const outlineDepth =
     Number.isInteger(outlineDepthValue) && outlineDepthValue >= 0 ? outlineDepthValue : null;
   try {
-    const result = await buildBookChapters(String(body.bookId), String(body.mode || 'auto'), {
-      force: body.force === true,
-      ctx: ctx || null,
-      range,
-      outlineDepth,
-    });
-    sendJson(res, 200, { ok: true, ...result });
+    const usage = await runUsageJob(
+      {
+        kind: 'other',
+        phase: 'toc',
+        billing: usageBillingFor(ctx || null),
+        book: usageBook(String(body.bookId)),
+        scope: { mode: String(body.mode || 'auto') },
+      },
+      () =>
+        buildBookChapters(String(body.bookId), String(body.mode || 'auto'), {
+          force: body.force === true,
+          ctx: ctx || null,
+          range,
+          outlineDepth,
+        }),
+    );
+    sendJson(res, 200, { ok: true, ...usage.result, usageJobId: usage.recorded ? usage.usageJobId : null });
   } catch (err) {
     if (err instanceof ChapterError) sendError(res, err.code, err.message, err.hint);
     else sendError(res, 'E_CHAPTER_FAILED', '分章失败', String((err && err.message) || err).slice(0, 200));
@@ -682,13 +705,25 @@ async function handlePlanPreview(req, res, options) {
   }
   const part = ctxData.part || { title: String(body.title || '草稿'), chapters: ctxData.chapters.map((c) => c.n) };
   try {
-    const out = await buildPlan({ ctx: options.ctx || null, book: ctxData.loaded.book, dir: ctxData.loaded.dir, part, chapters: ctxData.chapters });
+    const usage = await runUsageJob(
+      {
+        kind: 'lecture',
+        phase: 'plan',
+        billing: usageBillingFor(options.ctx || null),
+        book: usageBook(bookId),
+        series: { id: String(body.seriesId || ''), title: String(part.title || '') },
+        scope: { chapters: ctxData.chapters.map((c) => c.n) },
+      },
+      () => buildPlan({ ctx: options.ctx || null, book: ctxData.loaded.book, dir: ctxData.loaded.dir, part, chapters: ctxData.chapters }),
+    );
+    const out = usage.result;
     sendJson(res, 200, {
       ok: true,
       plan: out.plan,
       warnings: out.warnings || [],
       briefsSource: out.briefs ? (out.briefs.fallback ? 'rule' : out.briefs.degraded ? 'mixed' : 'model') : 'none',
       partId: body.partId || null,
+      usageJobId: usage.recorded ? usage.usageJobId : null,
     });
   } catch (err) {
     sendError(res, err.code || 'E_PLAN_FAILED', err.message || '讲纲生成失败', err.hint || '');
@@ -739,13 +774,32 @@ async function handleSeriesPlan(req, res, options) {
   ensureRoot();
   const body = await readJsonBody(req, 8 * 1024 * 1024);
   try {
-    const out = await savePlan({
-      seriesId: String(body.seriesId || ''),
-      plan: body.plan || null,
-      ctx: options.ctx || null,
-      force: body.force === true,
+    const found = findSeries(String(body.seriesId || ''));
+    const usage = await runUsageJob(
+      {
+        kind: 'lecture',
+        phase: 'plan',
+        billing: usageBillingFor(options.ctx || null),
+        book: usageBook(found ? found.series.book_id : ''),
+        series: { id: String(body.seriesId || ''), title: String((found && found.series.title) || '') },
+        scope: { chapters: (found && found.series.chapters) || [] },
+      },
+      () =>
+        savePlan({
+          seriesId: String(body.seriesId || ''),
+          plan: body.plan || null,
+          ctx: options.ctx || null,
+          force: body.force === true,
+        }),
+    );
+    const out = usage.result;
+    sendJson(res, 200, {
+      ok: true,
+      series: out.series,
+      plan: out.series,
+      warnings: out.warnings || [],
+      usageJobId: usage.recorded ? usage.usageJobId : null,
     });
-    sendJson(res, 200, { ok: true, series: out.series, plan: out.series, warnings: out.warnings || [] });
   } catch (err) {
     if (err instanceof SeriesError) {
       sendError(res, err.code, err.message, err.hint);
@@ -783,6 +837,23 @@ function requirePlanned(series) {
   if (!series.plan_version || !(series.lectures || []).length) {
     throw Object.assign(new Error('先生成/保存讲纲，再开始生成'), { code: 'E_SERIES_UNPLANNED' });
   }
+}
+
+/** 用量账本：按 DSH 默认 provider 判本地/云端；取不到模型时按云端（宁可多算）。 */
+function usageBillingFor(ctx) {
+  try {
+    return billingForLlm(resolveModel(ctx).provider);
+  } catch {
+    return 'cloud';
+  }
+}
+
+function usageBook(bookId) {
+  const loaded = loadBook(String(bookId || ''));
+  return {
+    id: String(bookId || ''),
+    title: String((loaded && loaded.book && loaded.book.title) || ''),
+  };
 }
 
 async function handleSeriesStart(req, res, options) {
@@ -1076,12 +1147,17 @@ async function handleVoicePost(req, res) {
 async function handleVoiceProbe(req, res, options) {
   ensureRoot();
   const body = await readJsonBody(req, 64 * 1024);
-  const result = await probeVoiceConfig(body && body.text, {
-    fetchImpl: options && options.voiceFetch,
-    speaker: (body && (body.comfyRefVoice || body.comfyVoice || body.speaker)) || '',
-    refVoice: (body && (body.comfyRefVoice || body.comfyVoice)) || '',
-    voice: (body && body.voice) || '',
-  });
+  const usage = await runUsageJob(
+    { kind: 'other', phase: 'probe', billing: 'cloud', scope: {} },
+    () =>
+      probeVoiceConfig(body && body.text, {
+        fetchImpl: options && options.voiceFetch,
+        speaker: (body && (body.comfyRefVoice || body.comfyVoice || body.speaker)) || '',
+        refVoice: (body && (body.comfyRefVoice || body.comfyVoice)) || '',
+        voice: (body && body.voice) || '',
+      }),
+  );
+  const result = usage.result;
   if (!result.ok) {
     sendError(res, result.code || 'E_TTS_UNCONFIGURED', result.error || '语音不可用', result.hint || '');
     return;
@@ -1278,6 +1354,75 @@ function handleSettings(req, res, options) {
   sendJson(res, 200, Object.assign({ ok: true }, settingsPayload(options.ctx || null)));
 }
 
+/* ------------------------------ FR-27 用量与费用 ------------------------------ */
+
+function handleUsageSummary(req, res, url) {
+  ensureRoot();
+  const out = usageSummary({
+    from: url.searchParams.get('from') || '',
+    to: url.searchParams.get('to') || '',
+    bookId: url.searchParams.get('bookId') || '',
+    seriesId: url.searchParams.get('seriesId') || '',
+  });
+  sendJson(res, 200, Object.assign({ ok: true }, out));
+}
+
+function handleUsageJobs(req, res, url) {
+  ensureRoot();
+  const out = listUsageJobs({
+    kind: url.searchParams.get('kind') || '',
+    from: url.searchParams.get('from') || '',
+    to: url.searchParams.get('to') || '',
+    bookId: url.searchParams.get('bookId') || '',
+    seriesId: url.searchParams.get('seriesId') || '',
+    limit: url.searchParams.get('limit') || undefined,
+    offset: url.searchParams.get('offset') || undefined,
+  });
+  sendJson(res, 200, Object.assign({ ok: true }, out));
+}
+
+function handleUsageJob(req, res, url) {
+  ensureRoot();
+  const job = readUsageJob(url.searchParams.get('jobId') || '');
+  if (!job) {
+    sendError(res, 'E_USAGE_NOT_FOUND', '找不到这条用量记录', '刷新历史后再试。');
+    return;
+  }
+  sendJson(res, 200, { ok: true, job });
+}
+
+async function handleUsageEstimate(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  try {
+    const estimate = estimateUsage(Object.assign({}, body && typeof body === 'object' ? body : {}, { ctx: options.ctx || null }));
+    sendJson(res, 200, { ok: true, estimate });
+  } catch (err) {
+    sendError(res, err.code || 'E_USAGE_ESTIMATE', String((err && err.message) || err), err.hint || '');
+  }
+}
+
+async function handleUsagePrices(req, res) {
+  ensureRoot();
+  if (req.method === 'GET') {
+    const prices = readPrices();
+    sendJson(res, 200, { ok: true, prices, localProviders: readUsageConfig().localProviders });
+    return;
+  }
+  const body = await readJsonBody(req, 512 * 1024);
+  try {
+    const prices = writePrices(body && typeof body === 'object' ? body : {});
+    sendJson(res, 200, { ok: true, prices, localProviders: readUsageConfig().localProviders });
+  } catch (err) {
+    sendError(res, err.code || 'E_USAGE_PRICE', String((err && err.message) || err), err.hint || '');
+  }
+}
+
+function handleUsageClear(req, res) {
+  ensureRoot();
+  sendJson(res, 200, { ok: true, removed: clearUsageJobs() });
+}
+
 function handleDiagnostics(req, res) {
   ensureRoot();
   sendJson(res, 200, Object.assign({ ok: true }, diagnosticsPayload()));
@@ -1416,14 +1561,25 @@ async function handlePracticeExplain(req, res, options) {
   ensureRoot();
   const body = await readJsonBody(req, 64 * 1024);
   try {
-    const out = await explainQuestion({
-      seriesId: String(body.seriesId || ''),
-      qid: String(body.qid || ''),
-      picked: Array.isArray(body.picked) ? body.picked : [],
-      ctx: options.ctx || null,
-      options: { timeoutMs: Number(body.timeoutMs) || undefined },
-    });
-    sendJson(res, 200, Object.assign({ ok: true }, out));
+    const usage = await runUsageJob(
+      {
+        kind: 'other',
+        phase: 'practice',
+        billing: usageBillingFor(options.ctx || null),
+        series: { id: String(body.seriesId || ''), title: '' },
+        scope: { qid: String(body.qid || '') },
+      },
+      () =>
+        explainQuestion({
+          seriesId: String(body.seriesId || ''),
+          qid: String(body.qid || ''),
+          picked: Array.isArray(body.picked) ? body.picked : [],
+          ctx: options.ctx || null,
+          options: { timeoutMs: Number(body.timeoutMs) || undefined },
+        }),
+    );
+    const out = usage.result;
+    sendJson(res, 200, Object.assign({ ok: true, usageJobId: usage.recorded ? usage.usageJobId : null }, out));
   } catch (err) {
     practiceError(res, err);
   }
@@ -2116,6 +2272,50 @@ async function routeM1Inner(req, res, url, options = {}) {
   }
   if (pathname === PREFIX + '/settings') {
     handleSettings(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/usage/summary') {
+    if (req.method !== 'GET') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    handleUsageSummary(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/usage/jobs') {
+    if (req.method === 'DELETE') {
+      handleUsageClear(req, res);
+      return true;
+    }
+    if (req.method !== 'GET') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    handleUsageJobs(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/usage/job') {
+    if (req.method !== 'GET') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    handleUsageJob(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/usage/estimate') {
+    if (req.method !== 'POST') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    await handleUsageEstimate(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/usage/prices') {
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      sendError(res, 'E_METHOD', '不支持的方法', '');
+      return true;
+    }
+    await handleUsagePrices(req, res);
     return true;
   }
   if (pathname === PREFIX + '/diagnostics') {

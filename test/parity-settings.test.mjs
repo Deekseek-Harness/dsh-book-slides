@@ -143,7 +143,7 @@ test('AC-118：设置首屏给出数据根、占用、回收站、备份与只�
   assert.ok(out.bytes > 0);
   assert.equal(out.trashCount, 0);
   assert.deepEqual(out.backups, []);
-  assert.equal(out.productVersion, '2.0');
+  assert.equal(out.productVersion, '2.1');
   assert.equal(out.schema, 2);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
@@ -161,7 +161,7 @@ test('AC-118：诊断显示插件版本/产品版本/schema/DSH/pdfjs 与最近�
   assert.equal(out.ok, true);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
-  assert.equal(out.productVersion, '2.0');
+  assert.equal(out.productVersion, '2.1');
   assert.equal(out.schema, 2);
   assert.equal(typeof out.dshVersion, 'string');
   assert.ok(out.dshVersion.length > 0);

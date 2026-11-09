@@ -21,6 +21,7 @@ import {
   verifyChapters,
 } from '../tocparse.js';
 import { writeJson } from './root.js';
+import { recordLlmCall } from './usage.js';
 
 const PROMPT_FILE = new URL('../prompts/toc-extract-v1.md', import.meta.url);
 const TOC_MAX_TOKENS = 16000;
@@ -62,19 +63,30 @@ async function callModel(ctx, system, user, maxTokens) {
   const messages = [{ role: 'user', content: [{ type: 'text', text: user }] }];
   let text = '';
   let stopReason = '';
-  for await (const chunk of prepared.stream(Object.assign({}, prepared.config, { system, messages, signal: timeoutSignal }))) {
-    if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') {
-      text += chunk.text;
-      continue;
-    }
-    if (chunk && chunk.type === 'finish' && chunk.reason) {
-      stopReason = String(chunk.reason.kind || '');
-      if (chunk.reason.kind === 'error') {
-        throw new Error('模型报错：' + ((chunk.reason.failure && chunk.reason.failure.message) || '未知原因'));
+  let usage = null;
+  try {
+    for await (const chunk of prepared.stream(Object.assign({}, prepared.config, { system, messages, signal: timeoutSignal }))) {
+      if (chunk && chunk.type === 'usage' && chunk.usage) {
+        usage = chunk.usage;
+        continue;
+      }
+      if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') {
+        text += chunk.text;
+        continue;
+      }
+      if (chunk && chunk.type === 'finish' && chunk.reason) {
+        stopReason = String(chunk.reason.kind || '');
+        if (chunk.reason.kind === 'error') {
+          throw new Error('模型报错：' + ((chunk.reason.failure && chunk.reason.failure.message) || '未知原因'));
+        }
       }
     }
+  } catch (err) {
+    recordLlmCall({ provider: target.provider, model: target.model, stage: 'toc', ok: false });
+    throw err;
   }
-  return { text, stopReason, model: target.model };
+  recordLlmCall({ provider: target.provider, model: target.model, stage: 'toc', usage, ok: true });
+  return { text, stopReason, model: target.model, provider: target.provider, usage };
 }
 
 function normalizeRange(pages, from, to) {

@@ -156,7 +156,7 @@ function ensureLayout() {
 function writeMeta(extra) {
   writeJson(META_FILE(), {
     schema: 2,
-    product_version: '2.0',
+    product_version: '2.1',
     app_version: packageVersion(),
     created_at: new Date().toISOString(),
     ...(extra || {}),

@@ -28,6 +28,8 @@ import {
 import { buildStitchReport, writeStitchReport, withSeamSentence } from './stitch.js';
 import { initialImageStatus } from './images.js';
 import { callModel, readJsonBlock, resolveModel } from './llm.js';
+import { billingForLlm, runUsageJob } from './usage.js';
+import { estimateLecture } from './usage-estimate.js';
 import {
   AUDIO_MAX,
   AUDIO_MIN,
@@ -282,10 +284,10 @@ function llmTimeoutMs() {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 180000;
 }
 
-async function ask(job, ctx, system, user, { maxTokens = LLM_MAX_TOKENS, timeoutMs = llmTimeoutMs() } = {}) {
+async function ask(job, ctx, system, user, { maxTokens = LLM_MAX_TOKENS, timeoutMs = llmTimeoutMs(), stage = 'lecture' } = {}) {
   assertActive(job);
   try {
-    return await callModel(ctx, system, user, { maxTokens, timeoutMs, signal: job.controller.signal });
+    return await callModel(ctx, system, user, { maxTokens, timeoutMs, signal: job.controller.signal, stage });
   } catch (err) {
     if (job.cancelled) throw new GenerationError('E_CANCELLED', '已取消');
     if (err instanceof GenerationError) throw err;
@@ -788,6 +790,8 @@ function jobState(job) {
     skipped: job.skipped || [],
     scope: job.scope || [],
     error: job.error || null,
+    usageJobId: job.usageJobId || job.id,
+    usageBilling: job.usageBilling || 'cloud',
   };
 }
 
@@ -1019,7 +1023,32 @@ export function startSeriesJob({ found, nums = null, force = false, ctx = null }
     pages: texts.pages,
     chapterMap,
   };
-  job.promise = runSeriesJob(job, context).catch((err) => {
+  let usageEstimate = null;
+  try {
+    usageEstimate = estimateLecture({ ctx, seriesId: series.id, scope: { lectures: pending } });
+  } catch {
+    usageEstimate = null;
+  }
+  job.promise = runUsageJob(
+    {
+      jobId,
+      kind: 'lecture',
+      phase: 'generate',
+      billing: billingForLlm(model.provider),
+      book: { id: String(found.bookId), title: String((texts.loaded.book && texts.loaded.book.title) || '') },
+      series: { id: String(series.id), title: String(series.title || '') },
+      estimate: usageEstimate,
+      scope: {
+        lectures: pending.map(Number),
+        pages: pending.reduce((sum, n) => {
+          const hit = (series.lectures || []).find((item) => Number(item.n) === Number(n));
+          return sum + (Number(hit && hit.pages) || 0);
+        }, 0),
+      },
+    },
+    () => runSeriesJob(job, context),
+    () => (job.status === 'cancelled' ? 'cancelled' : job.status === 'failed' ? 'failed' : 'done'),
+  ).catch((err) => {
     // runSeriesJob 自己收口；走到这里说明收口也抛了，兜底别让进程挂
     try {
       job.status = 'failed';
@@ -1031,6 +1060,8 @@ export function startSeriesJob({ found, nums = null, force = false, ctx = null }
       /* ignore */
     }
   });
+  job.usageBilling = billingForLlm(model.provider);
+  job.usageJobId = jobId;
   return { cached: false, skipped, jobId, job, scope: { nums: scope, pending } };
 }
 

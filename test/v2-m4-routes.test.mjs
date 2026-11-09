@@ -81,6 +81,11 @@ test('M4 路由：偏好/进度/语音/设置/诊断/备份均由 2.0 接管', (
     '/backups',
     '/backups/delete',
     '/backups/open',
+    '/usage/summary',
+    '/usage/jobs',
+    '/usage/job',
+    '/usage/estimate',
+    '/usage/prices',
   ].map((item) => ROUTE_PREFIX + item);
   const actual = paths();
   for (const item of expected) {
@@ -136,6 +141,43 @@ test('M4 路由：/voice/refvoices 经宿主路由表可达（回归 HTTP 405）
     assert.equal(importedData.ok, true);
     assert.equal(importedData.table.count, 3);
     assert.equal(importedData.entry.source, 'imported');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('FR-27 路由：/usage/summary 与 /usage/jobs 经宿主路由表可达（回归 404）', async () => {
+  const summaryPath = ROUTE_PREFIX + '/usage/summary';
+  const jobsPath = ROUTE_PREFIX + '/usage/jobs';
+  for (const path of [summaryPath, jobsPath]) {
+    assert.ok(
+      registered.some((item) => item.kind === 'exact' && item.path === path),
+      '缺少宿主路由注册：' + path,
+    );
+  }
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://localhost');
+    const hit = registered.find((item) => item.kind === 'exact' && item.path === url.pathname);
+    if (!hit) {
+      res.statusCode = 404;
+      res.end('no route');
+      return;
+    }
+    hit.handler(req, res);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const summary = await fetch(base + summaryPath);
+    assert.equal(summary.status, 200);
+    const summaryData = await summary.json();
+    assert.equal(summaryData.ok, true);
+    assert.ok(summaryData.totals);
+    const jobs = await fetch(base + jobsPath + '?limit=5');
+    assert.equal(jobs.status, 200);
+    const jobsData = await jobs.json();
+    assert.equal(jobsData.ok, true);
+    assert.ok(Array.isArray(jobsData.jobs));
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

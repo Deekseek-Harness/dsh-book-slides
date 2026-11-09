@@ -345,6 +345,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         if (!value || typeof value !== 'object') return { name: 'shelf' };
         const name = String(value.name || '');
         if (name === 'settings') return { name: 'settings' };
+        if (name === 'usage') return { name: 'usage' };
         if (name === 'book' && ID_SHAPE.test(String(value.bookId || ''))) {
           return { name: 'book', bookId: String(value.bookId) };
         }
@@ -781,6 +782,64 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
       if (value < 1024 * 1024 * 1024) return (value / 1024 / 1024).toFixed(1) + ' MB';
       return (value / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+
+    /* ------------------------------ FR-27 用量格式化 ------------------------------ */
+
+    function formatTokens(value) {
+      const n = Number(value) || 0;
+      if (n >= 100000000) return (n / 100000000).toFixed(2) + ' 亿';
+      if (n >= 10000) return (n / 10000).toFixed(1) + ' 万';
+      return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    function formatMoney(value) {
+      if (value == null) return '—';
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '—';
+      if (n > 0 && n < 0.01) return '<¥0.01';
+      return '¥' + n.toFixed(2);
+    }
+
+    function usageKindLabel(job) {
+      const kind = String((job && job.kind) || '');
+      const phase = String((job && job.phase) || '');
+      if (kind === 'lecture') return phase === 'plan' ? '讲纲' : '生成讲义';
+      if (kind === 'tts') return '配音';
+      if (kind === 'image') return '配图';
+      if (phase === 'probe') return '试听/测试';
+      if (phase === 'toc') return '分章';
+      if (phase === 'practice') return '练习';
+      return '其他';
+    }
+
+    /** 一条「本次用量」摘要：tokens 与字符/张数分开，金额最后。 */
+    function usageSummaryLine(job) {
+      if (!job) return '';
+      const actual = job.actual || {};
+      const parts = [];
+      const tokens = actual.tokens || {};
+      const tokenTotal = (Number(tokens.input) || 0) + (Number(tokens.output) || 0) + (Number(tokens.cacheRead) || 0);
+      if (tokenTotal) {
+        const cache = Number(tokens.cacheRead) || 0;
+        parts.push(
+          '输入 ' + formatTokens(tokens.input) + (cache ? ' + 缓存读 ' + formatTokens(cache) : '') +
+            ' / 输出 ' + formatTokens(tokens.output) + ' tokens',
+        );
+      }
+      if (Number(actual.chars)) parts.push(formatTokens(actual.chars) + ' 字符');
+      if (Number(actual.images)) parts.push(actual.images + ' 张');
+      if (Number(actual.cachedPages)) parts.push('缓存命中 ' + actual.cachedPages + ' 页');
+      if (!parts.length && !Number(actual.calls)) parts.push('无计费调用');
+      parts.push(formatMoney(actual.cost));
+      return parts.join(' · ');
+    }
+
+    function monthStartIso() {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const p = (n) => String(n).padStart(2, '0');
+      return start.getFullYear() + '-' + p(start.getMonth() + 1) + '-' + p(start.getDate());
     }
 
     /**
@@ -3524,6 +3583,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
     function SeriesCard({ series, part, notify, onReload, onPlay }) {
       const [job, setJob] = useState(null);
+      const [jobUsage, setJobUsage] = useState(null);
       const [stitch, setStitch] = useState(null);
       const [voiceJob, setVoiceJob] = useState(null);
       const [imageJob, setImageJob] = useState(null);
@@ -3590,27 +3650,43 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         })();
       }, 3000);
       const runVoice = async () => {
+        const estimate = await fetchEstimate('tts', { missingOnly: voiceState !== 'ready' });
+        const estimateLine = estimateText(estimate);
         if (voiceState === 'ready') {
-          const ok = await confirmAction('会重跑 ' + voicePages + ' 页；命中缓存不产生费用。', {
-            title: '重新配音',
-            okText: '重新配音',
-          });
+          const ok = await confirmAction(
+            (estimateLine ? estimateLine + ' ' : '') + '会重跑 ' + voicePages + ' 页；命中缓存不产生费用。继续？',
+            {
+              title: '重新配音',
+              okText: '重新配音',
+            },
+          );
           if (!ok) return;
           revoice({});
           return;
         }
+        const ok = await confirmAction(
+          (estimateLine ? estimateLine + ' ' : '') + '只补未配音页，命中缓存不产生费用。继续？',
+          { title: '补配音', okText: '开始配音' },
+        );
+        if (!ok) return;
         revoice({ missingOnly: true });
       };
       const runImages = async () => {
+        const estimate = await fetchEstimate('image', { force: imageState === 'done' });
+        const estimateLine = estimateText(estimate);
         if (imageState === 'done') {
-          const ok = await confirmAction('会把 ' + (images ? images.total : 0) + ' 页全部重出（换种子）。', {
-            title: '重新配图',
-            okText: '重新配图',
-          });
+          const ok = await confirmAction(
+            (estimateLine ? estimateLine + ' ' : '') + '会把 ' + (images ? images.total : 0) + ' 页全部重出（换种子）。继续？',
+            {
+              title: '重新配图',
+              okText: '重新配图',
+            },
+          );
           if (!ok) return;
           regenImages({ force: true });
           return;
         }
+        if (estimateLine) notify(estimateLine);
         regenImages({});
       };
 
@@ -3661,6 +3737,12 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           setVoiceJob(out);
           if (!VOICE_ACTIVE.includes(String(out.status || ''))) {
             await onReload();
+            const usageId = out.usageJobId || out.jobId;
+            if (usageId) {
+              api('/usage/job?jobId=' + encodeURIComponent(usageId))
+                .then((result) => setJobUsage(result.job))
+                .catch(() => {});
+            }
           }
         } catch (err) {
           if (err.code === 'E_NOT_FOUND') {
@@ -3749,6 +3831,12 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           if (!activeStatus.includes(String(out.status || '')) && !doneRef.current) {
             doneRef.current = true;
             await onReload();
+            const usageId = out.usageJobId || out.jobId;
+            if (usageId) {
+              api('/usage/job?jobId=' + encodeURIComponent(usageId))
+                .then((result) => setJobUsage(result.job))
+                .catch(() => {});
+            }
           }
         } catch (err) {
           notify(err.message);
@@ -3765,8 +3853,47 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         if (['drafting', 'stitching'].includes(String(series.status)) && !doneRef.current) poll();
       }, [series.status, poll]);
 
+      const fetchEstimate = async (kind, extra) => {
+        try {
+          const out = await api('/usage/estimate', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(Object.assign({ kind, seriesId: series.id }, extra || {})),
+          });
+          return out.estimate || null;
+        } catch {
+          return null;
+        }
+      };
+
+      const estimateText = (estimate) => {
+        if (!estimate) return '';
+        if (estimate.local) return estimate.note || '本地调用，不产生云端费用。';
+        const parts = [];
+        if (estimate.tokens && (estimate.tokens.input || estimate.tokens.output)) {
+          parts.push(
+            '输入约 ' + formatTokens(estimate.tokens.input) + ' / 输出约 ' + formatTokens(estimate.tokens.output) + ' tokens',
+          );
+        }
+        if (Number(estimate.chars)) parts.push(formatTokens(estimate.chars) + ' 字符');
+        if (Number(estimate.images)) parts.push(estimate.images + ' 张');
+        parts.push('预计 ' + formatMoney(estimate.cost));
+        return (
+          parts.join('，') +
+          '（' + (estimate.level === 'rough' ? '粗估 ±50%' : '估算 ±30%') + '）' +
+          (estimate.note ? '。' + estimate.note : '')
+        );
+      };
+
+      const confirmEstimate = async (kind, extra, title, okText) => {
+        const estimate = await fetchEstimate(kind, extra);
+        const text = estimateText(estimate);
+        return confirmAction(text ? text + ' 继续？' : '将开始作业，继续？', { title, okText });
+      };
+
       const startJob = async (path, body) => {
         setBusy(true);
+        setJobUsage(null);
         doneRef.current = false;
         try {
           const out = await api(path, {
@@ -3796,10 +3923,25 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         }
       };
 
-      const start = () => startJob('/series/start', { seriesId: series.id });
-      const resume = () => startJob('/series/resume', { seriesId: series.id });
-      const retry = (n) => startJob('/series/retry', { seriesId: series.id, lecture: n });
-      const generateOne = (n) => startJob('/series/lecture/generate', { seriesId: series.id, n });
+      const pendingLectures = lectures
+        .filter((lec) => !READY_LECTURE.includes(String(lec.status)))
+        .map((lec) => Number(lec.n));
+      const start = async () => {
+        if (!(await confirmEstimate('lecture', { scope: { lectures: pendingLectures } }, '开始生成讲义', '开始生成'))) return;
+        startJob('/series/start', { seriesId: series.id });
+      };
+      const resume = async () => {
+        if (!(await confirmEstimate('lecture', { scope: { lectures: pendingLectures } }, '续跑生成', '续跑'))) return;
+        startJob('/series/resume', { seriesId: series.id });
+      };
+      const retry = async (n) => {
+        if (!(await confirmEstimate('lecture', { scope: { lectures: [Number(n)] } }, '重跑第 ' + n + ' 讲', '重跑'))) return;
+        startJob('/series/retry', { seriesId: series.id, lecture: n });
+      };
+      const generateOne = async (n) => {
+        if (!(await confirmEstimate('lecture', { scope: { lectures: [Number(n)] } }, '生成本讲', '开始生成'))) return;
+        startJob('/series/lecture/generate', { seriesId: series.id, n });
+      };
 
       /** 配音是独立动作（FR-23）：只调 /revoice，等它自己跑完；文本状态不受影响。 */
       const revoice = async (opts = {}) => {
@@ -3815,6 +3957,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             body: JSON.stringify(body),
           });
           setVoiceJob({ jobId: out.jobId, status: 'queued', current: 0, total: 0, message: '已排队' });
+          setJobUsage(null);
           notify((opts.force ? '已开始强制重新配音' : opts.missingOnly ? '已开始补配音' : '已开始重新配音') + '（' + (out.scope ? out.scope.length : 0) + ' 讲）');
         } catch (err) {
           notify(
@@ -4067,6 +4210,23 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             )
           : null,
         stageText ? h('div', { className: 'blm-dim', style: { fontSize: 12 } }, stageText) : null,
+        jobUsage
+          ? h(
+              'div',
+              { className: 'blm-note' },
+              '本次用量：' +
+                usageSummaryLine(jobUsage) +
+                (jobUsage.estimate && jobUsage.estimate.cost != null
+                  ? '（预估 ' + formatMoney(jobUsage.estimate.cost) + '）'
+                  : ''),
+            )
+          : null,
+        job && !isActive && job.usageBilling === 'local'
+          ? h('div', { className: 'blm-dim', style: { fontSize: 11 } }, '本地调用，未计入用量与费用')
+          : null,
+        voiceJob && !voiceActive && voiceJob.usageBilling === 'local'
+          ? h('div', { className: 'blm-dim', style: { fontSize: 11 } }, '本地配音，未计入用量与费用')
+          : null,
         progress ? h('div', { className: 'blm-progress' }, h('i', { style: { width: progress + '%' } })) : null,
         series.error && ['failed', 'partial'].includes(series.status)
           ? h('div', { className: 'blm-note' }, (series.code ? series.code + '：' : '') + series.error)
@@ -5514,7 +5674,186 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
     /* ------------------------------ M4 设置（FR-21.5） ------------------------------ */
 
-    function Settings({ onBack, notify, initial }) {
+    /* ------------------------------ FR-27 用量历史 ------------------------------ */
+
+    function UsageView({ onBack, notify }) {
+      const [summary, setSummary] = useState(null);
+      const [total, setTotal] = useState(null);
+      const [jobs, setJobs] = useState([]);
+      const [kind, setKind] = useState('');
+      const [detail, setDetail] = useState(null);
+      const [busy, setBusy] = useState(false);
+
+      const load = useCallback(async () => {
+        setBusy(true);
+        try {
+          const query = kind ? '&kind=' + encodeURIComponent(kind) : '';
+          const [monthOut, totalOut, jobsOut] = await Promise.all([
+            api('/usage/summary?from=' + encodeURIComponent(monthStartIso()) + query).catch(() => null),
+            api('/usage/summary' + (query ? '?' + query.slice(1) : '')).catch(() => null),
+            api('/usage/jobs?limit=100' + query).catch(() => null),
+          ]);
+          if (monthOut) setSummary(monthOut);
+          if (totalOut) setTotal(totalOut);
+          setJobs((jobsOut && jobsOut.jobs) || []);
+        } catch (err) {
+          notify(err.message);
+        } finally {
+          setBusy(false);
+        }
+      }, [kind, notify]);
+
+      useEffect(() => {
+        load();
+      }, [load]);
+
+      const openDetail = async (job) => {
+        try {
+          const out = await api('/usage/job?jobId=' + encodeURIComponent(job.jobId));
+          setDetail(out.job);
+        } catch (err) {
+          notify(err.message);
+        }
+      };
+
+      const clearAll = async () => {
+        const ok = await confirmAction('清空全部用量历史？只删账本，不影响书、系列与音频。', {
+          title: '清空用量历史',
+          okText: '清空',
+          danger: true,
+        });
+        if (!ok) return;
+        try {
+          const out = await api('/usage/jobs', { method: 'DELETE' });
+          notify('已清空 ' + (Number(out.removed) || 0) + ' 条记录');
+          setDetail(null);
+          await load();
+        } catch (err) {
+          notify(err.message);
+        }
+      };
+
+      return h(
+        'div',
+        { className: 'blm-body' },
+        h(
+          'div',
+          { className: 'blm-row', style: { marginBottom: 10 } },
+          h('button', { className: 'blm-btn', onClick: onBack }, '← 设置'),
+          h('h1', { style: { fontSize: 15, margin: 0 } }, '用量与费用'),
+          h('div', { style: { flex: 1 } }),
+          h('button', { className: 'blm-btn', disabled: busy, onClick: load }, busy ? '刷新中…' : '刷新'),
+        ),
+        h(
+          'div',
+          { className: 'blm-note' },
+          '本月 ' + (summary ? formatMoney(summary.totals.cost) + ' · ' + summary.totals.jobs + ' 次' : '—') +
+            '；累计 ' + (total ? formatMoney(total.totals.cost) + ' · ' + total.totals.jobs + ' 次' : '—') +
+            '。只统计插件发起的云端调用，本地调用不计入。',
+        ),
+        h(
+          'div',
+          { className: 'blm-row', style: { margin: '8px 0' } },
+          h(
+            'select',
+            {
+              className: 'blm-select',
+              value: kind,
+              onChange: (event) => setKind(event.target.value),
+              'aria-label': '用量类型筛选',
+            },
+            h('option', { value: '' }, '全部类型'),
+            h('option', { value: 'lecture' }, '讲义'),
+            h('option', { value: 'tts' }, '配音'),
+            h('option', { value: 'image' }, '配图'),
+            h('option', { value: 'other' }, '其他'),
+          ),
+          h('div', { style: { flex: 1 } }),
+          h('button', { className: 'blm-btn', disabled: busy || !jobs.length, onClick: clearAll }, '清空历史'),
+        ),
+        jobs.length
+          ? h(
+              'div',
+              null,
+              jobs.map((job) =>
+                h(
+                  'button',
+                  {
+                    key: job.jobId,
+                    className: 'blm-btn',
+                    style: {
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      marginBottom: 6,
+                      padding: '8px 10px',
+                      whiteSpace: 'normal',
+                    },
+                    onClick: () => openDetail(job),
+                    title: job.jobId,
+                  },
+                  h(
+                    'div',
+                    { className: 'blm-row' },
+                    h('strong', null, usageKindLabel(job)),
+                    h('span', { className: 'blm-dim', style: { fontSize: 11 } }, String(job.startedAt || '').replace('T', ' ').slice(0, 16)),
+                    h('div', { style: { flex: 1 } }),
+                    h('span', null, formatMoney(job.actual && job.actual.cost)),
+                  ),
+                  h(
+                    'div',
+                    { className: 'blm-dim', style: { fontSize: 11, marginTop: 3 } },
+                    [job.book && job.book.title, job.series && job.series.title].filter(Boolean).join(' · ') || '(未归属)',
+                  ),
+                  h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 2 } }, usageSummaryLine(job)),
+                ),
+              ),
+            )
+          : h(
+              'div',
+              { className: 'blm-empty' },
+              h('strong', null, '还没有用量记录'),
+              h('div', null, '生成一次讲义、配音或配图后，这里会出现记录。'),
+              h('div', { className: 'blm-dim' }, '本地调用不写入账本。'),
+            ),
+        detail
+          ? h(
+              'div',
+              { className: 'blm-note', style: { marginTop: 10 } },
+              h(
+                'div',
+                { className: 'blm-row' },
+                h('strong', null, usageKindLabel(detail)),
+                h('div', { style: { flex: 1 } }),
+                h('button', { className: 'blm-btn', onClick: () => setDetail(null) }, '收起'),
+              ),
+              h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
+                String(detail.startedAt || '') + ' → ' + String(detail.finishedAt || '') + ' · ' + String(detail.status || '') +
+                ' · ' + String(detail.billing || '')),
+              h('div', { style: { fontSize: 12, marginTop: 4 } }, usageSummaryLine(detail)),
+              h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
+                '价格版本 ' + String(detail.priceVersion || '—') +
+                (detail.actual && detail.actual.charsSource === 'text' ? ' · 字符按码点回落' : '') +
+                (detail.actual && detail.actual.charsSource === 'provider' ? ' · 字符口径：云端' : '') +
+                (detail.actual && detail.actual.unknownPrice ? ' · 部分缺价' : '') +
+                (detail.actual && detail.actual.unknownUsage ? ' · 缺模型用量' : '')),
+              (detail.billingModel || []).map((item) =>
+                h('div', { key: item.provider + '/' + item.model, style: { fontSize: 11, marginTop: 2 } },
+                  item.provider + ' / ' + item.model + ' · ' + item.calls + ' 次 · ' +
+                  formatTokens((item.tokens && item.tokens.input) || 0) + ' 输入 · ' +
+                  (Number(item.tokens && item.tokens.cacheRead) ? formatTokens(item.tokens.cacheRead) + ' 缓存读 · ' : '') +
+                  formatTokens((item.tokens && item.tokens.output) || 0) + ' 输出 · ' + formatMoney(item.cost)),
+              ),
+              Object.keys(detail.byStage || {}).length
+                ? h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
+                    '分阶段：' + Object.keys(detail.byStage).map((key) => key + ' ' + formatMoney(detail.byStage[key].cost)).join(' · '))
+                : null,
+            )
+          : null,
+      );
+    }
+
+    function Settings({ onBack, notify, initial, onOpenUsage }) {
       const seed = initial && typeof initial === 'object' ? initial : {};
       const [settings, setSettings] = useState(seed.settings || null);
       const [voice, setVoice] = useState(seed.voice || null);
@@ -5566,6 +5905,86 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const [imageBusy, setImageBusy] = useState(false);
       const [imageMsg, setImageMsg] = useState('');
       const [imageTestUrl, setImageTestUrl] = useState('');
+      const [usageMonth, setUsageMonth] = useState(null);
+      const [usageTotal, setUsageTotal] = useState(null);
+      const [prices, setPrices] = useState(null);
+      const [pricesDraft, setPricesDraft] = useState('');
+      const [localProviders, setLocalProviders] = useState('');
+      const [usageMsg, setUsageMsg] = useState('');
+      const [usageBusy, setUsageBusy] = useState(false);
+
+      const loadUsage = useCallback(async () => {
+        const [monthOut, totalOut, priceOut] = await Promise.all([
+          api('/usage/summary?from=' + encodeURIComponent(monthStartIso())).catch(() => null),
+          api('/usage/summary').catch(() => null),
+          api('/usage/prices').catch(() => null),
+        ]);
+        if (monthOut) setUsageMonth(monthOut);
+        if (totalOut) setUsageTotal(totalOut);
+        if (priceOut && priceOut.prices) {
+          setPrices(priceOut.prices);
+          setPricesDraft(JSON.stringify(priceOut.prices.prices || [], null, 2));
+          setLocalProviders((priceOut.localProviders || []).join(', '));
+        }
+      }, []);
+
+      const savePrices = async (payload) => {
+        setUsageBusy(true);
+        setUsageMsg('');
+        try {
+          const out = await api('/usage/prices', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          setPrices(out.prices);
+          setPricesDraft(JSON.stringify(out.prices.prices || [], null, 2));
+          setLocalProviders((out.localProviders || []).join(', '));
+          setUsageMsg('价格表已保存');
+          await loadUsage();
+        } catch (err) {
+          setUsageMsg(err.message);
+        } finally {
+          setUsageBusy(false);
+        }
+      };
+
+      const saveDraftPrices = () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(pricesDraft || '[]');
+        } catch {
+          setUsageMsg('价格表不是合法 JSON');
+          return;
+        }
+        savePrices({
+          prices: parsed,
+          priceVersion: (prices && prices.priceVersion) || new Date().toISOString().slice(0, 10),
+          localProviders: localProviders
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean),
+        });
+      };
+
+      const clearUsage = async () => {
+        const ok = await confirmAction('清空全部用量历史？只删账本，不影响书、系列与音频。', {
+          title: '清空用量历史',
+          okText: '清空',
+          danger: true,
+        });
+        if (!ok) return;
+        setUsageBusy(true);
+        try {
+          const out = await api('/usage/jobs', { method: 'DELETE' });
+          setUsageMsg('已清空 ' + (Number(out.removed) || 0) + ' 条记录');
+          await loadUsage();
+        } catch (err) {
+          setUsageMsg(err.message);
+        } finally {
+          setUsageBusy(false);
+        }
+      };
 
       const loadSettings = useCallback(async () => {
         const [settingsOut, voiceOut, diagOut, imageOut] = await Promise.all([
@@ -5593,7 +6012,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             rate: Number(voiceOut.voice.rate) || 1,
           });
         }
-      }, []);
+        await loadUsage().catch(() => {});
+      }, [loadUsage]);
 
       useEffect(() => {
         let alive = true;
@@ -7062,6 +7482,93 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           h(
             'section',
             { className: 'blm-group' },
+            h('h3', null, '用量与费用'),
+            h(
+              'div',
+              { className: 'blm-dim', style: { fontSize: 11 } },
+              '只统计插件发起的云端调用；本地配音/配图与标记为「本地」的 LLM provider 不计入。',
+            ),
+            h(
+              'dl',
+              { className: 'blm-kv' },
+              h('dt', null, '本月'),
+              h(
+                'dd',
+                null,
+                usageMonth
+                  ? formatMoney(usageMonth.totals.cost) + ' · ' + usageMonth.totals.jobs + ' 次作业'
+                  : '—',
+              ),
+              h('dt', null, '累计'),
+              h(
+                'dd',
+                null,
+                usageTotal
+                  ? formatMoney(usageTotal.totals.cost) + ' · ' + usageTotal.totals.jobs + ' 次作业'
+                  : '—',
+              ),
+              h('dt', null, '本月 tokens'),
+              h(
+                'dd',
+                null,
+                usageMonth
+                  ? '输入 ' + formatTokens(usageMonth.totals.tokens.input) +
+                    (Number(usageMonth.totals.tokens.cacheRead) ? ' + 缓存读 ' + formatTokens(usageMonth.totals.tokens.cacheRead) : '') +
+                    ' / 输出 ' + formatTokens(usageMonth.totals.tokens.output)
+                  : '—',
+              ),
+              h('dt', null, '本月字符 / 图片'),
+              h(
+                'dd',
+                null,
+                usageMonth ? formatTokens(usageMonth.totals.chars) + ' 字符 · ' + usageMonth.totals.images + ' 张' : '—',
+              ),
+            ),
+            h(
+              'div',
+              { className: 'blm-field' },
+              h('span', { className: 'label' }, '价格表（JSON）'),
+              h('textarea', {
+                className: 'blm-select',
+                style: { width: '100%', minHeight: 90, fontFamily: 'monospace', fontSize: 11 },
+                value: pricesDraft,
+                disabled: usageBusy,
+                onChange: (event) => setPricesDraft(event.target.value),
+                'aria-label': '价格表 JSON',
+              }),
+            ),
+            h(
+              'div',
+              { className: 'blm-row' },
+              h('button', { className: 'blm-btn', disabled: usageBusy, onClick: saveDraftPrices }, usageBusy ? '保存中…' : '保存价格表'),
+              h('button', { className: 'blm-btn', disabled: usageBusy, onClick: () => savePrices({ reset: true }) }, '恢复参考价'),
+            ),
+            h(
+              'div',
+              { className: 'blm-field' },
+              h('span', { className: 'label' }, '本地 LLM provider'),
+              h('input', {
+                className: 'blm-select',
+                style: { width: '100%' },
+                value: localProviders,
+                placeholder: '逗号分隔，例如 ollama, lmstudio',
+                disabled: usageBusy,
+                onChange: (event) => setLocalProviders(event.target.value),
+                'aria-label': '本地 LLM provider',
+              }),
+            ),
+            h(
+              'div',
+              { className: 'blm-row', style: { marginTop: 6 } },
+              onOpenUsage ? h('button', { className: 'blm-btn', onClick: onOpenUsage }, '查看历史') : null,
+              h('button', { className: 'blm-btn', disabled: usageBusy, onClick: clearUsage }, '清空历史'),
+              prices && prices.source ? h('span', { className: 'blm-dim', style: { fontSize: 11 } }, prices.source === 'builtin' ? '参考价' : '自定义') : null,
+            ),
+            usageMsg ? h('div', { className: 'blm-note' }, usageMsg) : null,
+          ),
+          h(
+            'section',
+            { className: 'blm-group' },
             h('h3', null, '存储与回收站'),
             settings
               ? h(
@@ -7116,7 +7623,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                   h('dt', null, '插件包版本'),
                   h('dd', null, diagnostics.version || '—'),
                   h('dt', null, '产品版本'),
-                  h('dd', null, diagnostics.productVersion || '2.0'),
+                  h('dd', null, diagnostics.productVersion || '2.1'),
                   h('dt', null, 'schema'),
                   h('dd', null, String(diagnostics.schema || 2)),
                   h('dt', null, 'DSH 版本'),
@@ -7497,7 +8004,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                   loadBooks();
                 },
                 notify,
+                onOpenUsage: () => setView({ name: 'usage' }),
               })
+            : view.name === 'usage'
+              ? h(UsageView, {
+                  onBack: () => setView({ name: 'settings' }),
+                  notify,
+                })
             : view.name === 'player'
               ? h(Player, {
                   bookId: view.bookId,
@@ -7606,6 +8119,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         ChapterTree,
         ChapterSourceBadge,
         Settings,
+        UsageView,
         PracticePanel,
         ExportDialog,
         ImportPackageDialog,
@@ -7635,6 +8149,11 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         pdfTransform,
         isRenderCancelled,
         formatSize,
+        formatTokens,
+        formatMoney,
+        usageKindLabel,
+        usageSummaryLine,
+        monthStartIso,
         bindMenuDismiss,
         useLongPress,
         confirmAction,

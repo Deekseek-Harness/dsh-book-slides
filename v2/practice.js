@@ -43,9 +43,10 @@ import {
 import { loadBook, newId } from './books.js';
 import { findSeries } from './series.js';
 import { loadLecture, seriesChapterTexts } from './lectures.js';
-import { callModel } from './llm.js';
+import { callModel, resolveModel } from './llm.js';
 import { readJson, writeJson } from './root.js';
 import { recordError } from './errors.js';
+import { billingForLlm, runUsageJob } from './usage.js';
 
 export {
   PRACTICE_PROMPT_VERSION,
@@ -495,6 +496,7 @@ export async function explainQuestion({ seriesId, qid, picked = [], ctx = null, 
       maxTokens: 2000,
       timeoutMs: Number(options.timeoutMs) || 8000,
       signal: options.signal || null,
+      stage: 'practice',
     });
     const text = String((reply && reply.text) || '').trim();
     if (!text) throw new PracticeError('E_EXPLAIN_FAILED', '模型没有返回讲解', '');
@@ -695,7 +697,28 @@ export function startPracticeBankJob({ seriesId, chapters = null, topup = false,
   activeBySeries.set(job.seriesId, job);
   pruneJobs();
 
-  job.promise = runBankJob(job, found, scope, planned, topup === true, effectiveRounds, ctx, options).catch((err) => {
+  let billing = 'cloud';
+  try {
+    billing = billingForLlm(resolveModel(ctx).provider);
+  } catch {
+    /* 模型没选好时按云端（宁可多算） */
+  }
+  const loaded = loadBook(found.series.book_id);
+  job.usageBilling = billing;
+  job.usageJobId = job.jobId;
+  job.promise = runUsageJob(
+    {
+      jobId: job.jobId,
+      kind: 'other',
+      phase: 'practice',
+      billing,
+      book: { id: String(found.series.book_id), title: String((loaded && loaded.book && loaded.book.title) || '') },
+      series: { id: String(found.series.id), title: String(found.series.title || '') },
+      scope: { chapters: planned.map((chapter) => Number(chapter.n)) },
+    },
+    () => runBankJob(job, found, scope, planned, topup === true, effectiveRounds, ctx, options),
+    () => (job.status === 'cancelled' ? 'cancelled' : job.status === 'failed' ? 'failed' : 'done'),
+  ).catch((err) => {
     job.status = job.cancelled ? 'cancelled' : 'failed';
     job.stage = 'done';
     job.code = job.cancelled ? 'E_CANCELLED' : (err && err.code) || 'E_QZ_FAIL';
@@ -719,7 +742,7 @@ async function runBankJob(job, found, scope, planned, topup, roundCount, ctx, op
   const budgetMs = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5 * 60 * 1000;
   const deadline = Date.parse(job.startedAt) + budgetMs;
   const modelCall = (system, user, callOptions) =>
-    callModel(ctx, system, user, Object.assign({ signal: job.controller.signal }, callOptions || {}));
+    callModel(ctx, system, user, Object.assign({ signal: job.controller.signal, stage: 'practice' }, callOptions || {}));
   const prompt = promptText(PROMPT_FILE);
   const pages = scope.texts.pages;
   const failures = [];

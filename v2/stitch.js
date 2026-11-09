@@ -575,7 +575,7 @@ async function rewriteDuplicatePage({ ctx, previousDoc, currentDoc, pageIndex })
     '只输出 {"slides":[{...}]}，数组里只有这一页，不要解释。',
   ].join('\n');
   try {
-    const reply = await callModel(ctx, prompt, user, { maxTokens: 8000 });
+    const reply = await callModel(ctx, prompt, user, { maxTokens: 8000, stage: 'stitch' });
     const data = readJsonBlock(reply.text);
     const raw = Array.isArray(data.slides) ? data.slides[0] : data;
     const next = mergeRepairPage(page, raw, pageIndex);

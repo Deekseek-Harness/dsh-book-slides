@@ -146,6 +146,7 @@ export async function buildBriefs({ ctx, book, dir, chapters, force = false }) {
     try {
       reply = await callModel(ctx, prompt, attempt === 0 ? user : user + '\n\n上一次输出不合格：' + lastError + '\n只输出 JSON。', {
         maxTokens: 8000,
+        stage: 'briefs',
       });
     } catch (err) {
       return {

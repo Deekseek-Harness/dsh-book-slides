@@ -203,7 +203,7 @@ export function settingsPayload(ctx) {
     model: model,
     modelNote: model ? '当前使用 DSH 默认模型（只读）' : 'DSH 还没有选好默认模型',
     version: packageVersion(),
-    productVersion: '2.0',
+    productVersion: '2.1',
     schema: Number(meta.schema) || 2,
   };
 }
@@ -228,7 +228,7 @@ export function diagnosticsPayload() {
   }
   return {
     version: packageVersion(),
-    productVersion: '2.0',
+    productVersion: '2.1',
     schema: Number(meta.schema) || 2,
     dataRoot: ROOT,
     metaFile: META_FILE(),

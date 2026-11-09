@@ -3,13 +3,34 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
-## [Unreleased]
+## [2.1.0] - 2026-11-10
+
+**2.1 正式版**。在 2.0.0 基础上新增 AI 用量与费用统计（FR-27）；包名、数据根与 `schema=2` 不变，可覆盖安装 2.0.0。
+
+### 版本与环境
+
+- 包 `2.1.0`（tag `v2.1.0`）、产品 `2.1`、数据 schema `2`、文档 v1.22。
+- 无数据 schema 变更；已有书/系列/音频/配图/练习与 `usage/` 账本继续可用。
+- 回滚：重装 2.0.0 即可；`usage/` 是新增目录，不参与书档与 2.0 契约。
+
+### 新增
+
+- **FR-27 AI 用量与费用统计（2.1）**：插件自身云端调用的用量与费用账本。LLM 取流末 `usage`（输入/输出/缓存读/缓存写/推理），云端 TTS 按 `usage.characters` 计字符（缓存命中记 0，失败只记次数），云端生图按张；本地调用全局不计。新增 `usage/jobs/<jobId>.json` 账本、`usage/prices.json` 参考价与单价快照、`/usage/summary` `/usage/jobs` `/usage/job` `/usage/estimate` `/usage/prices` `DELETE /usage/jobs`；设置页「用量与费用」组与历史视图，讲义/配音/配图开始前预估确认、结束后「本次用量」摘要；启动归一 `running → interrupted`。
+- 口径：讲纲预览/保存（`phase='plan'`）与正文生成（`phase='generate'`）分开记账；练习/分章/试听计入「其他调用」；2.0 无云端生图 provider，本期只做本地不统计 + 接口预留。
+- 测试：新增 `test/v2-usage.test.mjs`（AC-159 ~ AC-165）与 `test/v2-usage-ui.test.mjs`（C15 静态走查），接入 `npm run test:v2`；AC-128 放宽为「AC-92 ~ AC-158 全有定义，允许追加」。
+
+### 修复
+
+- **`/usage/*` 线上 404**：路径只在 `v2/api.js` 的 `routeM1` 实现，`index.js` 的 `webServer` 未逐条注册，宿主不会转发请求；导致设置页历史为空、预估拿不到数据。已在 `index.js` 注册 `/usage/summary` `/usage/jobs` `/usage/job` `/usage/estimate` `/usage/prices`，并在 `test/v2-m4-routes.test.mjs` 增加宿主可达回归。
+- **LLM 金额显示「—」**：实际路由 `deepseek-official/deepseek-flash` 不在内置价表，`priceOf` 只做精确/provider 通配匹配；现在无精确价时按 provider 家族回落（`deepseek-official` → `deepseek`）。已产生的历史记录仍按当时快照显示「—」，新作业起按家族参考价估算。
+- **配音字符统计偏低（约 44%）**：此前按朗读稿码点数计费；实测 Qwen3-TTS 的 `usage.characters` 口径是汉字/数字约 2、ASCII/标点约 1（数字还可能按中文读法展开），同一 6 页作业云端 1456、插件 809。现在优先读 API 返回的 `usage.characters`，没有 `usage` 才回落码点并标 `charsSource='text'`；`/usage/estimate` 预估也改为同一口径（汉字/数字 2、ASCII/标点 1）。
+- **DeepSeek 参考价与分时价**：内置价表更新为 `deepseek-flash` / `deepseek-v4-pro` 的官方价（基础=空闲时段，`peak`=高峰），缓存命中价从 0.2 改为 0.02/0.04；按 `Asia/Shanghai` 工作日 9–12、14–18 取档。另修正 `completion_tokens` 已含 reasoning 时不再重复计输出价。
 
 ### 文档
 
-- **SRS v1.21：新增 FR-27 AI 用量与费用统计（P1，2.1 计划，未实现）**。只统计插件自身发起的云端调用（LLM tokens / 云端 TTS 字符 / 云端生图张数），本地调用全局不计；作业前预估、结束后结算、历史落盘与浏览。新增 `/usage/summary`、`/usage/jobs`、`/usage/job`、`/usage/estimate`、`/usage/prices`、`DELETE /usage/jobs` 接口契约，`usage/` 数据目录，设置「用量与费用」组与 C15 反馈，以及 AC-159 ~ AC-165、Q33–Q42 默认值。
+- **SRS v1.22：发布 FR-27 AI 用量与费用统计（P1，2.1，已实现）**。只统计插件自身发起的云端调用（LLM tokens / 云端 TTS 字符 / 云端生图张数），本地调用全局不计；作业前预估、结束后结算、历史落盘与浏览。新增 `/usage/summary`、`/usage/jobs`、`/usage/job`、`/usage/estimate`、`/usage/prices`、`DELETE /usage/jobs` 接口契约，`usage/` 数据目录，设置「用量与费用」组与 C15 反馈，以及 AC-159 ~ AC-165、Q33–Q42 默认值。
 - 口径：讲纲预览/保存（`kind='lecture'`、`phase='plan'`）与正文生成（`phase='generate'`）分开记账；练习/分章/试听计入「其他调用」，只进总账、历史默认折叠；2.0 无云端生图 provider，本期只做「本地生图不统计 + 接口预留」。
-- 版本一致性：README、需求索引、实现进度同步到 SRS v1.21；AC-128 的 AC 集合断言放宽为「AC-92 ~ AC-158 全有定义，允许后续版本追加」。
+- 版本一致性：README、需求索引、实现进度同步到 SRS v1.22；AC-128 的 AC 集合断言放宽为「AC-92 ~ AC-158 全有定义，允许后续版本追加」。
 
 ## [2.0.0] - 2026-11-09
 
