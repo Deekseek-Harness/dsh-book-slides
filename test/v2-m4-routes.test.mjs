@@ -9,6 +9,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
+import { makePdf } from './fixture.mjs';
+
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-routes-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
@@ -60,6 +62,32 @@ function makeWav(ms = 200) {
   buffer.write('data', 36);
   buffer.writeUInt32LE(size, 40);
   return buffer;
+}
+
+/** 按宿主注册表起一个最小服务：只认 exact 路由，未注册一律 404。 */
+function startHost() {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://localhost');
+    const hit =
+      registered.find((item) => item.kind === 'exact' && item.path === url.pathname) ||
+      registered.find(
+        (item) => item.kind === 'prefix' && (url.pathname === item.path || url.pathname.startsWith(item.path + '/')),
+      );
+    if (!hit) {
+      res.statusCode = 404;
+      res.end('no route');
+      return;
+    }
+    hit.handler(req, res);
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({
+        base: 'http://127.0.0.1:' + server.address().port,
+        close: () => new Promise((done) => server.close(done)),
+      });
+    });
+  });
 }
 
 test('M4 路由：偏好/进度/语音/设置/诊断/备份均由 2.0 接管', () => {
@@ -187,6 +215,67 @@ test('M4 路由：PDF 仍是前缀路由（pdf.js worker/cmaps 同源）', () =>
   const vendor = registered.find((item) => item.path === ROUTE_PREFIX + '/vendor/pdfjs');
   assert.ok(vendor, '缺少 pdf.js vendor 前缀路由');
   assert.equal(vendor.kind, 'prefix');
+});
+
+test('PDF 静态资源：vendor 前缀路由真能取到 pdf.min.mjs（回归 E_INTERNAL）', async () => {
+  const host = await startHost();
+  try {
+    const res = await fetch(host.base + ROUTE_PREFIX + '/vendor/pdfjs/build/pdf.min.mjs');
+    assert.equal(res.status, 200);
+    assert.match(String(res.headers.get('content-type') || ''), /javascript/, '必须是 JS，不能落到 JSON 错误处理器');
+    const text = await res.text();
+    assert.ok(text.length > 1000, 'pdf.min.mjs 应返回完整模块');
+    assert.ok(!text.includes('E_INTERNAL'), '不应返回错误处理器内容');
+  } finally {
+    await host.close();
+  }
+});
+
+test('P0 路由：1.x 单讲接口全部下线，2.0 不再注册同名旧路径', () => {
+  const paths = new Set(registered.map((item) => item.path));
+  const legacy = ['/reparse', '/toc/parse', '/generate', '/job', '/cancel', '/module', '/progress', '/delete'];
+  for (const item of legacy) {
+    assert.equal(paths.has(ROUTE_PREFIX + item), false, '1.x 路由不应再注册：' + item);
+  }
+  assert.ok(paths.has(ROUTE_PREFIX + '/toc/preview'), '/toc/preview 仍须由宿主注册');
+});
+
+test('P0 路由：/toc/preview 经宿主路由表由 2.0 处理（跨度 >40 页被拒）', async () => {
+  const host = await startHost();
+  try {
+    const pdf = makePdf(
+      Array.from({ length: 50 }, (_, i) => ['Page ' + (i + 1), 'body text ' + (i + 1)]),
+    );
+    const imported = await fetch(host.base + ROUTE_PREFIX + '/import', {
+      method: 'POST',
+      headers: { 'x-file-name': encodeURIComponent('五十页.pdf'), 'content-type': 'application/pdf' },
+      body: pdf,
+    });
+    const importedData = await imported.json();
+    assert.equal(importedData.ok, true, JSON.stringify(importedData));
+    const bookId = importedData.bookId;
+
+    const ok = await fetch(host.base + ROUTE_PREFIX + '/toc/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bookId, from: 1, to: 40 }),
+    });
+    const okData = await ok.json();
+    assert.equal(okData.ok, true, JSON.stringify(okData));
+    assert.ok(String(okData.preview).includes('Page 1'));
+
+    // 1.4 的处理器只校验 to <= 总页数，会放行 1..50；2.0 的跨度上限必须生效。
+    const tooWide = await fetch(host.base + ROUTE_PREFIX + '/toc/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bookId, from: 1, to: 50 }),
+    });
+    const tooWideData = await tooWide.json();
+    assert.equal(tooWideData.ok, false, '1.x 实现会放行 50 页范围；2.0 必须拒绝');
+    assert.equal(tooWideData.code, 'E_BAD_RANGE');
+  } finally {
+    await host.close();
+  }
 });
 
 test.after(() => {

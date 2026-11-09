@@ -17,7 +17,7 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-comfy-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const comfy = await import('../comfy.js');
+const comfy = await import('../lib/comfy.js');
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 

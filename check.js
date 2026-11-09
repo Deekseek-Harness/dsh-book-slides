@@ -21,9 +21,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { extractPages } from './pdfread.js';
-import { CHAPTER_RE, buildChapters, chapterNumberOf, cleanPages } from './text.js';
-import { calibrate, chaptersFromToc, suggestTocRange, tocTextOf, verifyChapters } from './tocparse.js';
+import { extractPages } from './lib/pdfread.js';
+import { CHAPTER_RE, buildChapters, chapterNumberOf, cleanPages } from './lib/text.js';
+import { calibrate, chaptersFromToc, suggestTocRange, tocTextOf, verifyChapters } from './lib/tocparse.js';
 
 /* ------------------------------ 书签 ------------------------------ */
 

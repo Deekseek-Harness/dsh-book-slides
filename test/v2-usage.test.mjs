@@ -15,15 +15,15 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-usage-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries } = await import('../v2/series.js');
-const { writeLectureOutputs, lectureDir } = await import('../v2/lectures.js');
-const usage = await import('../v2/usage.js');
-const { estimateUsage } = await import('../v2/usage-estimate.js');
-const { callModel } = await import('../v2/llm.js');
-const { synthesizeVoicing, writeVoiceConfig } = await import('../tts.js');
-const { routeM1 } = await import('../v2/api.js');
+const { createBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries } = await import('../host/series.js');
+const { writeLectureOutputs, lectureDir } = await import('../host/lectures.js');
+const usage = await import('../host/usage.js');
+const { estimateUsage } = await import('../host/usage-estimate.js');
+const { callModel } = await import('../host/llm.js');
+const { synthesizeVoicing, writeVoiceConfig } = await import('../lib/tts.js');
+const { routeM1 } = await import('../host/api.js');
 
 /* ------------------------------ 假模型 ------------------------------ */
 

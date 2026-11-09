@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import yauzl from 'yauzl';
 
-import { AUDIO_ICON_PATH, buildPptxBuffer, buildTimingXml, coverCrop } from '../pptx.js';
+import { AUDIO_ICON_PATH, buildPptxBuffer, buildTimingXml, coverCrop } from '../lib/pptx.js';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-pptx-'));
 const WAV = path.join(TMP, 'tone.wav');

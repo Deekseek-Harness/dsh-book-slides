@@ -56,8 +56,8 @@ if (!args.series && !args.book) {
 
 const root = resolveRoot(args.root);
 process.env.DSH_BOOK_SLIDES_ROOT = root;
-const { findSeries, listSeries } = await import('../v2/series.js');
-const { buildStitchReport } = await import('../v2/stitch.js');
+const { findSeries, listSeries } = await import('../host/series.js');
+const { buildStitchReport } = await import('../host/stitch.js');
 
 function snapshot(found) {
   const report = buildStitchReport(found);

@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const source = fs.readFileSync(new URL('../v2/client.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../client/index.js', import.meta.url), 'utf8');
 const React = require('react');
 const { renderToString } = require('react-dom/server');
 
@@ -35,7 +35,7 @@ globalThis.window = {
     },
   },
 };
-await import('../v2/client.js');
+await import('../client/index.js');
 
 const helpers = clientModule.__helpers;
 const components = clientModule.__components;

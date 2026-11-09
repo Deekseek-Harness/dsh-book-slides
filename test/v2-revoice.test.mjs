@@ -14,12 +14,12 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-revoice-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../v2/series.js');
-const { writeLectureOutputs, loadLecture } = await import('../v2/lectures.js');
-const { startRevoiceJob, getRevoiceJob, cancelRevoiceJob, findAudioFile } = await import('../v2/voice.js');
-const { routeM1 } = await import('../v2/api.js');
+const { createBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../host/series.js');
+const { writeLectureOutputs, loadLecture } = await import('../host/lectures.js');
+const { startRevoiceJob, getRevoiceJob, cancelRevoiceJob, findAudioFile } = await import('../host/voice.js');
+const { routeM1 } = await import('../host/api.js');
 
 /* ------------------------------ 假 Qwen 端点 ------------------------------ */
 

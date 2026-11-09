@@ -1,6 +1,6 @@
 # 逐讲生成（lecture-v1）
 
-> 版本：`lec-v1`。改这里必须同步改 `v2/generate.js` 的 `LECTURE_PROMPT_VERSION`，否则批检查点会命中旧结果。
+> 版本：`lec-v1`。改这里必须同步改 `host/generate.js` 的 `LECTURE_PROMPT_VERSION`，否则批检查点会命中旧结果。
 > 从「## 角色」开始送给模型。
 
 ## 角色

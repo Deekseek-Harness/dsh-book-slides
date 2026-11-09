@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const React = require('react');
 const { renderToString } = require('react-dom/server');
-const source = fs.readFileSync(new URL('../v2/client.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../client/index.js', import.meta.url), 'utf8');
 
 let clientModule = null;
 globalThis.window = {
@@ -33,7 +33,7 @@ globalThis.window = {
     },
   },
 };
-await import('../v2/client.js');
+await import('../client/index.js');
 
 test('设置页：用量与费用组（本月/累计、价格表、本地 provider、历史入口）', () => {
   const html = renderToString(

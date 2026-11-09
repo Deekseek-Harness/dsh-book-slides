@@ -13,8 +13,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readBriefs, validateBrief } from '../v2/briefs.js';
-import { chapterTextOf } from '../v2/parts.js';
+import { readBriefs, validateBrief } from '../host/briefs.js';
+import { chapterTextOf } from '../host/parts.js';
 
 function parseArgs(argv) {
   const out = { book: '', dir: '', root: '', json: false };

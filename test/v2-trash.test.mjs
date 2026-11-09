@@ -14,8 +14,8 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-trash-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook } = await import('../v2/books.js');
-const { routeM1 } = await import('../v2/api.js');
+const { createBook } = await import('../host/books.js');
+const { routeM1 } = await import('../host/api.js');
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');

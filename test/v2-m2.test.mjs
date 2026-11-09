@@ -11,10 +11,10 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-m2-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, loadBook, writeChapters } = await import('../v2/books.js');
-const { savePart, listParts, updatePart, deletePart } = await import('../v2/parts.js');
-const { buildPlan } = await import('../v2/plan.js');
-const { createSeries, savePlan } = await import('../v2/series.js');
+const { createBook, loadBook, writeChapters } = await import('../host/books.js');
+const { savePart, listParts, updatePart, deletePart } = await import('../host/parts.js');
+const { buildPlan } = await import('../host/plan.js');
+const { createSeries, savePlan } = await import('../host/series.js');
 
 function makeBook() {
   const rawPages = [];

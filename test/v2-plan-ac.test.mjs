@@ -16,10 +16,10 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-plan-ac-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, loadBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { buildPlan } = await import('../v2/plan.js');
-const { createSeries } = await import('../v2/series.js');
+const { createBook, loadBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { buildPlan } = await import('../host/plan.js');
+const { createSeries } = await import('../host/series.js');
 
 // 每章 5 万字：规则讲纲会拆成 2 讲（50k + 50k 超过 8 万硬上限），便于核对“降级后仍覆盖全部章”
 const T1 = '第1章 通道\n4.1 CSP 是什么\n' + '甲'.repeat(50000);

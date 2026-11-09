@@ -13,7 +13,7 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-session-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const practice = await import('../practice.js');
+const practice = await import('../lib/practice.js');
 
 const CHAPTER = { n: 3, from: 10, to: 20, title: '第三章 测试', chars: 500 };
 

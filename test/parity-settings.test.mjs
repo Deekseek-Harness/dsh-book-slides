@@ -21,12 +21,12 @@ const require = createRequire(import.meta.url);
 const React = require('react');
 const { renderToString } = require('react-dom/server');
 
-const { createBook, writeChapters, loadBook } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../v2/series.js');
-const { writeLectureOutputs } = await import('../v2/lectures.js');
-const { writePreference, readPreference } = await import('../v2/prefs.js');
-const { routeM1 } = await import('../v2/api.js');
+const { createBook, writeChapters, loadBook } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../host/series.js');
+const { writeLectureOutputs } = await import('../host/lectures.js');
+const { writePreference, readPreference } = await import('../host/prefs.js');
+const { routeM1 } = await import('../host/api.js');
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
@@ -358,7 +358,7 @@ globalThis.window = {
     },
   },
 };
-await import('../v2/client.js');
+await import('../client/index.js');
 
 test.after(() => {
   server.close();

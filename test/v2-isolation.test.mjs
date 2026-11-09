@@ -20,8 +20,8 @@ const ROOT = path.join(PARENT, 'book-slides');
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { ensureRoot } = await import('../v2/root.js');
-const { routeM1 } = await import('../v2/api.js');
+const { ensureRoot } = await import('../host/root.js');
+const { routeM1 } = await import('../host/api.js');
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
@@ -157,6 +157,6 @@ test('AC-113：rename 被占用 / 只读阻断 → 同错误码，原根不动�
 });
 
 test('AC-113：升级路径不依赖模型（root.js 无 llm/tts 依赖）', () => {
-  const src = fs.readFileSync(new URL('../v2/root.js', import.meta.url), 'utf8');
+  const src = fs.readFileSync(new URL('../host/root.js', import.meta.url), 'utf8');
   assert.equal(/from\s+'\.\.\/(llm|tts|voice|comfy-clone)\.js'/.test(src), false, '数据根升级不得引入模型/语音模块');
 });

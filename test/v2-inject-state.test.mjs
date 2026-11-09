@@ -16,12 +16,12 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-inject-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, loadBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries, findSeries, persistSeries } = await import('../v2/series.js');
-const { writeLectureOutputs } = await import('../v2/lectures.js');
+const { createBook, loadBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries, findSeries, persistSeries } = await import('../host/series.js');
+const { writeLectureOutputs } = await import('../host/lectures.js');
 const { inject, listSeriesDirs } = await import('../scripts/inject-player-state.mjs');
-const { routeM1 } = await import('../v2/api.js');
+const { routeM1 } = await import('../host/api.js');
 
 const T1 = '第1章 甲\n' + '甲'.repeat(5000);
 const T2 = '第2章 乙\n' + '乙'.repeat(5000);

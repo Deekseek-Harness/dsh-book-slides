@@ -12,13 +12,13 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-m3-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, loadBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries, findSeries } = await import('../v2/series.js');
-const { startSeriesJob, startLectureJob, reconcileAllSeries } = await import('../v2/generate.js');
-const { buildStitchReport, repairStitch, duplicateRate } = await import('../v2/stitch.js');
-const { loadLecture, writeLectureOutputs, writeLectureMeta } = await import('../v2/lectures.js');
-const { writeJson } = await import('../v2/root.js');
+const { createBook, loadBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries, findSeries } = await import('../host/series.js');
+const { startSeriesJob, startLectureJob, reconcileAllSeries } = await import('../host/generate.js');
+const { buildStitchReport, repairStitch, duplicateRate } = await import('../host/stitch.js');
+const { loadLecture, writeLectureOutputs, writeLectureMeta } = await import('../host/lectures.js');
+const { writeJson } = await import('../host/root.js');
 
 const SEAM = '上一讲把函数当机器；这一讲只问靠近某点时输出去哪。';
 

@@ -15,10 +15,10 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-voice-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries, findSeries } = await import('../v2/series.js');
-const { routeM1 } = await import('../v2/api.js');
+const { createBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries, findSeries } = await import('../host/series.js');
+const { routeM1 } = await import('../host/api.js');
 
 const SEAM = '上一讲把函数当机器；这一讲只问靠近某点时输出去哪。';
 const ctl = { delay: 0, failLecture: 0 };

@@ -14,13 +14,13 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-pptx-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../v2/series.js');
-const { writeLectureOutputs } = await import('../v2/lectures.js');
-const { buildFileName, stripLecturePrefix } = await import('../v2/pptx.js');
-const { inspectZip, readEntryBuffer } = await import('../pkgzip.js');
-const { routeM1 } = await import('../v2/api.js');
+const { createBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../host/series.js');
+const { writeLectureOutputs } = await import('../host/lectures.js');
+const { buildFileName, stripLecturePrefix } = await import('../host/pptx.js');
+const { inspectZip, readEntryBuffer } = await import('../lib/pkgzip.js');
+const { routeM1 } = await import('../host/api.js');
 
 /** 最小合法 WAV：22.05kHz 单声道 16bit，1 秒静音。 */
 function wavBuffer(seconds = 1) {

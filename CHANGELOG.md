@@ -3,6 +3,35 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.1.1] - 2026-11-10
+
+**清理版**。无功能、数据 schema、HTTP 契约变更，可直接覆盖安装 2.1.0；本次只做 1.x 代码/测试下线、目录与共享内核收口，并修复一处 pdf.js 静态资源回归。
+
+### 版本与环境
+
+- 包 `2.1.1`（tag `v2.1.1`）、产品 `2.1`、数据 schema `2`、文档 v1.22。
+- 无 schema / 接口变更；已有书/系列/音频/配图/练习与 `usage/` 账本继续可用。
+
+### 修复
+
+- **pdf.js 静态资源 `E_INTERNAL`（阻断）**：P1 删除不可达函数时，把夹在死函数与 `handlePdfjsAsset` 之间的 `PDFJS_ASSET_TYPES` / `PDFJS_ALLOWED_DIRS` 两个常量一并删除，导致 `/vendor/pdfjs/*` 返回 200 JSON 错误、播放器动态 import `build/pdf.min.mjs` 失败、PDF 原文打不开。已恢复常量，并在 `test/v2-m4-routes.test.mjs` 增加经宿主前缀路由真实取 `build/pdf.min.mjs` 的回归（断言 200 / JS / 非 `E_INTERNAL`）。
+- **路由归属收口（P0）**：`/toc/preview` 改由 2.0 处理，修复宿主路由表把请求交给 1.x 实现、导致 2.0 的「跨度 ≤40 页」校验在线上不生效的问题。下线 1.x 单讲/目录/进度接口 `/reparse` `/toc/parse` `/generate` `/job` `/cancel` `/module` `/progress`，以及 2.0 没有分支的 `/delete`（删书走 `DELETE /book`，删系列走 `DELETE /series`）。`test/v2-m4-routes.test.mjs` 增加「旧路径不再注册」与「`/toc/preview` 经宿主路由表由 2.0 处理、50 页跨度被拒」两条回归。
+
+### 移除
+
+- **1.x 代码与旧套件清理（P1）**：删除 1.x 面板 `client.js`、数据层 `store.js`、单讲生成 `generate.js`、配图 `imaging.js`、书档 `package.js` 与 `pptexport.js`；`index.js` 从 3040 行降到 464 行（删除 78 个不可达函数、约 2300 行），启动期只保留 2.0 的作业归一（不再扫 1.x `modules/`）。共享内核改由 `lib/fs.js` 提供数据根/原子写/JSON/id，`host/root.js` 复用之，不再有两份 `resolveRoot`。
+- `npm test` 改为 2.x 门禁（等同 `test:v2`）；1.x 旧套件删除，仍有效的纯函数测试（分章/PDF/目录/幻灯片/对照/TTS/ComfyUI/PPTX/练习调度）并入 `test:v2`。删除未引用的 `locale/*.json`，并从 `package.json` 的 `files` 去掉已删文件。
+
+### 变更
+
+- **共享内核迁入 `lib/`（P2）**：`text/tocparse/pdfread/slides/tts/comfy/practice/pptx/pkgzip/cover` 从根目录迁入 `lib/`，host、client、宿主与测试统一从 `lib/` 引用；`comfy` 的默认工作流路径与 `pptx` 的模板/图标路径同步改为 `../workflows`、`../assets`。清理各模块已无外部/内部引用的导出（`DEFAULT_VOICE`、`WORKFLOW_MAX_BYTES`、`hasCustomWorkflow`、`SLIDES_PROMPT_VERSION`、`withImagePlaceholders`、`summarize`、`findRunningPractice`、`startPracticeGeneration`、`applyExplanation`、`readExplainCache`、`writeExplainCache`）及其连带死函数。
+- **文档归档**：README 的 1.x 使用说明（约 210 行）移到 [doc/legacy-1.x.md](doc/legacy-1.x.md)，README 只留归档入口；1.x SRS 顶部标注归档。
+- **目录收口**：`v2/` 拆为 `host/`（27 个 Node 侧实现）与 `client/index.js`（浏览器面板）；`package.json` 的 `exports['./client']`、`files`、测试/脚本/文档引用全部改指新路径。历史 CHANGELOG 条目里的 `v2/...` 保留为当时的发布记录。
+
+### 已知问题
+
+- **配音 + 配图并发写回会互相覆盖元数据**：两个作业都持有启动时的 `slides.json` / `series.json` 快照并整文件写回；配图作业后写时会抹掉 `audio_file` 与 `voice_status`，表现为重新进入播放/系列页显示“未配音”，但 `audio/` 文件仍在、重新配音必然缓存命中。计划在后续版本改为读-改-写并按字段合并（配图只写 `image_*`，配音只写 `audio_*` / `voice_*`），并补并发回归。
+
 ## [2.1.0] - 2026-11-10
 
 **2.1 正式版**。在 2.0.0 基础上新增 AI 用量与费用统计（FR-27）；包名、数据根与 `schema=2` 不变，可覆盖安装 2.0.0。

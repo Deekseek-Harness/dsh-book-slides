@@ -4,7 +4,7 @@
  *
  *   npm run verify:plugin
  *
- * 只读 package.json 与 v2/api.js / v2/client.js，不启动服务、不改数据；退出码 0/1。
+ * 只读 package.json 与 host/api.js / client/index.js，不启动服务、不改数据；退出码 0/1。
  * “插件列表只有一个「精讲」”属于真机安装行为，脚本只保证包身份与入口唯一，UI 部分列人工边界。
  */
 import fs from 'node:fs';
@@ -31,14 +31,14 @@ check('版本是合法 2.x SemVer（正式版或预发布）', /^2\.\d+\.\d+(?:-
 check('没有第二包名/并存模式声明', !pkg.dsh || !pkg.dsh.standalone, 'dsh 字段');
 
 const clientExport = String((pkg.exports && pkg.exports['./client']) || '');
-check('客户端入口指向 2.0 面板', clientExport.endsWith('v2/client.js'), clientExport || '（缺）');
+check('客户端入口指向 2.x 面板', clientExport.endsWith('client/index.js'), clientExport || '（缺）');
 check('不再导出 1.x 面板入口', !Object.values(pkg.exports || {}).some((value) => String(value) === './client.js'));
 
-const api = read('v2/api.js');
+const api = read('host/api.js');
 check('路由前缀固定 /dsh-book-slides', /const PREFIX = '\/dsh-book-slides'/.test(api));
 check('2.0 没有 1.x 旧前缀', !/['"]\/book-slides\//.test(api));
 
-const client = read('v2/client.js');
+const client = read('client/index.js');
 check('客户端只注册一个面板入口', (client.match(/__ModuleLoader__/g) || []).length === 1);
 check('没有 1.x 面板残留标记', !/bookSlidesPanelV1|1\.x 面板/.test(client));
 

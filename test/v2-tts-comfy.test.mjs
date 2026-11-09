@@ -13,17 +13,17 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-clone-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { ensureRoot } = await import('../v2/root.js');
+const { ensureRoot } = await import('../host/root.js');
 ensureRoot();
-const { writeImageConfig } = await import('../comfy.js');
-const { createBook, writeChapters } = await import('../v2/books.js');
-const { savePart } = await import('../v2/parts.js');
-const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../v2/series.js');
-const { writeLectureOutputs } = await import('../v2/lectures.js');
-const { getRevoiceJob } = await import('../v2/voice.js');
-const { reconcileVoiceJobs } = await import('../v2/voice.js');
-const { routeM1 } = await import('../v2/api.js');
-const { applyCloneInputs, refTablePayload } = await import('../v2/comfy-clone.js');
+const { writeImageConfig } = await import('../lib/comfy.js');
+const { createBook, writeChapters } = await import('../host/books.js');
+const { savePart } = await import('../host/parts.js');
+const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../host/series.js');
+const { writeLectureOutputs } = await import('../host/lectures.js');
+const { getRevoiceJob } = await import('../host/voice.js');
+const { reconcileVoiceJobs } = await import('../host/voice.js');
+const { routeM1 } = await import('../host/api.js');
+const { applyCloneInputs, refTablePayload } = await import('../host/comfy-clone.js');
 
 const REF_TEXT = fs
   .readFileSync(new URL('../workflows/qwen3-tts-通过克隆配音/qwen3-tts-1.7B_vivian.txt', import.meta.url), 'utf8')

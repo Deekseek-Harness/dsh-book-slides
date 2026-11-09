@@ -13,8 +13,8 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-toc-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook } = await import('../v2/books.js');
-const { buildBookChapters } = await import('../v2/chapters.js');
+const { createBook } = await import('../host/books.js');
+const { buildBookChapters } = await import('../host/chapters.js');
 
 function fakeCtx(entries) {
   let calls = 0;

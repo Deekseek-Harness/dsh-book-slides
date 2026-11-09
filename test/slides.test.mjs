@@ -28,7 +28,7 @@ import {
   planBatches,
   validateSlideSet,
   validateSlides,
-} from '../slides.js';
+} from '../lib/slides.js';
 
 const PAGES = [
   { page: 1, text: '第一章 开始\n导演的工作，远不止喊一声「开机」。\n这是第一段的文字，用来做锚点测试。' },

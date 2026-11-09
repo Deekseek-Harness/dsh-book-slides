@@ -16,11 +16,11 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-briefs-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const { createBook, loadBook, writeChapters } = await import('../v2/books.js');
-const { buildBriefs, fallbackBrief, readBriefs, validateBrief } = await import('../v2/briefs.js');
-const { buildPlan } = await import('../v2/plan.js');
-const { savePart } = await import('../v2/parts.js');
-const { routeM1 } = await import('../v2/api.js');
+const { createBook, loadBook, writeChapters } = await import('../host/books.js');
+const { buildBriefs, fallbackBrief, readBriefs, validateBrief } = await import('../host/briefs.js');
+const { buildPlan } = await import('../host/plan.js');
+const { savePart } = await import('../host/parts.js');
+const { routeM1 } = await import('../host/api.js');
 
 const T1 = '第1章 通道\n4.1 CSP 是什么\n' + '甲'.repeat(2000) + '\n4.2 通道有哪些应用\n' + '乙'.repeat(2000);
 const T2 = '第2章 接口\n5.1 Go 接口与 C++接口有何异同\n' + '丙'.repeat(2000);

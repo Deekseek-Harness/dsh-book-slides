@@ -15,7 +15,7 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-tts-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 delete process.env.DSH_HOME;
 
-const tts = await import('../tts.js');
+const tts = await import('../lib/tts.js');
 
 const ENDPOINT = 'https://qwen.test/tts';
 process.env.DSH_BOOK_SLIDES_QWEN_ENDPOINT = ENDPOINT;

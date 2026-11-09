@@ -24,7 +24,7 @@ import {
   suggestTocRange,
   validateEntries,
   verifyChapters,
-} from '../tocparse.js';
+} from '../lib/tocparse.js';
 
 /* ----------------------------- 合成数据 ----------------------------- */
 
@@ -321,7 +321,7 @@ test('真书：目录读对之后，边界和标题都对', async (t) => {
 });
 
 test('目录原文：引导点压掉，长目录不截断', async () => {
-  const { tocTextOf, squeezeDots } = await import('../tocparse.js');
+  const { tocTextOf, squeezeDots } = await import('../lib/tocparse.js');
   assert.equal(squeezeDots('第 1 章 函数 · · · · · · · 1'), '第 1 章 函数 1');
   assert.equal(squeezeDots('1.1 函数· · · · · · · · · · · · 1'), '1.1 函数 1');
 
@@ -342,7 +342,7 @@ test('目录原文：引导点压掉，长目录不截断', async () => {
   assert.equal((out.text.match(/第 \d+ 章/g) || []).length, count, count + ' 条章标题一条都不能少');
 });
 test('目录原文：超过上限时明确标出被截断', async () => {
-  const { tocTextOf, TOC_TEXT_LIMIT } = await import('../tocparse.js');
+  const { tocTextOf, TOC_TEXT_LIMIT } = await import('../lib/tocparse.js');
   const lines = [];
   for (let i = 0; i < 3000; i += 1) lines.push('第 ' + (i + 1) + ' 章 一个很长很长很长很长很长的章节标题 · · · · · ' + (i + 1));
   const out = tocTextOf([{ page: 1, text: lines.join('\n') }], 1, 1);
@@ -351,7 +351,7 @@ test('目录原文：超过上限时明确标出被截断', async () => {
 });
 
 test('buildTocMessages：截断时给模型一句提醒，不截断时没有', async () => {
-  const { buildTocMessages } = await import('../tocparse.js');
+  const { buildTocMessages } = await import('../lib/tocparse.js');
   const small = buildTocMessages({ promptFile: 'S', book: { title: '书' }, pages: [{ page: 1, text: '第 1 章 甲 1\n第 2 章 乙 5' }], from: 1, to: 1 });
   assert.equal(small.truncated, false);
   assert.doesNotMatch(small.user, /被截断/);
@@ -363,7 +363,7 @@ test('buildTocMessages：截断时给模型一句提醒，不截断时没有', a
   assert.match(big.user, /被截断/);
 });
 test('偏移信任判据：压倒性众数就算占比五成也信', async () => {
-  const { isTrustedOffset } = await import('../tocparse.js');
+  const { isTrustedOffset } = await import('../lib/tocparse.js');
   // 《普林斯顿微积分读本》实测：22 有 309 票，第二名 6 票，占比 51.6%
   assert.equal(isTrustedOffset({ offset: 22, share: 0.516, samples: 599, mode: 309, second: 6 }), true);
   // 噪声均匀、没有明显众数 → 不信
@@ -374,7 +374,7 @@ test('偏移信任判据：压倒性众数就算占比五成也信', async () =>
 });
 
 test('标题命中：章号对不上的行一律不认', async () => {
-  const { pageHasTitle } = await import('../tocparse.js');
+  const { pageHasTitle } = await import('../lib/tocparse.js');
   const page = '第 18 章 积分的方法 I\n让我们开始发展一套求反导数的技巧.';
   assert.equal(pageHasTitle(page, '第 18 章 积分的方法 I'), true);
   assert.equal(pageHasTitle(page, '第 19 章 积分的方法 II'), false, '只差两个字也必须拒');
@@ -383,7 +383,7 @@ test('标题命中：章号对不上的行一律不认', async () => {
 });
 
 test('标题命中：英文「N. 标题」与折成两行的长标题', async () => {
-  const { pageHasTitle } = await import('../tocparse.js');
+  const { pageHasTitle } = await import('../lib/tocparse.js');
   assert.equal(pageHasTitle('CHAPTER 2\nauto\nIn concept, auto is as simple', '2. auto'), true);
   assert.equal(pageHasTitle('CHAPTER 8\nTweaks\nFor every general technique', '8. Tweaks'), true);
   assert.equal(
@@ -397,7 +397,7 @@ test('标题命中：英文「N. 标题」与折成两行的长标题', async ()
 });
 
 test('校准：跳过目录页，不会把第 1 章钉在目录页上', async () => {
-  const { calibrate } = await import('../tocparse.js');
+  const { calibrate } = await import('../lib/tocparse.js');
   const body = '正文'.repeat(80) + '。';
   const pages = [];
   // 第 1–2 页是目录，上面印着第 1 章的标题
@@ -423,7 +423,7 @@ test('校准：跳过目录页，不会把第 1 章钉在目录页上', async ()
   assert.equal(noSkip.entries[0].physical, 1, '不跳过时会被目录页骗到第 1 页（这就是原先的 bug）');
 });
 test('标题命中：分卷页不是章的标题页', async () => {
-  const { pageHasTitle } = await import('../tocparse.js');
+  const { pageHasTitle } = await import('../lib/tocparse.js');
   const partPage = '第 1 章 逃逸分析\n第 1 部分\n语 言 基 础';
   assert.equal(pageHasTitle(partPage, '第 1 章 逃逸分析'), false, '分卷页列着章名，不能当锚点');
 
@@ -432,14 +432,14 @@ test('标题命中：分卷页不是章的标题页', async () => {
 });
 
 test('标题命中：两三个字的短标题不容错', async () => {
-  const { pageHasTitle } = await import('../tocparse.js');
+  const { pageHasTitle } = await import('../lib/tocparse.js');
   // 「前言」两个字的标题容一个字就等于随便撞，会把后面所有章推出搜索范围
   assert.equal(pageHasTitle('接口定义如下，这是一段正文。', '前言'), false);
   assert.equal(pageHasTitle('前 言\n本书写给……', '前言'), true);
 });
 
 test('标题命中：页面上没有这一章的章号时，不许只凭标题后缀抢锚点', async () => {
-  const { pageHasTitle } = await import('../tocparse.js');
+  const { pageHasTitle } = await import('../lib/tocparse.js');
   // 《导演创作完全手册》第 31 章标题页（OCR 把「第31章」认成「第3章」），
   // 末尾是「开机之前」；不能让它把第 32 章「开机」抢到这一页（实测提前 3 页）。
   const prevChapterPage = '第3章\n开机之前\n31.1 装配布景';
@@ -451,7 +451,7 @@ test('标题命中：页面上没有这一章的章号时，不许只凭标题�
 });
 
 test('回放：只信 printed，存下来的 physical 一律重算', async () => {
-  const { replayToc } = await import('../tocparse.js');
+  const { replayToc } = await import('../lib/tocparse.js');
   const body = '正文'.repeat(80) + '。';
   const pages = [];
   for (let p = 1; p <= 12; p += 1) {

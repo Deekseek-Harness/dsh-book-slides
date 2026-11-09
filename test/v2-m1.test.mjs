@@ -10,7 +10,7 @@ import path from 'node:path';
 import http from 'node:http';
 
 import { makePdf, makePdfWithOutline } from './fixture.mjs';
-import { coverSvg, hueOf, normalizeHue } from '../cover.js';
+import { coverSvg, hueOf, normalizeHue } from '../lib/cover.js';
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-m1-'));
 const LEGACY = path.join(ROOT, 'legacy-root');
@@ -21,8 +21,8 @@ fs.writeFileSync(path.join(LEGACY, 'books', 'oldbook1', 'pages.json'), '[{"page"
 process.env.DSH_BOOK_SLIDES_ROOT = LEGACY;
 delete process.env.DSH_HOME;
 
-const { ensureRoot } = await import('../v2/root.js');
-const { routeM1 } = await import('../v2/api.js');
+const { ensureRoot } = await import('../host/root.js');
+const { routeM1 } = await import('../host/api.js');
 
 const upgraded = ensureRoot();
 const server = http.createServer(async (req, res) => {

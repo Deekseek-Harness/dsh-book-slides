@@ -17,7 +17,7 @@ import { makePdf } from './fixture.mjs';
 /* --------------------------------- 行重建 -------------------------------- */
 
 test('linesOfItems：双栏页不会把左右栏拼成一行', async () => {
-  const { linesOfItems } = await import('../pdfread.js');
+  const { linesOfItems } = await import('../lib/pdfread.js');
   // 左栏 x≈40，右栏 x≈260；同一基线上的左右两栏如果按 y 硬并，就会拼成一锅粥
   const items = [
     { str: '第一章 起点 1', transform: [1, 0, 0, 1, 40, 700], width: 90 },
@@ -38,7 +38,7 @@ test('linesOfItems：双栏页不会把左右栏拼成一行', async () => {
 });
 
 test('linesOfItems：行尾页码跟着本行，不会跑到下一行前面', async () => {
-  const { linesOfItems } = await import('../pdfread.js');
+  const { linesOfItems } = await import('../lib/pdfread.js');
   const items = [
     { str: '9.7 扩展和分解脚本', transform: [1, 0, 0, 1, 40, 356.2], width: 88 },
     { str: '146', transform: [1, 0, 0, 1, 132, 356.7], width: 20 },
@@ -52,7 +52,7 @@ test('linesOfItems：行尾页码跟着本行，不会跑到下一行前面', as
 /* --------------------------------- 文本 --------------------------------- */
 
 test('isChapterLine：认标题，不认正文句子', async () => {
-  const { isChapterLine, isPartLine } = await import('../text.js');
+  const { isChapterLine, isPartLine } = await import('../lib/text.js');
   const good = [
     '第一章 电影导演',
     '第 12 章 收尾',
@@ -84,7 +84,7 @@ test('isChapterLine：认标题，不认正文句子', async () => {
 });
 
 test('cleanPages：去页眉页脚、去页码行、合软换行', async () => {
-  const { cleanPages } = await import('../text.js');
+  const { cleanPages } = await import('../lib/text.js');
   const pages = [];
   for (let i = 1; i <= 6; i += 1) {
     pages.push({
@@ -103,7 +103,7 @@ test('cleanPages：去页眉页脚、去页码行、合软换行', async () => {
 });
 
 test('buildChapters：目录页不算章，区间与字数对得上', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const raw = [
     { page: 1, text: '目 录\n第一章 起点 …… 1\n第二章 转折 …… 20\n第三章 收尾 …… 40' },
     { page: 2, text: '第一章 起点\n' + '甲'.repeat(300) },
@@ -123,7 +123,7 @@ test('buildChapters：目录页不算章，区间与字数对得上', async () =
 });
 
 test('buildChapters：切不出章就走兜底单章', async () => {
-  const { buildChapters } = await import('../text.js');
+  const { buildChapters } = await import('../lib/text.js');
   const chapters = buildChapters([
     { page: 1, text: '散文一段，没有章节标题。' },
     { page: 2, text: '散文第二段，还是没有。' },
@@ -134,7 +134,7 @@ test('buildChapters：切不出章就走兜底单章', async () => {
 });
 
 test('buildChapters：页眉不会变成新章，分卷页与图注不捣乱', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文正文正文正文正文正文正文正文正文正文正文正文。';
   const raw = [
     { page: 1, text: '版权信息\n书名：一本真书' },
@@ -157,7 +157,7 @@ test('buildChapters：页眉不会变成新章，分卷页与图注不捣乱', a
 });
 
 test('buildChapters：页眉把章号认错时，不会多出一个假章', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文正文正文正文正文正文正文正文正文正文正文正文。';
   const raw = [
     { page: 1, text: '书名页' },
@@ -178,7 +178,7 @@ test('buildChapters：页眉把章号认错时，不会多出一个假章', asyn
 });
 
 test('buildChapters：目录不是只有一页、也未必写着「目录」', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const tocPage = (n) =>
     Array.from({ length: 12 }, (_, i) => '条目' + n + '-' + i + ' ' + (n * 100 + i)).join('\n');
   const raw = [
@@ -195,7 +195,7 @@ test('buildChapters：目录不是只有一页、也未必写着「目录」', a
 });
 
 test('isChapterLine：正文里的跨章引用不算标题', async () => {
-  const { isChapterLine } = await import('../text.js');
+  const { isChapterLine } = await import('../lib/text.js');
   assert.equal(isChapterLine('第5章“站在电影制作者的角度思考”中,曾强烈推荐你将最喜欢的当代电影中的某些'), false);
   assert.equal(isChapterLine('第38章“准备剪辑”对后期制作人员及其责任有详细描述'), false);
   assert.equal(isChapterLine('第41章 学会分析和利用反馈效果'), true);
@@ -205,7 +205,7 @@ test('isChapterLine：正文里的跨章引用不算标题', async () => {
 });
 
 test('buildChapters：章首页的章号被 OCR 吃掉时，起点回到标题页', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '书名页' },
@@ -226,7 +226,7 @@ test('buildChapters：章首页的章号被 OCR 吃掉时，起点回到标题�
 });
 
 test('buildChapters：分卷页不算进上一章的尾巴', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '第1章 起点\n' + body },
@@ -243,7 +243,7 @@ test('buildChapters：分卷页不算进上一章的尾巴', async () => {
 });
 
 test('buildChapters：标题和正文粘成一行的标题页，也能回溯到', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(150) + '。';
   const raw = [
     { page: 1, text: '书名页' },
@@ -263,7 +263,7 @@ test('buildChapters：标题和正文粘成一行的标题页，也能回溯到'
 });
 
 test('buildChapters：首行是乱码的标题页，靠次行的标题认出来', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '第9章 导演的发展策略\n' + body },
@@ -279,7 +279,7 @@ test('buildChapters：首行是乱码的标题页，靠次行的标题认出来'
   assert.equal(chapters[1].title, '第10章 可供选择的故事来源');
 });
 test('buildChapters：标题页字数多（>700）也能当标题页认', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const filler = '这段是正文，用来把标题页撑到七百字以上。'.repeat(30);
   const raw = [
     { page: 1, text: '书名页' },
@@ -297,7 +297,7 @@ test('buildChapters：标题页字数多（>700）也能当标题页认', async 
 });
 
 test('buildChapters：不写页码的条目式目录也要整块去掉', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const toc = [
     '目 录',
     '致中国读者',
@@ -324,7 +324,7 @@ test('buildChapters：不写页码的条目式目录也要整块去掉', async (
 });
 
 test('buildChapters：英文书的章名不会被并进正文', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = 'This is a line of English prose that is long enough to be a real paragraph line. ';
   const raw = [
     { page: 1, text: 'CHAPTER 1\nDeducing Types\n' + body.repeat(3) },
@@ -347,7 +347,7 @@ test('buildChapters：英文书的章名不会被并进正文', async () => {
 });
 
 test('buildChapters：译注/索引里重复的章号不算新章', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: 'CHAPTER 01\n故事问题\n' + body },
@@ -365,7 +365,7 @@ test('buildChapters：译注/索引里重复的章号不算新章', async () => 
 });
 
 test('buildChapters：第二个「序言」不算章', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '序言\n' + body },
@@ -381,7 +381,7 @@ test('buildChapters：第二个「序言」不算章', async () => {
 });
 
 test('buildChapters：分部重新编号（同号不同题）不误杀', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '第一部\n第一章 开头\n' + body },
@@ -394,7 +394,7 @@ test('buildChapters：分部重新编号（同号不同题）不误杀', async (
 });
 
 test('buildChapters：页眉只印章号时，标题取开篇页那条', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '第1章 计算机概念和技术\n' + body },
@@ -412,7 +412,7 @@ test('buildChapters：页眉只印章号时，标题取开篇页那条', async (
 });
 
 test('buildChapters：正文中段的跨章引用不算章', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '第5章 处理器\n' + body },
@@ -430,7 +430,7 @@ test('buildChapters：正文中段的跨章引用不算章', async () => {
 });
 
 test('buildChapters：附录 A/B/C 各自成段', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '附录A 汇编器、链接器和SPIM模拟器\n' + body },
@@ -448,7 +448,7 @@ test('buildChapters：附录 A/B/C 各自成段', async () => {
 });
 
 test('buildChapters：页眉认错章号、被改号之后，标题不丢', async () => {
-  const { buildChapters, cleanPages } = await import('../text.js');
+  const { buildChapters, cleanPages } = await import('../lib/text.js');
   const body = '正文'.repeat(80) + '。';
   const raw = [
     { page: 1, text: '第30章 编写分镜头剧本\n' + body },
@@ -465,38 +465,6 @@ test('buildChapters：页眉认错章号、被改号之后，标题不丢', asyn
   assert.equal(chapters[1].from, 3);
 });
 
-/* --------------------------------- 存储 --------------------------------- */
-
-test('store：原子写读、ID 校验、改名、软删除', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-test-'));
-  process.env.DSH_BOOK_SLIDES_ROOT = root;
-  const store = await import('../store.js');
-
-  store.ensureDirs();
-  const id = store.newId(12);
-  assert.match(id, /^[a-z0-9]{12}$/);
-  assert.equal(store.isValidId(id), true);
-  assert.equal(store.isValidId('../etc'), false);
-  assert.equal(store.isValidId('ABC'), false);
-
-  const dir = store.bookDir(id);
-  store.writeJson(path.join(dir, 'book.json'), { id: id, title: '旧名', chapterCount: 2, chars: 100 });
-  assert.equal(store.loadBook(id).book.title, '旧名');
-
-  store.renameBook(id, '新名');
-  assert.equal(store.loadBook(id).book.title, '新名');
-
-  const books = store.listBooks();
-  assert.equal(books.length, 1);
-  assert.equal(books[0].id, id);
-  assert.equal(books[0].chapters, 2);
-
-  assert.equal(store.trashBook(id), true);
-  assert.equal(store.listBooks().length, 0);
-  assert.equal(fs.readdirSync(path.join(root, 'trash')).length, 1);
-  fs.rmSync(root, { recursive: true, force: true });
-});
-
 /* ---------------------------------- PDF ---------------------------------- */
 
 test('pdfread：从合成 PDF 里读出逐页文本并切出章节', async () => {
@@ -505,8 +473,8 @@ test('pdfread：从合成 PDF 里读出逐页文本并切出章节', async () =>
     ['Chapter 2 Turn', 'beta '.repeat(20)],
     ['Chapter 3 End', 'gamma '.repeat(20)],
   ]);
-  const { extractPages, totalChars } = await import('../pdfread.js');
-  const { cleanPages, buildChapters } = await import('../text.js');
+  const { extractPages, totalChars } = await import('../lib/pdfread.js');
+  const { cleanPages, buildChapters } = await import('../lib/text.js');
 
   const result = await extractPages(pdf);
   assert.equal(result.numPages, 3);
@@ -523,13 +491,13 @@ test('pdfread：从合成 PDF 里读出逐页文本并切出章节', async () =>
 
 test('pdfread：没有文字层的 PDF 报 E_PDF_NO_TEXT', async () => {
   const pdf = makePdf([[], []]);
-  const { extractPages, totalChars } = await import('../pdfread.js');
+  const { extractPages, totalChars } = await import('../lib/pdfread.js');
   const result = await extractPages(pdf);
   assert.ok(totalChars(result.pages) < 50);
 });
 
 test('pdfread：坏文件报 E_PDF_CORRUPT', async () => {
-  const { extractPages, PDF_ERROR } = await import('../pdfread.js');
+  const { extractPages, PDF_ERROR } = await import('../lib/pdfread.js');
   await assert.rejects(
     () => extractPages(Buffer.from('这不是 PDF，只是一段文字')),
     (err) => err.code === PDF_ERROR.CORRUPT,
@@ -542,8 +510,8 @@ test('真书样本（需要 BOOK_SLIDES_SAMPLE_PDF）', async (t) => {
     t.skip('没有设置 BOOK_SLIDES_SAMPLE_PDF');
     return;
   }
-  const { extractPages, totalChars } = await import('../pdfread.js');
-  const { cleanPages, buildChapters } = await import('../text.js');
+  const { extractPages, totalChars } = await import('../lib/pdfread.js');
+  const { cleanPages, buildChapters } = await import('../lib/text.js');
   const bytes = fs.readFileSync(sample);
   const result = await extractPages(bytes);
   const cleaned = cleanPages(result.pages);
