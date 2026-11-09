@@ -27,7 +27,7 @@ function read(file) {
 const pkg = JSON.parse(read('package.json'));
 
 check('包名唯一', pkg.name === 'dsh-book-slides', pkg.name);
-check('版本是合法预发布 SemVer', /^2\.0\.0-(alpha|beta|rc)\.\d+$/.test(String(pkg.version)), pkg.version);
+check('版本是合法 2.0 SemVer（正式版或预发布）', /^2\.0\.0(?:-(alpha|beta|rc)\.\d+)?$/.test(String(pkg.version)), pkg.version);
 check('没有第二包名/并存模式声明', !pkg.dsh || !pkg.dsh.standalone, 'dsh 字段');
 
 const clientExport = String((pkg.exports && pkg.exports['./client']) || '');

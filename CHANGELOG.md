@@ -3,9 +3,24 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
-## [未发布]
+## [2.0.0] - 2026-11-09
 
-主题「参考 voice 时长提示可见」：把 AC-154 的时长提示从“只有连接测试结果里可能看到”改为参考 voice 库常驻可见；导入后自动保存选中项，连接测试按当前选中项检查。
+**首个正式版**。2.0 是不兼容重写：包名与数据根不变，`meta.json.schema=2`，不读 1.x 数据；同包覆盖安装时先把旧根整根备份。功能范围与验收口径以 [SRS v1.20](doc/requirements/规范需求2.0.md) 与 [实现进度](doc/2.0-实现进度.md) 为准。
+
+### 版本与环境
+
+- 包 `2.0.0`（tag `v2.0.0`）、产品 `2.0`、数据 schema `2`、文档 v1.20。
+- 无数据 schema 变更；可直接覆盖 `2.0.0-alpha.10`，已有书/系列/音频/配图/练习数据继续可用。
+- 1.x 数据不迁移：检测到旧 schema 时整根备份到 `book-slides.backup-<时间>/`，随后初始化空书架。
+- 回滚：移走同根下的 2.0 数据，把 `book-slides.backup-<时间>/` 重命名回 `book-slides/`。
+
+### 发布门
+
+- `npm run test:v2`：32 个文件 / 224 项，0 失败；新增 `test/release-version.test.mjs`（AC-141）与 `test/parity-baseline.test.mjs`（AC-128 登记检查）。
+- `npm run verify:plugin`：PASS；版本规则从“仅预发布”改为接受正式版 `2.0.0`。
+- 真书与真机抽检记录见 [doc/2.0-实现进度.md](doc/2.0-实现进度.md) §8。
+
+**主题「参考 voice 时长提示可见」**：把 AC-154 的时长提示从“只有连接测试结果里可能看到”改为参考 voice 库常驻可见；导入后自动保存选中项，连接测试按当前选中项检查。
 
 ### 修复
 
