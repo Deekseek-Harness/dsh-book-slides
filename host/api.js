@@ -243,7 +243,7 @@ function handleMeta(req, res) {
   sendJson(res, 200, {
     ok: true,
     version: packageVersion(),
-    product_version: '2.1',
+    product_version: '2.2',
     schema: 2,
     legacy: false,
     notice: meta.upgraded_from ? '旧数据已备份到 ' + (meta.upgraded_to || meta.upgraded_from) : '',
@@ -1121,6 +1121,10 @@ async function handleSeriesProgressPost(req, res) {
       dir: found.dir,
       lecture: Number(body.lecture) || 1,
       slide: Number(body.slide) || 0,
+      offsetMs: body.offsetMs !== undefined ? body.offsetMs : body.offset_ms,
+      audioFile: body.audioFile !== undefined ? body.audioFile : body.audio_file,
+      audioMs: body.audioMs !== undefined ? body.audioMs : body.audio_ms,
+      audioProvider: body.audioProvider !== undefined ? body.audioProvider : body.audio_provider,
     });
     sendJson(res, 200, { ok: true, progress: out.summary });
   } catch (err) {

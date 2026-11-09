@@ -122,8 +122,104 @@ test('换一张不重启播放：playbackKey 只认本页音频字段，图片�
 });
 
 test('播放 effect 依赖的是音频签名，不是整个 slides 数组', () => {
-  assert.ok(source.includes('slides.length, pageAudioKey'), '依赖里应有 slides.length + pageAudioKey');
+  assert.ok(/slides\.length,\s*pageAudioKey/.test(source), '依赖里应有 slides.length + pageAudioKey');
   assert.equal(source.includes('lectureN, seriesId, slides, advance'), false, '不应再把整个 slides 数组放进依赖');
+});
+
+test('暂停/继续按页内媒体时间：归一化、时钟与续播裁决', () => {
+  assert.equal(helpers.normalizeOffsetMs(12345), 12345);
+  assert.equal(helpers.normalizeOffsetMs(499), 0);
+  assert.equal(helpers.normalizeOffsetMs(-1), 0);
+  assert.equal(helpers.normalizeOffsetMs('x'), 0);
+  assert.equal(helpers.formatClock(0), '00:00');
+  assert.equal(helpers.formatClock(8300), '00:08');
+  assert.equal(helpers.formatClock(65_000), '01:05');
+  assert.equal(helpers.formatClock(3_665_000), '1:01:05');
+  assert.equal(
+    helpers.resolveResumeOffset({ savedMs: 30000, durationMs: 120000, audioKey: 'a', savedAudioKey: 'a' }),
+    30000,
+  );
+  assert.equal(
+    helpers.resolveResumeOffset({ savedMs: 30000, durationMs: 120000, audioKey: 'b', savedAudioKey: 'a' }),
+    0,
+    '音频签名变化必须失效',
+  );
+  assert.equal(
+    helpers.resolveResumeOffset({ savedMs: 120000, durationMs: 120000, audioKey: 'a', savedAudioKey: 'a' }),
+    0,
+    '超出新音频时长必须归 0',
+  );
+  assert.equal(
+    helpers.resolveResumeOffset({ savedMs: 30000, durationMs: 0, audioKey: 'a', savedAudioKey: 'a' }),
+    30000,
+    '时长未知时先保留，metadata 后再夹',
+  );
+});
+
+test('初始 hydration 的两帧：旧 index 不丢 resume，目标页再恢复', () => {
+  const slides = [
+    { slide_index: 1, audio_file: 'audio/001.wav', audio_ms: 30000 },
+    { slide_index: 11, audio_file: 'audio/011.wav', audio_ms: 37840 },
+  ];
+  const pending = { lecture: 1, slide: 11, offsetMs: 27876, audioKey: 'k11' };
+
+  // 第一帧：slides 到了，index 还是第 1 页；必须保留 pending，不能清掉。
+  const first = helpers.resolvePendingResume({
+    pending,
+    currentSlide: slides[0],
+    lecture: 1,
+    slides,
+    audioKey: 'k1',
+  });
+  assert.equal(first.restoreMs, 0);
+  assert.equal(first.clear, false, '目标页还在时不能清 resume');
+
+  // 第二帧：index 切到第 11 页，恢复 27876ms。
+  const second = helpers.resolvePendingResume({
+    pending,
+    currentSlide: slides[1],
+    lecture: 1,
+    slides,
+    audioKey: 'k11',
+  });
+  assert.equal(second.restoreMs, 27876);
+  assert.equal(second.clear, false);
+
+  // 音频身份/签名变了：清掉并给提示。
+  const changed = helpers.resolvePendingResume({
+    pending,
+    currentSlide: slides[1],
+    lecture: 1,
+    slides,
+    audioKey: 'k11-new',
+  });
+  assert.equal(changed.keyChanged, true);
+  assert.equal(changed.clear, true);
+
+  // 目标页不存在 / 换讲：清掉。
+  assert.equal(
+    helpers.resolvePendingResume({ pending, currentSlide: slides[0], lecture: 1, slides: [slides[0]], audioKey: 'k1' }).clear,
+    true,
+  );
+  assert.equal(
+    helpers.resolvePendingResume({ pending, currentSlide: slides[1], lecture: 2, slides, audioKey: 'k11' }).clear,
+    true,
+  );
+});
+
+test('播放器有独立的建源与播放/暂停 effect：暂停不重建音频', () => {
+  assert.ok(source.includes('/* 建立当前页音频'), '应有独立的建源 effect');
+  assert.ok(source.includes('/* 播放/暂停/继续'), '应有独立的播放/暂停 effect');
+  const playEffect = source.slice(source.indexOf('/* 播放/暂停/继续'), source.indexOf('/* 语速/静音就地生效'));
+  assert.ok(playEffect.includes('audio.pause()'), '暂停应调用 audio.pause()');
+  assert.ok(playEffect.includes('savePosition(ms)'), '暂停应保存页内位置');
+  assert.equal(playEffect.includes('new Audio('), false, '播放/暂停不应重建音频');
+});
+
+test('续播身份：offset 与 audio_file/audio_ms/audio_provider 一起写入，身份不一致失效', () => {
+  assert.ok(source.includes('audioFile: meta.audioFile'), '保存位置时要带音频身份');
+  assert.ok(source.includes('savedFile === String(target.audio_file'), '恢复前要比较音频身份');
+  assert.ok(source.includes('配音已更新，从本页开头播放'), '身份不一致要给提示');
 });
 
 test('换一张期间不写 slides：只轮询 job 状态，结束时刷新一次', () => {

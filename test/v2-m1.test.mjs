@@ -56,7 +56,7 @@ test('AC-112：旧根自动备份，原路径重建 schema=2', () => {
   assert.equal(fs.existsSync(path.join(upgraded.root, 'meta.json')), true);
   const meta = JSON.parse(fs.readFileSync(path.join(upgraded.root, 'meta.json'), 'utf8'));
   assert.equal(meta.schema, 2);
-  assert.equal(meta.product_version, '2.1');
+  assert.equal(meta.product_version, '2.2');
   assert.equal(meta.upgraded_from, path.basename(upgraded.backup));
   assert.equal(fs.existsSync(path.join(upgraded.backup, 'books', 'oldbook1', 'book.json')), true);
   assert.equal(fs.existsSync(path.join(upgraded.root, 'books')), true);
@@ -467,7 +467,7 @@ test('AC-117：书架、改名、回收站、恢复、冲突', async () => {
 
   const meta = await json('/dsh-book-slides/meta');
   assert.equal(meta.body.schema, 2);
-  assert.equal(meta.body.product_version, '2.1');
+  assert.equal(meta.body.product_version, '2.2');
 });
 
 test('AC-124：无文字层拒绝，书架不新增', async () => {

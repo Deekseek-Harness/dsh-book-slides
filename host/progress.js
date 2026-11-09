@@ -10,6 +10,17 @@ import path from 'node:path';
 import { readJson, writeJson } from './root.js';
 import { writePreference } from './prefs.js';
 
+/** 页内位置上限：24h，防止坏数据把进度写成天文数字。 */
+export const MAX_OFFSET_MS = 24 * 60 * 60 * 1000;
+
+/** 页内媒体时间（毫秒）归一化：负数/非数字/过小一律 0，最大 24h。 */
+export function normalizeOffsetMs(value) {
+  const ms = Math.round(Number(value));
+  if (!Number.isFinite(ms) || ms < 0) return 0;
+  if (ms < 500) return 0;
+  return Math.min(MAX_OFFSET_MS, ms);
+}
+
 export function progressFile(seriesDirPath) {
   return path.join(seriesDirPath, 'progress.json');
 }
@@ -50,6 +61,10 @@ export function readProgress(seriesDirPath, series) {
     series_id: String((series && series.id) || ''),
     lecture: validLecture ? Number(source.lecture) : first,
     slide: Math.max(0, Math.round(Number(source.slide) || 0)),
+    offset_ms: normalizeOffsetMs(source.offset_ms != null ? source.offset_ms : source.offsetMs),
+    audio_file: String(source.audio_file || ''),
+    audio_ms: Math.max(0, Math.round(Number(source.audio_ms) || 0)),
+    audio_provider: String(source.audio_provider || ''),
     heard: source.heard && typeof source.heard === 'object' ? source.heard : {},
     updated_at: String(source.updated_at || ''),
   };
@@ -63,6 +78,10 @@ export function progressSummary(series, progress) {
     seriesId: String((series && series.id) || ''),
     lecture,
     slide: Number(progress && progress.slide) || 0,
+    offsetMs: normalizeOffsetMs(progress && progress.offset_ms),
+    audioFile: String((progress && progress.audio_file) || ''),
+    audioMs: Math.max(0, Math.round(Number(progress && progress.audio_ms) || 0)),
+    audioProvider: String((progress && progress.audio_provider) || ''),
     lecturePages: pagesOf(series, lecture),
     heard: (progress && progress.heard) || {},
     heardPages: heardPagesOf(series, progress),
@@ -73,9 +92,11 @@ export function progressSummary(series, progress) {
 
 /**
  * 记一次进度。lecture 必须是系列里的讲次；slide 夹到该讲页数内。
+ * `offsetMs` 是当前页音频的媒体时间：显式传入（含 0）就以它为准；
+ * 未传时同页保留旧值、换页归 0，避免“翻页写进度”把页内位置冲掉。
  * 返回 `{progress, summary}`。
  */
-export function saveProgress({ series, dir, lecture, slide }) {
+export function saveProgress({ series, dir, lecture, slide, offsetMs, audioFile, audioMs, audioProvider }) {
   const current = readProgress(dir, series);
   const lectures = lectureList(series);
   if (!lectures.length) {
@@ -86,6 +107,15 @@ export function saveProgress({ series, dir, lecture, slide }) {
   const wanted = lectures.some((item) => Number(item.n) === Number(lecture)) ? Number(lecture) : current.lecture;
   const pages = pagesOf(series, wanted);
   const clamped = pages > 0 ? Math.max(0, Math.min(pages, Math.round(Number(slide)))) : 0;
+  const samePosition = Number(current.lecture) === wanted && Number(current.slide) === clamped;
+  const offsetProvided = offsetMs !== undefined && offsetMs !== null && Number.isFinite(Number(offsetMs));
+  const offset = offsetProvided ? normalizeOffsetMs(offsetMs) : samePosition ? normalizeOffsetMs(current.offset_ms) : 0;
+  const hasOffset = offset > 0;
+  const nextAudioFile = hasOffset ? String(offsetProvided ? audioFile || '' : current.audio_file || '') : '';
+  const nextAudioMs = hasOffset ? Math.max(0, Math.round(Number(offsetProvided ? audioMs : current.audio_ms) || 0)) : 0;
+  const nextAudioProvider = hasOffset
+    ? String(offsetProvided ? audioProvider || '' : current.audio_provider || '')
+    : '';
   const heard = Object.assign({}, current.heard);
   if (clamped > 0) heard[wanted] = Math.max(Number(heard[wanted]) || 0, clamped);
   const next = {
@@ -93,14 +123,21 @@ export function saveProgress({ series, dir, lecture, slide }) {
     series_id: String(series.id),
     lecture: wanted,
     slide: clamped,
+    offset_ms: offset,
+    audio_file: nextAudioFile,
+    audio_ms: nextAudioMs,
+    audio_provider: nextAudioProvider,
     heard: heard,
     updated_at: new Date().toISOString(),
   };
   writeJson(progressFile(dir), next);
-  writePreference({
-    lastBookId: String(series.book_id || ''),
-    lastSeriesId: String(series.id || ''),
-    lastSlide: clamped,
-  });
+  // 页内位置的周期写入不反复改「上次打开」偏好，只在页/讲真正变化时写一次。
+  if (!samePosition) {
+    writePreference({
+      lastBookId: String(series.book_id || ''),
+      lastSeriesId: String(series.id || ''),
+      lastSlide: clamped,
+    });
+  }
   return { progress: next, summary: progressSummary(series, next) };
 }

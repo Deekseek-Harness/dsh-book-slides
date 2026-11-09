@@ -1,13 +1,13 @@
 /**
- * AC-141：版本一致性 + 2.1.4 预览窗格居中版发布检查。
+ * AC-141：版本一致性 + 2.2.0 播放器暂停粒度版发布检查。
  *
  * 覆盖：
- *  - 包版本是 2.1.4（补丁版，无 alpha/beta/rc 后缀）；
+ *  - 包版本是 2.2.0（正式版，无 alpha/beta/rc 后缀）；
  *  - package-lock 的两处版本与 package.json 一致；
  *  - README / CHANGELOG / SRS / 实现进度 / 需求索引 与包版本、文档版本一致；
- *  - CHANGELOG 的首个版本是 [2.1.4]，没有遗留 [未发布]；允许 [Unreleased] 段记录未发布变更；
+ *  - CHANGELOG 的首个版本是 [2.2.0]，没有遗留 [未发布]；允许 [Unreleased] 段记录未发布变更；
  *  - GET /meta 返回 version / product_version / schema 与包一致；
- *  - 当前提交若已打 tag，tag 必须是 v2.1.4（未打 tag 的开发提交跳过）。
+ *  - 当前提交若已打 tag，tag 必须是 v2.2.0（未打 tag 的开发提交跳过）。
  *
  * 这是发布门 AC-141 的机检入口；tag 的真实存在与远端推送仍以发布步骤为准。
  */
@@ -34,9 +34,9 @@ const REQ_INDEX = read('doc/requirements/README.md');
 
 const docVersion = (SRS.match(/\|\s*文档版本\s*\|\s*(v\d+\.\d+)/) || [])[1];
 
-test('AC-141：包版本是 2.1.4 补丁版，无预发布后缀', () => {
+test('AC-141：包版本是 2.2.0 正式版，无预发布后缀', () => {
   assert.equal(pkg.name, 'dsh-book-slides');
-  assert.equal(VERSION, '2.1.4');
+  assert.equal(VERSION, '2.2.0');
   assert.doesNotMatch(VERSION, /-(alpha|beta|rc)\./);
 });
 
@@ -56,12 +56,12 @@ test('AC-141：README / 实现进度 / 需求索引 的包版本与文档版本�
   assert.match(REQ_INDEX, new RegExp('包 `' + VERSION.replace(/\./g, '\\.') + '`'));
 });
 
-test('AC-141：CHANGELOG 首个版本是 [2.1.4]，没有遗留 [未发布]（允许 [Unreleased] 段）', () => {
+test('AC-141：CHANGELOG 首个版本是 [2.2.0]，没有遗留 [未发布]（允许 [Unreleased] 段）', () => {
   assert.doesNotMatch(CHANGELOG, /## \[未发布\]/);
-  assert.match(CHANGELOG, /## \[2\.1\.4\] - \d{4}-\d{2}-\d{2}/);
+  assert.match(CHANGELOG, /## \[2\.2\.0\] - \d{4}-\d{2}-\d{2}/);
   const versioned = (CHANGELOG.match(/## \[([^\]]+)\]/g) || [])
     .filter((header) => !/^## \[Unreleased\]$/.test(header));
-  assert.equal(versioned[0], '## [2.1.4]');
+  assert.equal(versioned[0], '## [2.2.0]');
 });
 
 // /meta 用临时数据根，避免碰到真实书架。
@@ -82,13 +82,13 @@ const server = http.createServer(async (req, res) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const baseUrl = 'http://127.0.0.1:' + server.address().port;
 
-test('AC-141：GET /meta 返回包版本、产品 2.1 与 schema=2', async () => {
+test('AC-141：GET /meta 返回包版本、产品 2.2 与 schema=2', async () => {
   const res = await fetch(baseUrl + '/dsh-book-slides/meta');
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.ok, true);
   assert.equal(body.version, VERSION);
-  assert.equal(body.product_version, '2.1');
+  assert.equal(body.product_version, '2.2');
   assert.equal(body.schema, 2);
 });
 

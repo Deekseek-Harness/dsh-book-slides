@@ -763,6 +763,61 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       return clamped - 1;
     }
 
+    /** 页内位置上限：24h；负数/非数字/过小一律 0。 */
+    const MAX_RESUME_MS = 24 * 60 * 60 * 1000;
+    function normalizeOffsetMs(value) {
+      const ms = Math.round(Number(value));
+      if (!Number.isFinite(ms) || ms < 0) return 0;
+      if (ms < 500) return 0;
+      return Math.min(MAX_RESUME_MS, ms);
+    }
+
+    /** 毫秒 → mm:ss（超过 1 小时带小时位）。 */
+    function formatClock(value) {
+      const total = Math.max(0, Math.floor((Number(value) || 0) / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      const pad = (n) => String(n).padStart(2, '0');
+      return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s);
+    }
+
+    /**
+     * 续播位置裁决：音频签名变了 / 超出新音频时长 / 过小 → 0。
+     * 时长未知（0）时保留，等 loadedmetadata 后再夹。
+     */
+    function resolveResumeOffset({ savedMs, durationMs, audioKey, savedAudioKey } = {}) {
+      if (savedAudioKey != null && audioKey != null && String(savedAudioKey) !== String(audioKey)) return 0;
+      const ms = normalizeOffsetMs(savedMs);
+      if (!ms) return 0;
+      const duration = Number(durationMs);
+      if (Number.isFinite(duration) && duration > 0 && ms >= duration) return 0;
+      return ms;
+    }
+
+    /**
+     * 恢复挂起位置的裁决。初始 hydration 会先渲染旧 index（第 1 页），
+     * 下一帧才切到目标页；这一帧只能“先留着” resume，不能因为页不匹配就丢掉。
+     * 返回 `{restoreMs, keyChanged, clear}`。
+     */
+    function resolvePendingResume({ pending, currentSlide, lecture, slides, audioKey } = {}) {
+      if (!pending || !currentSlide) return { restoreMs: 0, keyChanged: false, clear: false };
+      const samePage =
+        Number(pending.lecture) === Number(lecture) &&
+        Number(pending.slide) === Number(currentSlide.slide_index);
+      if (samePage && String(pending.audioKey) === String(audioKey)) {
+        return { restoreMs: normalizeOffsetMs(pending.offsetMs), keyChanged: false, clear: false };
+      }
+      if (samePage) return { restoreMs: 0, keyChanged: true, clear: true };
+      const list = Array.isArray(slides) ? slides : [];
+      const targetExists = list.some((item) => Number(item && item.slide_index) === Number(pending.slide));
+      return {
+        restoreMs: 0,
+        keyChanged: false,
+        clear: Number(pending.lecture) !== Number(lecture) || !targetExists,
+      };
+    }
+
     /** pdf.js 的 Util.transform，自己实现一份，便于单测与离线计算。 */
     function pdfTransform(m1, m2) {
       return [
@@ -2025,6 +2080,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const [status, setStatus] = useState('点「开始听」从这一页开始朗读');
       const [noAudio, setNoAudio] = useState(false);
       const [bar, setBar] = useState(0);
+      const [clock, setClock] = useState({ positionMs: 0, durationMs: 0 });
       const [pdfDoc, setPdfDoc] = useState(null);
       const [pdfLoading, setPdfLoading] = useState(true);
       const [pdfError, setPdfError] = useState(null);
@@ -2049,6 +2105,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const skipTimerRef = useRef(null);
       const tickTimerRef = useRef(null);
       const tokenRef = useRef(0);
+      const positionRef = useRef(0);
+      const audioMetaRef = useRef(null);
+      const resumeRef = useRef(null);
+      const pendingRestoreRef = useRef(false);
+      const lastPersistRef = useRef(0);
+      const firstPlayEffectRef = useRef(true);
+      const speechSeqRef = useRef(0);
       const imageBusyRef = useRef('');
       const indexRef = useRef(index);
       const playingRef = useRef(playing);
@@ -2057,7 +2120,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const lectureRef = useRef(lectureN);
       const slidesRef = useRef([]);
       const seriesRef = useRef(null);
-      const startRef = useRef({ lecture: Math.max(1, Number(initialLecture) || 1), slide: Number(initialSlide) || 0, used: false });
+      const startRef = useRef({ lecture: Math.max(1, Number(initialLecture) || 1), slide: Number(initialSlide) || 0, offsetMs: 0, used: false });
       const actionsRef = useRef({});
       const thumbsRef = useRef(null);
       const thumbYieldRef = useRef(0);
@@ -2102,9 +2165,15 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             const lectureList = (nextSeries.lectures || []).map((item) => Number(item.n));
             const wantedLecture = Number(initialLecture) || (nextProgress && nextProgress.lecture) || lectureList[0] || 1;
             const resolvedLecture = lectureList.includes(Number(wantedLecture)) ? Number(wantedLecture) : lectureList[0] || 1;
+            const explicitSlide = Number(initialSlide) || 0;
+            const useSavedPosition = !explicitSlide && !!nextProgress && Number(nextProgress.lecture) === resolvedLecture;
             startRef.current = {
               lecture: resolvedLecture,
-              slide: Number(initialSlide) || (nextProgress && Number(nextProgress.lecture) === resolvedLecture ? nextProgress.slide : 0) || 0,
+              slide: explicitSlide || (useSavedPosition ? nextProgress.slide : 0) || 0,
+              offsetMs: useSavedPosition ? normalizeOffsetMs(nextProgress.offsetMs) : 0,
+              audioFile: useSavedPosition ? String(nextProgress.audioFile || '') : '',
+              audioMs: useSavedPosition ? Math.max(0, Math.round(Number(nextProgress.audioMs) || 0)) : 0,
+              audioProvider: useSavedPosition ? String(nextProgress.audioProvider || '') : '',
               used: false,
             };
             setLectureN(resolvedLecture);
@@ -2217,6 +2286,19 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
         const refresh = () => {
           if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+          // 丢掉当前讲缓存会重建音频；先把页内位置挂到 resume，刷新后回到原秒。
+          const audio = audioRef.current;
+          const meta = audioMetaRef.current;
+          if (audio && meta && positionRef.current > 0) {
+            resumeRef.current = {
+              lecture: meta.lecture,
+              slide: meta.slide,
+              offsetMs: positionRef.current,
+              audioKey: meta.audioKey,
+              used: false,
+            };
+            pendingRestoreRef.current = true;
+          }
           setSlidesByLecture((prev) => {
             if (!prev[lectureN]) return prev;
             const next = Object.assign({}, prev);
@@ -2246,27 +2328,40 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         startLectureRef.current = lectureN;
         const start = startRef.current;
         if (!start.used && Number(start.lecture) === Number(lectureN)) {
-          setIndex(resolveInitialSlide(slides, start.slide));
+          const nextIndex = resolveInitialSlide(slides, start.slide);
+          const target = slides[nextIndex];
+          if (start.offsetMs > 0 && target) {
+            const savedFile = String(start.audioFile || '');
+            const savedMs = Math.max(0, Math.round(Number(start.audioMs) || 0));
+            const savedProvider = String(start.audioProvider || '');
+            const hasIdentity = !!(savedFile || savedMs || savedProvider);
+            const sameAudio =
+              !hasIdentity ||
+              (savedFile === String(target.audio_file || '') &&
+                savedMs === Math.max(0, Math.round(Number(target.audio_ms) || 0)) &&
+                savedProvider === String(target.audio_provider || ''));
+            if (sameAudio) {
+              resumeRef.current = {
+                lecture: lectureN,
+                slide: Number(target.slide_index),
+                offsetMs: start.offsetMs,
+                audioKey: playbackKey(target),
+                used: false,
+              };
+              positionRef.current = start.offsetMs;
+              pendingRestoreRef.current = true;
+              setClock({ positionMs: start.offsetMs, durationMs: 0 });
+            } else {
+              start.offsetMs = 0;
+              setStatus('配音已更新，从本页开头播放');
+            }
+          }
           start.used = true;
+          setIndex(nextIndex);
           return;
         }
         setIndex(0);
       }, [slides, lectureN]);
-
-      /* 翻页写进度：服务端顺带更新 preference 的「上次位置」 */
-      useEffect(() => {
-        if (!slides.length) return;
-        const payload = { seriesId, lecture: lectureN, slide: index + 1 };
-        api('/series/progress', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-          .then((out) => {
-            if (out && out.progress) setProgress(out.progress);
-          })
-          .catch(() => {});
-      }, [seriesId, lectureN, index, slides.length]);
 
       const savePreference = useCallback((patch) => {
         setPref((prev) => Object.assign({}, prev, patch));
@@ -2279,6 +2374,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
       const stopAudio = useCallback(() => {
         tokenRef.current += 1;
+        speechSeqRef.current += 1;
+        pendingRestoreRef.current = false;
         if (skipTimerRef.current) {
           clearTimeout(skipTimerRef.current);
           skipTimerRef.current = null;
@@ -2290,6 +2387,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         if (audioRef.current) {
           const audio = audioRef.current;
           audioRef.current = null;
+          audioMetaRef.current = null;
           try {
             audio.pause();
             audio.removeAttribute('src');
@@ -2300,6 +2398,75 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         }
         stopSpeech();
       }, []);
+
+      const clearTick = useCallback(() => {
+        if (tickTimerRef.current) {
+          clearInterval(tickTimerRef.current);
+          tickTimerRef.current = null;
+        }
+      }, []);
+
+      /** 进度写入：普通写入读响应；离开/隐藏用 beacon，避免卸载把请求掐断。 */
+      const postProgress = useCallback((payload, options = {}) => {
+        const url = API + '/series/progress';
+        const body = JSON.stringify(payload);
+        const beacon = options.beacon === true;
+        try {
+          if (beacon && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function' && typeof Blob === 'function') {
+            if (navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }))) return;
+          }
+        } catch {
+          /* 回退到 fetch */
+        }
+        try {
+          fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body,
+            keepalive: beacon,
+          }).catch(() => {});
+        } catch {
+          /* 浏览器不支持 keepalive 时放弃这次写入，不阻塞播放 */
+        }
+      }, []);
+
+      /** 保存当前页的页内位置；只有文件音频有媒体时间。 */
+      const savePosition = useCallback(
+        (offsetMs, options = {}) => {
+          const meta = audioMetaRef.current;
+          if (!meta || meta.mode !== 'file') return;
+          postProgress(
+            {
+              seriesId,
+              lecture: meta.lecture,
+              slide: meta.slide,
+              offsetMs: normalizeOffsetMs(offsetMs),
+              audioFile: meta.audioFile,
+              audioMs: meta.audioMs,
+              audioProvider: meta.audioProvider,
+            },
+            options,
+          );
+        },
+        [postProgress, seriesId],
+      );
+
+      /** 显式翻页/换讲：新页从 0 开始，并更新「系列已听页数」。 */
+      const savePageStart = useCallback(
+        (lecture, slide) => {
+          api('/series/progress', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId, lecture, slide, offsetMs: 0 }),
+          })
+            .then((out) => {
+              if (!aliveRef.current) return;
+              if (out && out.progress) setProgress(out.progress);
+            })
+            .catch(() => {});
+        },
+        [seriesId],
+      );
 
       /* 预加载下一页音频 */
       useEffect(() => {
@@ -2335,12 +2502,19 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
       const startLecture = useCallback((n, { autoplay = false } = {}) => {
         stopAudio();
+        const nextN = Number(n);
+        resumeRef.current = null;
+        pendingRestoreRef.current = false;
+        positionRef.current = 0;
+        lastPersistRef.current = 0;
         setTransition(null);
-        setLectureN(Number(n));
+        setLectureN(nextN);
         setBar(0);
+        setClock({ positionMs: 0, durationMs: 0 });
         setPlaying(autoplay);
         setStatus(autoplay ? '正在继续下一讲…' : '点「开始听」从这一页开始朗读');
-      }, [stopAudio]);
+        savePageStart(nextN, 1);
+      }, [savePageStart, stopAudio]);
 
       /** 讲末页之后：就绪则过渡卡，未就绪则提示（不循环），最后一讲则收尾。 */
       const finishLecture = useCallback(() => {
@@ -2362,13 +2536,22 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
       const advance = useCallback(() => {
         if (indexRef.current + 1 < slidesRef.current.length) {
+          const next = indexRef.current + 1;
+          stopAudio();
           indexSourceRef.current = 'playback';
-          setStatus('正在播放第 ' + (indexRef.current + 2) + ' 页');
-          setIndex(indexRef.current + 1);
+          resumeRef.current = null;
+          pendingRestoreRef.current = false;
+          positionRef.current = 0;
+          lastPersistRef.current = 0;
+          setBar(0);
+          setClock({ positionMs: 0, durationMs: 0 });
+          setStatus('正在播放第 ' + (next + 1) + ' 页');
+          setIndex(next);
+          savePageStart(lectureRef.current, next + 1);
           return;
         }
         finishLecture();
-      }, [finishLecture]);
+      }, [finishLecture, savePageStart, stopAudio]);
 
       /* 过渡卡：5 秒后自动进下一讲；点击/空格可跳过 */
       useEffect(() => {
@@ -2383,94 +2566,187 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         return () => clearTimeout(timer);
       }, [transition, startLecture]);
 
-      /* 播放当前页 */
-      useEffect(() => {
-        stopAudio();
-        if (!playing) {
-          setBar(0);
-          return undefined;
-        }
-        const token = tokenRef.current;
-        const current = indexRef.current;
-        const currentSlide = slidesRef.current[current];
-        if (!currentSlide) return undefined;
-        const mode = slideAudioMode(currentSlide);
-        const scheduleSkip = () => {
-          if (skipTimerRef.current) return;
-          skipTimerRef.current = setTimeout(advance, 1100);
-        };
+      const scheduleSkip = useCallback(() => {
+        if (skipTimerRef.current) return;
+        skipTimerRef.current = setTimeout(() => {
+          skipTimerRef.current = null;
+          advance();
+        }, 1100);
+      }, [advance]);
 
-        if (mode === 'none') {
-          setNoAudio(true);
-          setBar(0);
-          const hasNext = current + 1 < slidesRef.current.length;
-          setStatus('本页未配音' + (hasNext ? '，即将跳过' : ''));
-          if (hasNext) scheduleSkip();
-          else finishLecture();
-          return () => stopAudio();
-        }
-
-        setNoAudio(false);
-        setStatus('正在播放第 ' + (current + 1) + ' 页');
-        setBar(0);
-
-        if (mode === 'speech') {
-          const estimate = Math.max(1200, Number(currentSlide.audio_ms) || String(currentSlide.audio_script).length * 240);
+      const startSpeechFor = useCallback(
+        (currentSlide, token) => {
+          clearTick();
+          const seq = (speechSeqRef.current += 1);
+          const estimate = Math.max(
+            1200,
+            Number(currentSlide.audio_ms) || String(currentSlide.audio_script || '').length * 240,
+          );
           const startedAt = Date.now();
           tickTimerRef.current = setInterval(() => {
-            if (token !== tokenRef.current) return;
-            setBar(Math.min(0.98, (Date.now() - startedAt) / estimate));
+            if (token !== tokenRef.current || seq !== speechSeqRef.current) return;
+            const elapsed = Date.now() - startedAt;
+            setBar(Math.min(0.98, elapsed / estimate));
+            setClock({ positionMs: Math.min(estimate, elapsed), durationMs: estimate });
           }, 250);
           try {
             speakText(currentSlide.audio_script, {
               rate: prefRef.current.rate,
               volume: prefRef.current.muted ? 0 : 1,
               onend: () => {
-                if (token !== tokenRef.current) return;
+                if (token !== tokenRef.current || seq !== speechSeqRef.current) return;
+                clearTick();
                 advance();
               },
               onerror: () => {
-                if (token !== tokenRef.current) return;
+                if (token !== tokenRef.current || seq !== speechSeqRef.current) return;
                 setNoAudio(true);
                 setStatus('本页朗读失败');
-                if (tickTimerRef.current) {
-                  clearInterval(tickTimerRef.current);
-                  tickTimerRef.current = null;
-                }
-                if (current + 1 < slidesRef.current.length) scheduleSkip();
+                clearTick();
+                if (indexRef.current + 1 < slidesRef.current.length) scheduleSkip();
                 else finishLecture();
               },
             });
+            setStatus('正在播放第 ' + (indexRef.current + 1) + ' 页');
           } catch (err) {
-            if (tickTimerRef.current) {
-              clearInterval(tickTimerRef.current);
-              tickTimerRef.current = null;
-            }
+            clearTick();
             setNoAudio(true);
             setStatus('本页朗读失败：' + String((err && err.message) || err));
           }
-        } else {
-          const audio = new Audio(AUDIO_API + '?seriesId=' + encodeURIComponent(seriesId) + '&lecture=' + lectureRef.current + '&i=' + (current + 1));
-          audio.preload = 'auto';
-          audio.volume = prefRef.current.muted ? 0 : 1;
-          audio.playbackRate = prefRef.current.rate;
-          audio.ontimeupdate = () => {
-            if (token !== tokenRef.current) return;
-            const duration = audio.duration;
-            if (Number.isFinite(duration) && duration > 0) setBar(Math.min(0.99, audio.currentTime / duration));
-          };
-          audio.onended = () => {
-            if (token !== tokenRef.current) return;
-            advance();
-          };
-          audio.onerror = () => {
-            if (token !== tokenRef.current) return;
-            setNoAudio(true);
-            setStatus('本页没有音频文件');
-            if (current + 1 < slidesRef.current.length) scheduleSkip();
+        },
+        [advance, clearTick, finishLecture, scheduleSkip],
+      );
+
+      /* 页面隐藏/关闭时把当前位置留在服务端（keepalive，不阻塞退出）。 */
+      useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+        const save = () => {
+          if (positionRef.current > 0) savePosition(positionRef.current, { beacon: true });
+        };
+        window.addEventListener('pagehide', save);
+        const doc = typeof document !== 'undefined' ? document : null;
+        const onVisibility = () => {
+          if (doc && doc.visibilityState === 'hidden') save();
+        };
+        if (doc) doc.addEventListener('visibilitychange', onVisibility);
+        return () => {
+          window.removeEventListener('pagehide', save);
+          if (doc) doc.removeEventListener('visibilitychange', onVisibility);
+        };
+      }, [savePosition]);
+
+      /* 卸载时先保存再停声；声明在“建源” effect 之前，cleanup 先跑。 */
+      useEffect(
+        () => () => {
+          if (positionRef.current > 0) savePosition(positionRef.current, { beacon: true });
+          if (preloadRef.current) {
+            try {
+              preloadRef.current.pause();
+            } catch {
+              /* 忽略 */
+            }
+            preloadRef.current = null;
+          }
+          stopAudio();
+        },
+        [savePosition, stopAudio],
+      );
+
+      /* 建立当前页音频；播放/暂停由独立 effect 管，暂停不重建。 */
+      useEffect(() => {
+        stopAudio();
+        const current = indexRef.current;
+        const currentSlide = slidesRef.current[current];
+        if (!currentSlide) return undefined;
+        const token = tokenRef.current;
+        const mode = slideAudioMode(currentSlide);
+        const audioKey = playbackKey(currentSlide);
+        const pending = resumeRef.current;
+        const decision = resolvePendingResume({
+          pending,
+          currentSlide,
+          lecture: lectureRef.current,
+          slides: slidesRef.current,
+          audioKey,
+        });
+        const restoreMs = decision.restoreMs;
+        const keyChanged = decision.keyChanged;
+        if (decision.clear) resumeRef.current = null;
+
+        pendingRestoreRef.current = restoreMs > 0;
+        positionRef.current = restoreMs;
+        lastPersistRef.current = Date.now();
+        setBar(0);
+        setClock({ positionMs: restoreMs, durationMs: 0 });
+        setNoAudio(false);
+        if (keyChanged) setStatus('配音已更新，从本页开头播放');
+        if (restoreMs > 0) {
+          setStatus(
+            playingRef.current
+              ? '正在从 ' + formatClock(restoreMs) + ' 继续'
+              : '上次听到 ' + formatClock(restoreMs) + '，点「继续听」接着听',
+          );
+        }
+
+        if (mode === 'none') {
+          resumeRef.current = null;
+          pendingRestoreRef.current = false;
+          positionRef.current = 0;
+          setBar(0);
+          setClock({ positionMs: 0, durationMs: 0 });
+          setNoAudio(true);
+          const hasNext = current + 1 < slidesRef.current.length;
+          setStatus('本页未配音' + (hasNext ? '，即将跳过' : ''));
+          if (playingRef.current) {
+            if (hasNext) scheduleSkip();
             else finishLecture();
-          };
-          audioRef.current = audio;
+          }
+          return () => stopAudio();
+        }
+
+        if (mode === 'speech') {
+          resumeRef.current = null;
+          pendingRestoreRef.current = false;
+          positionRef.current = 0;
+          const estimate = Math.max(
+            1200,
+            Number(currentSlide.audio_ms) || String(currentSlide.audio_script || '').length * 240,
+          );
+          setClock({ positionMs: 0, durationMs: estimate });
+          if (playingRef.current) {
+            startSpeechFor(currentSlide, token);
+          } else {
+            setStatus('点「开始听」从这一页开始朗读');
+          }
+          return () => stopAudio();
+        }
+
+        const audio = new Audio(
+          AUDIO_API + '?seriesId=' + encodeURIComponent(seriesId) + '&lecture=' + lectureRef.current + '&i=' + (current + 1),
+        );
+        audio.preload = 'auto';
+        audio.volume = prefRef.current.muted ? 0 : 1;
+        audio.playbackRate = prefRef.current.rate;
+        audioRef.current = audio;
+        audioMetaRef.current = {
+          lecture: lectureRef.current,
+          slide: Number(currentSlide.slide_index),
+          audioKey,
+          audioFile: String(currentSlide.audio_file || ''),
+          audioMs: Math.max(0, Math.round(Number(currentSlide.audio_ms) || 0)),
+          audioProvider: String(currentSlide.audio_provider || ''),
+          mode: 'file',
+        };
+
+        if (restoreMs > 0) {
+          const estimate = Number(currentSlide.audio_ms) || 0;
+          if (estimate > 0) setBar(Math.min(0.99, restoreMs / estimate));
+        }
+
+        let started = false;
+        const playNow = () => {
+          if (started || token !== tokenRef.current) return;
+          started = true;
           const promise = audio.play();
           if (promise && typeof promise.catch === 'function') {
             promise.catch(() => {
@@ -2479,9 +2755,186 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               setStatus('浏览器阻止了自动播放，点「开始听」继续');
             });
           }
+        };
+
+        const applyRestore = () => {
+          if (token !== tokenRef.current) return;
+          const durationMs = Number.isFinite(audio.duration) && audio.duration > 0 ? Math.round(audio.duration * 1000) : 0;
+          const desired = resolveResumeOffset({
+            savedMs: restoreMs,
+            durationMs,
+            audioKey,
+            savedAudioKey: pending ? pending.audioKey : audioKey,
+          });
+          let applied = desired;
+          if (applied > 0) {
+            try {
+              audio.currentTime = applied / 1000;
+            } catch {
+              applied = 0;
+            }
+          }
+          if (applied > 0) {
+            positionRef.current = applied;
+            setClock({ positionMs: applied, durationMs });
+            if (durationMs > 0) setBar(Math.min(0.99, applied / durationMs));
+            setStatus(
+              playingRef.current
+                ? '正在从 ' + formatClock(applied) + ' 继续'
+                : '上次听到 ' + formatClock(applied) + '，点「继续听」接着听',
+            );
+          } else {
+            positionRef.current = 0;
+            setClock({ positionMs: 0, durationMs });
+            setStatus(playingRef.current ? '正在播放第 ' + (current + 1) + ' 页' : '点「开始听」从这一页开始朗读');
+          }
+          pendingRestoreRef.current = false;
+          resumeRef.current = null;
+          if (pending) pending.used = true;
+          if (playingRef.current) playNow();
+        };
+
+        const onMeta = () => {
+          if (token !== tokenRef.current) return;
+          if (restoreMs > 0) {
+            applyRestore();
+            return;
+          }
+          const durationMs = Number.isFinite(audio.duration) && audio.duration > 0 ? Math.round(audio.duration * 1000) : 0;
+          setClock((prev) => ({ positionMs: prev.positionMs, durationMs: durationMs || prev.durationMs || 0 }));
+          if (playingRef.current) playNow();
+        };
+
+        audio.ontimeupdate = () => {
+          if (token !== tokenRef.current) return;
+          const duration = audio.duration;
+          if (Number.isFinite(duration) && duration > 0) {
+            const ms = Math.round(audio.currentTime * 1000);
+            positionRef.current = ms;
+            setBar(Math.min(0.99, audio.currentTime / duration));
+            setClock({ positionMs: ms, durationMs: Math.round(duration * 1000) });
+            if (Date.now() - lastPersistRef.current >= 5000) {
+              lastPersistRef.current = Date.now();
+              savePosition(ms);
+            }
+          }
+        };
+        audio.onended = () => {
+          if (token !== tokenRef.current) return;
+          positionRef.current = 0;
+          if (current + 1 >= slidesRef.current.length) savePosition(0);
+          advance();
+        };
+        audio.onerror = () => {
+          if (token !== tokenRef.current) return;
+          pendingRestoreRef.current = false;
+          resumeRef.current = null;
+          positionRef.current = 0;
+          if (current + 1 >= slidesRef.current.length) savePosition(0);
+          setNoAudio(true);
+          setStatus('本页没有音频文件');
+          if (current + 1 < slidesRef.current.length) scheduleSkip();
+          else finishLecture();
+        };
+
+        if (audio.readyState >= 1) onMeta();
+        else audio.addEventListener('loadedmetadata', onMeta, { once: true });
+
+        if (!restoreMs) {
+          if (!keyChanged) {
+            setStatus(playingRef.current ? '正在播放第 ' + (current + 1) + ' 页' : '点「开始听」从这一页开始朗读');
+          }
+          if (playingRef.current) playNow();
         }
+
         return () => stopAudio();
-      }, [index, playing, pref.rate, pref.muted, lectureN, seriesId, slides.length, pageAudioKey, advance, finishLecture, stopAudio]);
+      }, [
+        index,
+        lectureN,
+        seriesId,
+        slides.length,
+        pageAudioKey,
+        advance,
+        finishLecture,
+        savePosition,
+        scheduleSkip,
+        startSpeechFor,
+        stopAudio,
+      ]);
+
+      /* 播放/暂停/继续：只动同一个音频元素，不重建。 */
+      useEffect(() => {
+        if (firstPlayEffectRef.current) {
+          firstPlayEffectRef.current = false;
+          return;
+        }
+        const currentSlide = slidesRef.current[indexRef.current];
+        if (!currentSlide) return;
+        const mode = slideAudioMode(currentSlide);
+        const token = tokenRef.current;
+        if (playing) {
+          if (audioRef.current) {
+            if (pendingRestoreRef.current) return;
+            const audio = audioRef.current;
+            let ms = Math.round(audio.currentTime * 1000);
+            if (audio.ended) {
+              try {
+                audio.currentTime = 0;
+                ms = 0;
+              } catch {
+                /* 不支持 seek 时保持现状 */
+              }
+            }
+            if (audio.paused) {
+              const promise = audio.play();
+              if (promise && typeof promise.catch === 'function') {
+                promise.catch(() => {
+                  if (token !== tokenRef.current) return;
+                  setPlaying(false);
+                  setStatus('浏览器阻止了自动播放，点「开始听」继续');
+                });
+              }
+            }
+            setStatus(
+              normalizeOffsetMs(ms) > 0
+                ? '正在从 ' + formatClock(ms) + ' 继续'
+                : '正在播放第 ' + (indexRef.current + 1) + ' 页',
+            );
+          } else if (mode === 'speech') {
+            startSpeechFor(currentSlide, token);
+          } else if (mode === 'none') {
+            const hasNext = indexRef.current + 1 < slidesRef.current.length;
+            setNoAudio(true);
+            setStatus('本页未配音' + (hasNext ? '，即将跳过' : ''));
+            if (hasNext) scheduleSkip();
+            else finishLecture();
+          }
+        } else if (audioRef.current) {
+          const audio = audioRef.current;
+          const ended = audio.ended === true;
+          const ms = pendingRestoreRef.current ? positionRef.current : ended ? 0 : Math.round(audio.currentTime * 1000);
+          audio.pause();
+          positionRef.current = ms;
+          if (ended) setBar(0);
+          setClock({
+            positionMs: ms,
+            durationMs: Number.isFinite(audio.duration) && audio.duration > 0 ? Math.round(audio.duration * 1000) : 0,
+          });
+          savePosition(ms);
+        } else if (mode === 'speech') {
+          speechSeqRef.current += 1;
+          stopSpeech();
+          clearTick();
+        }
+      }, [playing, clearTick, finishLecture, savePosition, scheduleSkip, startSpeechFor]);
+
+      /* 语速/静音就地生效，不重建音频、不回页首。 */
+      useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.playbackRate = pref.rate;
+        audio.volume = pref.muted ? 0 : 1;
+      }, [pref.rate, pref.muted]);
 
       /* 拖动分隔条：拖完才写偏好 */
       useEffect(() => {
@@ -2532,15 +2985,38 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
       const togglePlay = useCallback(() => {
         const next = !playingRef.current;
+        if (next) {
+          const ms = positionRef.current;
+          setStatus(normalizeOffsetMs(ms) > 0 ? '正在从 ' + formatClock(ms) + ' 继续' : '正在开始…');
+        } else {
+          const audio = audioRef.current;
+          const currentSlide = slidesRef.current[indexRef.current];
+          const mode = slideAudioMode(currentSlide);
+          const ms = pendingRestoreRef.current ? positionRef.current : audio ? Math.round(audio.currentTime * 1000) : positionRef.current;
+          if (mode === 'speech') setStatus('已暂停（浏览器朗读不支持精确续播）');
+          else setStatus(normalizeOffsetMs(ms) > 0 ? '已暂停 · ' + formatClock(ms) : '已暂停');
+        }
         setPlaying(next);
-        setStatus(next ? '正在开始…' : '已暂停');
       }, []);
 
-      const goTo = useCallback((target) => {
-        indexSourceRef.current = 'user';
-        thumbYieldRef.current = 0;
-        setIndex(Math.max(0, Math.min(slidesRef.current.length - 1, Math.round(Number(target) || 0))));
-      }, []);
+      const goTo = useCallback(
+        (target) => {
+          const next = Math.max(0, Math.min(slidesRef.current.length - 1, Math.round(Number(target) || 0)));
+          if (next === indexRef.current) return;
+          stopAudio();
+          indexSourceRef.current = 'user';
+          thumbYieldRef.current = 0;
+          resumeRef.current = null;
+          pendingRestoreRef.current = false;
+          positionRef.current = 0;
+          lastPersistRef.current = 0;
+          setBar(0);
+          setClock({ positionMs: 0, durationMs: 0 });
+          setIndex(next);
+          savePageStart(lectureRef.current, next + 1);
+        },
+        [savePageStart, stopAudio],
+      );
 
       /**
        * 预览窗格跟随当前页（横向滚动，AC-142 底部缩略图）：
@@ -2770,23 +3246,45 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         if (indexRef.current >= slidesRef.current.length - 1) {
           setPlaying(false);
           setStatus('已经到最后一页');
+          savePosition(positionRef.current);
           return;
         }
+        const next = indexRef.current + 1;
+        stopAudio();
         indexSourceRef.current = 'user';
-        setIndex(indexRef.current + 1);
-      }, []);
+        resumeRef.current = null;
+        pendingRestoreRef.current = false;
+        positionRef.current = 0;
+        lastPersistRef.current = 0;
+        setBar(0);
+        setClock({ positionMs: 0, durationMs: 0 });
+        setIndex(next);
+        savePageStart(lectureRef.current, next + 1);
+      }, [savePageStart, savePosition, stopAudio]);
 
       const prevPage = useCallback(() => {
         thumbYieldRef.current = 0;
         if (indexRef.current <= 0) return;
+        const next = indexRef.current - 1;
+        stopAudio();
         indexSourceRef.current = 'user';
-        setIndex(indexRef.current - 1);
-      }, []);
+        resumeRef.current = null;
+        pendingRestoreRef.current = false;
+        positionRef.current = 0;
+        lastPersistRef.current = 0;
+        setBar(0);
+        setClock({ positionMs: 0, durationMs: 0 });
+        setIndex(next);
+        savePageStart(lectureRef.current, next + 1);
+      }, [savePageStart, stopAudio]);
 
       const handleBack = useCallback(() => {
+        const audio = audioRef.current;
+        const ms = pendingRestoreRef.current ? positionRef.current : audio ? Math.round(audio.currentTime * 1000) : positionRef.current;
+        if (ms > 0) savePosition(ms, { beacon: true });
         stopAudio();
         if (onBack) onBack();
-      }, [stopAudio, onBack]);
+      }, [onBack, savePosition, stopAudio]);
 
       actionsRef.current = {
         togglePlay,
@@ -2835,21 +3333,6 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         return () => window.removeEventListener('keydown', onKey);
       }, [directory, transition]);
 
-      useEffect(
-        () => () => {
-          if (preloadRef.current) {
-            try {
-              preloadRef.current.pause();
-            } catch {
-              /* 忽略 */
-            }
-            preloadRef.current = null;
-          }
-          stopAudio();
-        },
-        [stopAudio],
-      );
-
       const currentLectureMeta = lectures.find((item) => Number(item.n) === Number(lectureN)) || null;
       const progressLine = formatSeriesProgress({
         lecture: lectureN,
@@ -2858,6 +3341,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         heardPages: progress ? progress.heardPages : 0,
         totalPages: progress ? progress.totalPages : (series && series.total_pages) || 0,
       });
+      const currentAudioMode = slideAudioMode(rawSlide);
+      const canResume = currentAudioMode === 'file' && normalizeOffsetMs(clock.positionMs) > 0;
+      const playLabel = playing ? '暂停' : canResume ? '继续听' : '开始听';
       // AC-144：配音失败/部分失败必须在播放入口可见，且能一眼看到错误码
       const voiceNotice = (() => {
         if (!series || voiceNoticeClosed) return '';
@@ -3001,8 +3487,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             { className: 'blm-controls' },
             h(
               'button',
-              { className: 'blm-btn primary', onClick: togglePlay, 'aria-label': playing ? '暂停' : '开始听' },
-              playing ? '暂停' : '开始听',
+              { className: 'blm-btn primary', onClick: togglePlay, 'aria-label': playLabel },
+              playLabel,
             ),
             h('button', { className: 'blm-btn', onClick: prevPage, disabled: index <= 0, 'aria-label': '上一页' }, '‹'),
             h('button', {
@@ -3013,7 +3499,11 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             }, '›'),
             h('span', { className: 'blm-dim' }, currentLectureMeta ? '第 ' + lectureN + '/' + lectures.length + ' 讲' : ''),
             h('div', { className: 'blm-pagebar', 'aria-hidden': 'true' }, h('i', { style: { width: Math.round(bar * 100) + '%' } })),
-            h('span', { className: 'blm-dim' }, Math.round(bar * 100) + '%'),
+            h(
+              'span',
+              { className: 'blm-dim', style: { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } },
+              formatClock(clock.positionMs) + ' / ' + (clock.durationMs > 0 ? formatClock(clock.durationMs) : '--:--'),
+            ),
             h(
               'select',
               {
@@ -7805,7 +8295,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                   h('dt', null, '插件包版本'),
                   h('dd', null, diagnostics.version || '—'),
                   h('dt', null, '产品版本'),
-                  h('dd', null, diagnostics.productVersion || '2.1'),
+                  h('dd', null, diagnostics.productVersion || '2.2'),
                   h('dt', null, 'schema'),
                   h('dd', null, String(diagnostics.schema || 2)),
                   h('dt', null, 'DSH 版本'),
@@ -8326,6 +8816,10 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         outlineInfo,
         seriesSnapshotVersion,
         resolveInitialSlide,
+        normalizeOffsetMs,
+        formatClock,
+        resolveResumeOffset,
+        resolvePendingResume,
         pdfHighlightRects,
         normalizePdfText,
         pdfTransform,

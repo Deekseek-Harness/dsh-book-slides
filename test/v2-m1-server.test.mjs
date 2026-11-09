@@ -83,7 +83,7 @@ test('插件路由：/meta、导入、分章、封面、回收站', async () => 
   const meta = await json('/dsh-book-slides/meta');
   assert.equal(meta.ok, true);
   assert.equal(meta.schema, 2);
-  assert.equal(meta.product_version, '2.1');
+  assert.equal(meta.product_version, '2.2');
 
   const pdf = makePdf([
     ['第一章 函数'],

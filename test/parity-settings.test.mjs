@@ -26,6 +26,7 @@ const { savePart } = await import('../host/parts.js');
 const { createSeries, findSeries, patchSeriesLecture, persistSeries } = await import('../host/series.js');
 const { writeLectureOutputs } = await import('../host/lectures.js');
 const { writePreference, readPreference } = await import('../host/prefs.js');
+const { normalizeOffsetMs } = await import('../host/progress.js');
 const { routeM1 } = await import('../host/api.js');
 
 const server = http.createServer(async (req, res) => {
@@ -143,7 +144,7 @@ test('AC-118：设置首屏给出数据根、占用、回收站、备份与只�
   assert.ok(out.bytes > 0);
   assert.equal(out.trashCount, 0);
   assert.deepEqual(out.backups, []);
-  assert.equal(out.productVersion, '2.1');
+  assert.equal(out.productVersion, '2.2');
   assert.equal(out.schema, 2);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
@@ -161,7 +162,7 @@ test('AC-118：诊断显示插件版本/产品版本/schema/DSH/pdfjs 与最近�
   assert.equal(out.ok, true);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
-  assert.equal(out.productVersion, '2.1');
+  assert.equal(out.productVersion, '2.2');
   assert.equal(out.schema, 2);
   assert.equal(typeof out.dshVersion, 'string');
   assert.ok(out.dshVersion.length > 0);
@@ -265,6 +266,14 @@ test('AC-127：偏好越界被夹紧，关闭重开保持（split 0.25–0.75、
   assert.equal(bad.preference.lastSlide, 0);
 });
 
+test('页内位置归一化：负数/非数字/过小归 0，24h 封顶', () => {
+  assert.equal(normalizeOffsetMs(-1), 0);
+  assert.equal(normalizeOffsetMs('x'), 0);
+  assert.equal(normalizeOffsetMs(499), 0);
+  assert.equal(normalizeOffsetMs(500), 500);
+  assert.equal(normalizeOffsetMs(30 * 24 * 60 * 60 * 1000), 24 * 60 * 60 * 1000);
+});
+
 test('AC-108：系列进度 GET/POST 持久化，并同步「上次打开」偏好', async () => {
   const book = makeBook('progress');
   const series = makeSeries(book, 'progress');
@@ -283,11 +292,39 @@ test('AC-108：系列进度 GET/POST 持久化，并同步「上次打开」偏�
   assert.equal(first.progress.slide, 3);
   assert.equal(first.progress.lecturePages, 8);
   assert.equal(first.progress.heardPages, 3);
+  assert.equal(first.progress.offsetMs, 0);
 
-  // 回看第 1 页不回退已听页数
+  // 页内位置：显式 offsetMs 落盘；同页缺省保留；显式 0 清除；过小归 0。
+  const paused = await post('/dsh-book-slides/series/progress', {
+    seriesId: series.id,
+    lecture: 2,
+    slide: 3,
+    offsetMs: 12345,
+    audioFile: 'audio/003.wav',
+    audioMs: 12000,
+    audioProvider: 'qwen3-tts',
+  });
+  assert.equal(paused.progress.offsetMs, 12345);
+  assert.equal(paused.progress.audioFile, 'audio/003.wav');
+  assert.equal(paused.progress.audioMs, 12000);
+  assert.equal(paused.progress.audioProvider, 'qwen3-tts');
+  const savedOffset = await json('/dsh-book-slides/series/progress?seriesId=' + series.id);
+  assert.equal(savedOffset.progress.offsetMs, 12345);
+  assert.equal(savedOffset.progress.audioFile, 'audio/003.wav');
+  const samePage = await post('/dsh-book-slides/series/progress', { seriesId: series.id, lecture: 2, slide: 3 });
+  assert.equal(samePage.progress.offsetMs, 12345, '同页缺省 offset 不应清零');
+  assert.equal(samePage.progress.audioFile, 'audio/003.wav', '同页缺省时音频身份也要保留');
+  const tooSmall = await post('/dsh-book-slides/series/progress', { seriesId: series.id, lecture: 2, slide: 3, offsetMs: 300 });
+  assert.equal(tooSmall.progress.offsetMs, 0, '小于 500ms 归 0');
+  assert.equal(tooSmall.progress.audioFile, '', '清零时音频身份一并清掉');
+  const cleared = await post('/dsh-book-slides/series/progress', { seriesId: series.id, lecture: 2, slide: 3, offsetMs: 0 });
+  assert.equal(cleared.progress.offsetMs, 0);
+
+  // 回看第 1 页不回退已听页数，且换页时缺省 offset 归 0。
   const back = await post('/dsh-book-slides/series/progress', { seriesId: series.id, lecture: 2, slide: 1 });
   assert.equal(back.progress.slide, 1);
   assert.equal(back.progress.heardPages, 3);
+  assert.equal(back.progress.offsetMs, 0);
 
   const reloaded = await json('/dsh-book-slides/series/progress?seriesId=' + series.id);
   assert.equal(reloaded.progress.lecture, 2);

@@ -3,6 +3,32 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.2.0] - 2026-11-10
+
+**播放器暂停粒度**。功能增量，数据 schema 仍为 `2`；`progress.json` 追加可选字段（向后兼容），无需迁移。
+
+### 版本与环境
+
+- 包 `2.2.0`（tag `v2.2.0`）、产品 `2.2`、数据 schema `2`、文档 v1.23。
+- 可覆盖安装 2.1.4；已有书/系列/音频/配图/练习与 `usage/` 账本继续可用；旧 `progress.json` 缺字段按 0/空。
+
+### 变更
+
+- 播放器暂停/继续从“页”改为当前页音频的媒体时间：暂停保存 `offset_ms`，继续从该秒接着播；离开播放页、重启 DSH 后恢复；显式翻页/换讲从 0；语速/静音不重置位置；重新配音后音频身份不一致则旧位置失效；浏览器朗读不支持精确续播，同页/跨页/重启按页重播。
+- `progress.json` 追加 `offset_ms` / `audio_file` / `audio_ms` / `audio_provider`；`/series/progress` 的 GET/POST 同步透出。`schema` 仍为 1，旧数据缺字段按 0/空。
+- 进度条显示 `mm:ss / mm:ss`；暂停停在原位，按钮在暂停后变为「继续听」。
+
+### 修复
+
+- 修复恢复时“页对、秒丢”：初始 hydration 里 `slides` 先到、`index` 下一帧才切到目标页，旧 index 的建源 effect 会先把 resume 清掉；现在目标页仍存在时保留 pending，下一帧再恢复。
+- 修复恢复时“按钮/进度条仍显示从头开始”：恢复成功后按钮为「继续听」，继续不重建音频。
+
+### 测试
+
+- `test/parity-player.test.mjs`：页内位置归一化/时钟/续播裁决、初始 hydration 两帧恢复、建源与播放/暂停分离契约。
+- `test/parity-settings.test.mjs`：offset + 音频身份往返、同页保留、换页清零。
+- `npm run test:v2` 43 文件 / 377 项全绿；`npm run verify:plugin` PASS。
+
 ## [2.1.4] - 2026-11-10
 
 **体验优化**。无功能、数据 schema、HTTP 契约变更，可直接覆盖 2.1.3；无需数据迁移。
