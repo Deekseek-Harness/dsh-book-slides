@@ -240,6 +240,10 @@ body[data-ds-dark-theme] .blm-player-alert{color:#ffd27a}
 .blm-field > .label{flex:0 0 68px;color:var(--blm-dim)}
 .blm-field > .label[title]{cursor:help}
 .blm-voice-actions{margin-top:14px;padding-top:10px;border-top:1px solid var(--blm-line);justify-content:flex-end}
+.blm-probe-note{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.blm-probe-text{flex:1;min-width:150px}
+.blm-probe-regen{appearance:none;border:0;background:transparent;color:inherit;font:inherit;font-size:12px;padding:0;text-decoration:underline;cursor:pointer;white-space:nowrap}
+.blm-probe-regen:disabled{opacity:.55;cursor:default;text-decoration:none}
 .blm-input{flex:1;min-width:140px;border:1px solid var(--blm-line);border-radius:6px;padding:5px 8px;font:inherit;background:var(--blm-card);color:var(--blm-text);color-scheme:inherit}
 .blm-kv{display:grid;grid-template-columns:92px 1fr;gap:6px 10px;margin:0;font-size:12px}
 .blm-kv dt{color:var(--blm-dim)}
@@ -5379,6 +5383,106 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       );
     }
 
+    /* ------------------------------ 试听状态（UI 单一来源） ------------------------------ */
+
+    const PROBE_IDLE = {
+      phase: 'idle',
+      startedAt: 0,
+      elapsedMs: 0,
+      kind: '',
+      where: '',
+      slow: false,
+      note: '',
+      tone: '',
+      audioMs: 0,
+      genMs: 0,
+      blocked: false,
+      code: '',
+    };
+
+    function probeDuration(ms) {
+      const value = Number(ms);
+      if (!Number.isFinite(value) || value <= 0) return '';
+      return (value / 1000).toFixed(1) + 's';
+    }
+
+    function probeTiming(state) {
+      const parts = [];
+      const audio = probeDuration(state && state.audioMs);
+      const gen = probeDuration(state && state.genMs);
+      if (audio) parts.push('音频 ' + audio);
+      if (gen) parts.push('生成 ' + gen);
+      return parts.join(' · ');
+    }
+
+    /**
+     * 试听按钮/状态行的唯一派生入口：phase 决定文案、禁用与状态行。
+     * 返回 { label, disabled, busy, title, tone, note }；tone 为 'progress' | 'ok' | 'warn' | ''。
+     */
+    function probeView(state, options) {
+      const opts = options && typeof options === 'object' ? options : {};
+      const baseDisabled = !!opts.baseDisabled;
+      const source = state && typeof state === 'object' ? state : PROBE_IDLE;
+      const phase = source.phase || 'idle';
+      const where = source.where || '当前供应商';
+      const seconds = Math.max(0, Math.floor((Number(source.elapsedMs) || 0) / 1000));
+      const timing = probeTiming(source);
+      if (phase === 'generating') {
+        const wait = seconds > 0 ? ' · 已等待 ' + seconds + 's' : '';
+        return {
+          label: seconds > 0 ? '生成中… ' + seconds + 's' : '生成中…',
+          disabled: true,
+          busy: true,
+          title: '正在生成试听音频；生成结束前不能重复点击',
+          tone: 'progress',
+          note:
+            source.kind === 'browser'
+              ? '正在准备本机朗读…'
+              : source.kind === 'off'
+                ? '正在检查语音配置…'
+                : '正在生成试听：' + where + wait + (source.slow ? '。首次加载模型可能要 1–3 分钟，请稍候。' : '…'),
+        };
+      }
+      if (phase === 'playing') {
+        return {
+          label: '停止试听',
+          disabled: false,
+          busy: false,
+          title: '停止播放试听音频（不会重新生成）',
+          tone: 'progress',
+          note: '正在播放试听：' + where + (timing ? ' · ' + timing : '') + '。',
+        };
+      }
+      if (phase === 'ready') {
+        return {
+          label: source.blocked ? '播放试听' : '重听',
+          disabled: baseDisabled,
+          busy: false,
+          title: source.blocked ? '浏览器拦截了自动播放，点这里手动播放' : '重听上次试听；换参考/音色/工作流后会自动重新生成',
+          tone: source.blocked ? 'warn' : 'ok',
+          note: source.note || '试听完成：' + where + (timing ? ' · ' + timing : '') + '。',
+        };
+      }
+      if (phase === 'error') {
+        return {
+          label: '重试',
+          disabled: baseDisabled,
+          busy: false,
+          title: '再试一次试听',
+          tone: 'warn',
+          note: source.note || '试听失败，请重试。',
+        };
+      }
+      return {
+        label: '试听',
+        disabled: baseDisabled,
+        busy: false,
+        title: opts.idleTitle || '试听当前供应商的合成效果',
+        tone: '',
+        note: '',
+      };
+    }
+
     /* ------------------------------ M4 设置（FR-21.5） ------------------------------ */
 
     function Settings({ onBack, notify, initial }) {
@@ -5395,7 +5499,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const [ttsBusy, setTtsBusy] = useState(false);
       const [pendingWorkflow, setPendingWorkflow] = useState(null);
       const [pendingTextNode, setPendingTextNode] = useState('');
-      const previewAudioRef = useRef(null);
+      const [probe, setProbe] = useState(PROBE_IDLE);
+      const probeLockRef = useRef(false);
+      const probeAliveRef = useRef(true);
+      const probeTokenRef = useRef(0);
+      const probeCacheRef = useRef(null);
+      const probeAudioRef = useRef(null);
       const [diagnostics, setDiagnostics] = useState(seed.diagnostics || null);
       const [form, setForm] = useState(() => {
         const saved = seed.voice || null;
@@ -5553,80 +5662,6 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
           setApiKeyInput('');
           setEditingKey(false);
           setMessage('API Key 已清除');
-        }
-      };
-
-      /** 试听：Qwen 返回 WAV 字节直接播；浏览器返回朗读参数，本机念。 */
-      const probe = async () => {
-        setMessage('');
-        setTtsMsg('');
-        setError(null);
-        try {
-          const res = await fetch(API + '/voice/probe', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              text: '你好，这是一段试听，用来确认语音能出声。',
-              comfyRefVoice: form.provider === 'comfyui-tts' ? comfyRefVoiceValue : '',
-              voice: form.provider === 'qwen3-tts' ? form.voice : '',
-            }),
-          });
-          const type = String(res.headers.get('content-type') || '');
-          if (type.includes('audio/')) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            if (previewAudioRef.current) {
-              try {
-                previewAudioRef.current.pause();
-                previewAudioRef.current.currentTime = 0;
-              } catch {
-                /* 旧音频已结束 */
-              }
-            }
-            const audio = new Audio(url);
-            previewAudioRef.current = audio;
-            audio.onended = () => URL.revokeObjectURL(url);
-            audio.onerror = () => URL.revokeObjectURL(url);
-            await audio.play();
-            const usedVoice =
-              String(res.headers.get('x-tts-voice-label') || '').trim() ||
-              String(res.headers.get('x-tts-voice') || '').trim();
-            setMessage(
-              (form.provider === 'comfyui-tts' ? '正在试听 ComfyUI 配音' : '正在试听 Qwen3-TTS') +
-                (usedVoice ? '（' + usedVoice + '）' : '') +
-                '…',
-            );
-            return;
-          }
-          const raw = await res.text();
-          let result = null;
-          try {
-            result = JSON.parse(raw);
-          } catch {
-            result = null;
-          }
-          if (!result) {
-            const err = new Error('试听失败：插件服务无响应（HTTP ' + res.status + '），重启 DSH 后再试');
-            err.code = 'E_BAD_RESPONSE';
-            throw err;
-          }
-          if (!result || result.ok === false) {
-            const err = new Error((result && (result.error || result.message || result.code)) || '试听失败');
-            err.code = result && result.code;
-            throw err;
-          }
-          if (result.mode === 'browser') {
-            speakText(result.text, { rate: result.rate, voice: result.voice });
-            setMessage('正在用本机声音试听…');
-          } else {
-            setMessage('试听已提交。');
-          }
-        } catch (err) {
-          setMessage(
-            err && err.code === 'E_TTS_UNCONFIGURED'
-              ? '语音没配置好：' + String(err.message || '') + (err.hint ? ' ' + err.hint : '')
-              : String((err && err.message) || err),
-          );
         }
       };
 
@@ -6014,6 +6049,359 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         ? form.comfyRefVoice
         : (ttsTable && ttsTable.defaultVoice) || '';
 
+      /* ------------------------------ 试听（FR-23 / AC-149） ------------------------------ */
+
+      /** 任何会改变试听结果的配置变化都让浏览器内存里的试听缓存失效。 */
+      const probeSignature = () => {
+        const selected = ttsRefs.find((item) => item.id === comfyRefVoiceValue);
+        const address =
+          comfyAddress.baseUrl || (comfyAddress.host || '') + ':' + (comfyAddress.port || '');
+        return [
+          form.provider,
+          form.model || '',
+          form.voice || '',
+          String(form.rate || ''),
+          form.provider === 'comfyui-tts' ? comfyRefVoiceValue : '',
+          form.provider === 'comfyui-tts' && selected ? selected.sha256 || '' : '',
+          form.provider === 'comfyui-tts'
+            ? ((ttsWorkflow && ttsWorkflow.name) || '') + ':' + (form.textNode || (ttsWorkflow && ttsWorkflow.textNode) || '')
+            : '',
+          form.provider === 'comfyui-tts' ? address : '',
+        ].join('|');
+      };
+
+      const probeTarget = () => {
+        const kind =
+          form.provider === 'comfyui-tts'
+            ? 'comfy'
+            : form.provider === 'qwen3-tts'
+              ? 'qwen'
+              : form.provider === 'browser'
+                ? 'browser'
+                : 'off';
+        const selected = ttsRefs.find((item) => item.id === comfyRefVoiceValue);
+        const where =
+          kind === 'comfy'
+            ? 'ComfyUI 配音' + (selected ? '（参考：' + selected.name + '）' : '')
+            : kind === 'qwen'
+              ? 'Qwen3-TTS' + (form.voice ? '（音色：' + form.voice + '）' : '')
+              : kind === 'browser'
+                ? '本机朗读'
+                : '语音';
+        return { kind, where };
+      };
+
+      const probeStopAudio = () => {
+        const audio = probeAudioRef.current;
+        probeAudioRef.current = null;
+        if (audio) {
+          try {
+            audio.onended = null;
+            audio.onerror = null;
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+          } catch {
+            /* 已结束 */
+          }
+        }
+        stopSpeech();
+      };
+
+      const probeDropCache = () => {
+        const cache = probeCacheRef.current;
+        probeCacheRef.current = null;
+        if (cache && cache.url) {
+          try {
+            URL.revokeObjectURL(cache.url);
+          } catch {
+            /* 已释放 */
+          }
+        }
+      };
+
+      /** 播放已有缓存：音频走 <audio>，浏览器朗读走 speechSynthesis；结束/失败都落到状态机。 */
+      const startProbePlayback = (cache) => {
+        const token = ++probeTokenRef.current;
+        probeStopAudio();
+        const timing = probeTiming(cache);
+        const base = cache.where + (timing ? ' · ' + timing : '');
+        const finish = (patch) => {
+          if (!probeAliveRef.current || token !== probeTokenRef.current) return;
+          probeAudioRef.current = null;
+          setProbe((prev) =>
+            Object.assign({}, prev, { phase: 'ready', elapsedMs: 0, blocked: false, note: '', tone: 'ok' }, patch),
+          );
+        };
+        const fail = (note) => {
+          if (!probeAliveRef.current || token !== probeTokenRef.current) return;
+          // 播放失败后缓存不可再用；先让这段声音的回调失效，再释放 blob。
+          ++probeTokenRef.current;
+          probeStopAudio();
+          probeDropCache();
+          setProbe((prev) =>
+            Object.assign({}, prev, { phase: 'error', elapsedMs: 0, blocked: false, note: note, tone: 'warn', code: 'E_TTS_PLAY' }),
+          );
+        };
+        setProbe((prev) =>
+          Object.assign({}, prev, {
+            phase: 'playing',
+            elapsedMs: 0,
+            where: cache.where,
+            audioMs: cache.audioMs,
+            genMs: cache.genMs,
+            blocked: false,
+            note: '',
+            tone: '',
+          }),
+        );
+        let settled = false;
+        if (cache.kind === 'browser') {
+          try {
+            speakText(cache.text, {
+              rate: cache.rate,
+              voice: cache.voice,
+              onend: () => {
+                if (settled) return;
+                settled = true;
+                finish({ note: '试听完成：本机朗读。点「重听」再听一次。' });
+              },
+              onerror: () => {
+                if (settled) return;
+                settled = true;
+                fail('E_TTS_PLAY：本机朗读被打断或不可用。点「重试」再试一次。');
+              },
+            });
+          } catch (err) {
+            fail('本机朗读失败：' + String((err && err.message) || err));
+          }
+          return;
+        }
+        const audio = new Audio(cache.url);
+        probeAudioRef.current = audio;
+        audio.onended = () => {
+          if (settled) return;
+          settled = true;
+          finish({ note: '试听完成：' + base + '。点「重听」重放；换参考/音色后会自动重新生成。' });
+        };
+        audio.onerror = () => {
+          if (settled) return;
+          settled = true;
+          fail('E_TTS_PLAY：浏览器没能播放这段试听音频（文件可能损坏）。点「重试」重新生成。');
+        };
+        const promise = audio.play();
+        if (promise && typeof promise.catch === 'function') {
+          promise.catch(() => {
+            if (settled) return;
+            settled = true;
+            if (!probeAliveRef.current || token !== probeTokenRef.current) return;
+            if (probeAudioRef.current === audio) probeAudioRef.current = null;
+            try {
+              audio.pause();
+            } catch {
+              /* 忽略 */
+            }
+            setProbe((prev) =>
+              Object.assign({}, prev, {
+                phase: 'ready',
+                elapsedMs: 0,
+                blocked: true,
+                note: '试听音频已生成，但浏览器阻止了自动播放；点「播放试听」手动播放。',
+                tone: 'warn',
+              }),
+            );
+          });
+        }
+      };
+
+      /** 播放中再点「试听」= 停止，不重新生成。 */
+      const stopProbe = () => {
+        if (probe.phase !== 'playing') return;
+        ++probeTokenRef.current;
+        const timing = probeTiming(probe);
+        probeStopAudio();
+        setProbe((prev) =>
+          Object.assign({}, prev, {
+            phase: 'ready',
+            elapsedMs: 0,
+            blocked: false,
+            tone: '',
+            note: '已停止播放：' + (prev.where || '试听') + (timing ? ' · ' + timing : '') + '。点「重听」重放。',
+          }),
+        );
+      };
+
+      /**
+       * 试听：先把按钮置为「生成中」再 await；同配置再点走缓存「重听」，不重复跑 ComfyUI。
+       * 请求/播放都用 token 防止迟到的回调覆盖新状态。
+       */
+      const startProbe = async () => {
+        if (probeLockRef.current) return;
+        const signature = probeSignature();
+        const cached = probeCacheRef.current;
+        if (cached && cached.signature === signature) {
+          startProbePlayback(cached);
+          return;
+        }
+        probeLockRef.current = true;
+        const token = ++probeTokenRef.current;
+        const target = probeTarget();
+        const startedAt = Date.now();
+        probeStopAudio();
+        probeDropCache();
+        setMessage('');
+        setError(null);
+        setProbe({
+          phase: 'generating',
+          startedAt,
+          elapsedMs: 0,
+          kind: target.kind,
+          where: target.where,
+          slow: target.kind === 'comfy',
+          note: '',
+          tone: 'progress',
+          audioMs: 0,
+          genMs: 0,
+          blocked: false,
+          code: '',
+        });
+        try {
+          const res = await fetch(API + '/voice/probe', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              text: '你好，这是一段试听，用来确认语音能出声。',
+              comfyRefVoice: form.provider === 'comfyui-tts' ? comfyRefVoiceValue : '',
+              voice: form.provider === 'qwen3-tts' ? form.voice : '',
+            }),
+          });
+          if (!probeAliveRef.current || token !== probeTokenRef.current) return;
+          const genMs = Date.now() - startedAt;
+          const type = String(res.headers.get('content-type') || '');
+          if (type.includes('audio/')) {
+            const blob = await res.blob();
+            if (!probeAliveRef.current || token !== probeTokenRef.current) return;
+            const label = String(res.headers.get('x-tts-voice-label') || '').trim();
+            const cache = {
+              signature,
+              kind: 'audio',
+              where: target.kind === 'comfy' && label ? 'ComfyUI 配音（参考：' + label + '）' : target.where,
+              url: URL.createObjectURL(blob),
+              audioMs: Number(res.headers.get('x-tts-ms')) || 0,
+              genMs,
+            };
+            probeCacheRef.current = cache;
+            startProbePlayback(cache);
+            return;
+          }
+          const raw = await res.text();
+          if (!probeAliveRef.current || token !== probeTokenRef.current) return;
+          let result = null;
+          try {
+            result = JSON.parse(raw);
+          } catch {
+            result = null;
+          }
+          if (!result) {
+            const err = new Error('试听失败：插件服务无响应（HTTP ' + res.status + '），重启 DSH 后再试');
+            err.code = 'E_BAD_RESPONSE';
+            throw err;
+          }
+          if (result.ok === false) {
+            const err = new Error(result.error || result.message || result.code || '试听失败');
+            err.code = result.code;
+            err.hint = result.hint || '';
+            throw err;
+          }
+          if (result.mode === 'browser') {
+            const cache = {
+              signature,
+              kind: 'browser',
+              where: '本机朗读',
+              url: '',
+              audioMs: Number(result.audio_ms) || 0,
+              genMs: 0,
+              text: result.text,
+              rate: result.rate,
+              voice: result.voice,
+            };
+            probeCacheRef.current = cache;
+            startProbePlayback(cache);
+            return;
+          }
+          setProbe(
+            Object.assign({}, PROBE_IDLE, { phase: 'error', note: '试听已提交，但没有可播放的音频返回。', tone: 'warn' }),
+          );
+        } catch (err) {
+          if (!probeAliveRef.current || token !== probeTokenRef.current) return;
+          probeDropCache();
+          const code = String((err && err.code) || '');
+          const detail = String((err && err.message) || err || '试听失败');
+          const hint = String((err && err.hint) || '');
+          const note =
+            code === 'E_TTS_UNCONFIGURED'
+              ? '语音没配置好：' + detail + (hint ? ' ' + hint : '')
+              : (code ? code + '：' : '') + detail + (hint ? '（' + hint + '）' : '');
+          setProbe(Object.assign({}, PROBE_IDLE, { phase: 'error', note: note, tone: 'warn', code: code }));
+        } finally {
+          probeLockRef.current = false;
+        }
+      };
+
+      /** 同配置重跑一次（不吃缓存）。 */
+      const regenerateProbe = () => {
+        probeDropCache();
+        setProbe(PROBE_IDLE);
+        startProbe();
+      };
+
+      // 生成中每 0.5s 刷新“已等待 Ns”，让长耗时可见。
+      useEffect(() => {
+        if (probe.phase !== 'generating') return undefined;
+        const startedAt = Number(probe.startedAt) || Date.now();
+        const tick = () => {
+          setProbe((prev) =>
+            prev.phase === 'generating'
+              ? Object.assign({}, prev, { elapsedMs: Math.max(0, Date.now() - startedAt) })
+              : prev,
+          );
+        };
+        tick();
+        const timer = setInterval(tick, 500);
+        return () => clearInterval(timer);
+      }, [probe.phase, probe.startedAt]);
+
+      // 配置一变就释放旧缓存；正在播的不打断，等结束后自然回到「试听」。
+      useEffect(() => {
+        const cache = probeCacheRef.current;
+        if (!cache || cache.signature === probeSignature()) return;
+        if (probe.phase === 'playing') return;
+        probeDropCache();
+      }, [form, ttsRefs, comfyRefVoiceValue, ttsWorkflow, comfyAddress, probe.phase]);
+
+      // 离开设置页：停声音、释放 blob、让迟到的响应失效。
+      useEffect(() => {
+        probeAliveRef.current = true;
+        return () => {
+          probeAliveRef.current = false;
+          ++probeTokenRef.current;
+          probeStopAudio();
+          probeDropCache();
+        };
+      }, []);
+
+      const probeCacheValid = Boolean(
+        probeCacheRef.current && probeCacheRef.current.signature === probeSignature(),
+      );
+      const probeVisible = probe.phase === 'ready' && !probeCacheValid ? PROBE_IDLE : probe;
+      const probeUi = probeView(probeVisible, {
+        baseDisabled: saving || ttsBusy,
+        idleTitle:
+          form.provider === 'comfyui-tts'
+            ? '用当前参考 voice 真跑一次 ComfyUI 克隆工作流；只播放，不落盘、不进音频缓存'
+            : '试听当前供应商的合成效果',
+      });
+
       return h(
         'div',
         { className: 'blm-body' },
@@ -6368,11 +6756,12 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 'button',
                 {
                   className: 'blm-btn',
-                  disabled: saving || ttsBusy,
-                  title: form.provider === 'comfyui-tts' ? '用当前参考 voice 真跑一次 ComfyUI 克隆工作流，只播放、不落盘' : '试听当前供应商的合成效果',
-                  onClick: probe,
+                  disabled: probeUi.disabled,
+                  'aria-busy': probeUi.busy ? 'true' : undefined,
+                  title: probeUi.title,
+                  onClick: probe.phase === 'playing' ? stopProbe : startProbe,
                 },
-                '试听',
+                probeUi.label,
               ),
               h('div', { style: { flex: 1 } }),
               h(
@@ -6387,6 +6776,30 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                 saving ? '保存中…' : '保存',
               ),
             ),
+            probeUi.note
+              ? h(
+                  'div',
+                  {
+                    className: 'blm-note blm-probe-note' + (probeUi.tone === 'warn' ? ' warn' : ''),
+                    role: 'status',
+                    'aria-live': 'polite',
+                  },
+                  h('span', { className: 'blm-probe-text' }, probeUi.note),
+                  probe.phase === 'ready' && probeCacheValid && !probe.blocked
+                    ? h(
+                        'button',
+                        {
+                          className: 'blm-probe-regen',
+                          type: 'button',
+                          disabled: saving || ttsBusy,
+                          title: '按当前配置重新生成一次试听（会重新跑一次 ComfyUI）',
+                          onClick: regenerateProbe,
+                        },
+                        '重新生成',
+                      )
+                    : null,
+                )
+              : null,
           ),
           h(
             'section',
@@ -7093,6 +7506,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         nextLectureAfter,
         formatSeriesProgress,
         formatJobLine,
+        probeView,
+        probeTiming,
         chapterSelectionState,
         chapterSourceLabel,
         sourceLabel,
