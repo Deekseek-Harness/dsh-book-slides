@@ -503,6 +503,81 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       return true;
     }
 
+    /** 系统是否要求减少动态效果；取不到媒体查询时按普通滚动处理。 */
+    function prefersReducedMotion() {
+      try {
+        return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch {
+        return false;
+      }
+    }
+
+    /**
+     * 预览窗格横向滚动目标（不直接操作 DOM，便于单测）：
+     * 当前页已完整可见返回 null；否则返回夹紧到 [0, 最大滚动量] 的 scrollLeft。
+     * relativeLeft / relativeRight 是缩略图相对滚动容器左边缘的偏移。
+     */
+    function thumbScrollLeft(scrollLeft, clientWidth, scrollWidth, relativeLeft, relativeRight) {
+      const width = Number(clientWidth) || 0;
+      const max = Math.max(0, (Number(scrollWidth) || 0) - width);
+      if (width <= 0 || max <= 0) return null;
+      if (relativeLeft >= -1 && relativeRight <= width + 1) return null;
+      const delta = relativeLeft < 0 ? relativeLeft : relativeRight - width;
+      return Math.max(0, Math.min((Number(scrollLeft) || 0) + delta, max));
+    }
+
+    /**
+     * 把当前页缩略图滚进预览窗格的可视区（播放器底部逐页缩略图）。
+     * 已完整可见时不滚动；只改 scrollLeft，不调用 scrollIntoView，避免带动外层页面纵向滚动。
+     */
+    function scrollThumbIntoView(container, thumb, behavior) {
+      if (!container || !thumb) return false;
+      if (typeof container.getBoundingClientRect !== 'function' || typeof thumb.getBoundingClientRect !== 'function') {
+        return false;
+      }
+      let containerRect = null;
+      let thumbRect = null;
+      try {
+        containerRect = container.getBoundingClientRect();
+        thumbRect = thumb.getBoundingClientRect();
+      } catch {
+        return false;
+      }
+      if (!containerRect || !thumbRect) return false;
+      const next = thumbScrollLeft(
+        container.scrollLeft,
+        container.clientWidth,
+        container.scrollWidth,
+        thumbRect.left - containerRect.left,
+        thumbRect.right - containerRect.left,
+      );
+      if (next == null) return false;
+      const mode = behavior || (prefersReducedMotion() ? 'auto' : 'smooth');
+      const assign = () => {
+        container.scrollLeft = next;
+      };
+      try {
+        if (typeof container.scrollTo === 'function') container.scrollTo({ left: next, behavior: mode });
+        else assign();
+      } catch {
+        try {
+          container.scrollTo({ left: next });
+        } catch {
+          assign();
+        }
+      }
+      return true;
+    }
+
+    /** 预览窗格手动滚动后的让位时长：期间播放翻页不抢滚动，键盘/点击仍立即跟随。 */
+    const THUMB_SCROLL_YIELD_MS = 5000;
+
+    /** 这次翻页是否要暂缓滚动：只有播放驱动且仍在让位期内才返回剩余毫秒，否则返回 0。 */
+    function thumbScrollDeferMs(source, yieldUntil, now) {
+      if (source !== 'playback') return 0;
+      return Math.max(0, (Number(yieldUntil) || 0) - (Number(now) || 0));
+    }
+
     /* ------------------------------ M4 纯函数（可单测） ------------------------------ */
 
     /** 分隔条比例夹紧，与服务端 prefs.clampSplit 保持一致。 */
@@ -1979,6 +2054,10 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const seriesRef = useRef(null);
       const startRef = useRef({ lecture: Math.max(1, Number(initialLecture) || 1), slide: Number(initialSlide) || 0, used: false });
       const actionsRef = useRef({});
+      const thumbsRef = useRef(null);
+      const thumbYieldRef = useRef(0);
+      const thumbScrollTimerRef = useRef(null);
+      const indexSourceRef = useRef('user');
       indexRef.current = index;
       playingRef.current = playing;
       prefRef.current = pref;
@@ -2278,6 +2357,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
       const advance = useCallback(() => {
         if (indexRef.current + 1 < slidesRef.current.length) {
+          indexSourceRef.current = 'playback';
           setStatus('正在播放第 ' + (indexRef.current + 2) + ' 页');
           setIndex(indexRef.current + 1);
           return;
@@ -2452,8 +2532,101 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       }, []);
 
       const goTo = useCallback((target) => {
+        indexSourceRef.current = 'user';
+        thumbYieldRef.current = 0;
         setIndex(Math.max(0, Math.min(slidesRef.current.length - 1, Math.round(Number(target) || 0))));
       }, []);
+
+      /**
+       * 预览窗格跟随当前页（横向滚动，AC-142 底部缩略图）：
+       * - 键盘/点击/换讲属于显式翻页，立即滚动并结束让位期；
+       * - 播放自动翻页在用户刚刚手动横向滚动后让位 5 秒，让位结束时若当前页仍不可见则补滚一次。
+       */
+      useEffect(() => {
+        const container = thumbsRef.current;
+        if (!container) return undefined;
+        const clearTimer = () => {
+          if (thumbScrollTimerRef.current) {
+            clearTimeout(thumbScrollTimerRef.current);
+            thumbScrollTimerRef.current = null;
+          }
+        };
+        const reveal = () => {
+          const thumb = container.children ? container.children[index] : null;
+          return scrollThumbIntoView(container, thumb || null);
+        };
+        const source = indexSourceRef.current;
+        indexSourceRef.current = 'user';
+        clearTimer();
+        const defer = thumbScrollDeferMs(source, thumbYieldRef.current, Date.now());
+        if (defer > 0) {
+          const wait = () => {
+            const left = thumbScrollDeferMs('playback', thumbYieldRef.current, Date.now());
+            if (left > 0) {
+              thumbScrollTimerRef.current = setTimeout(wait, left + 20);
+              return;
+            }
+            thumbScrollTimerRef.current = null;
+            reveal();
+          };
+          thumbScrollTimerRef.current = setTimeout(wait, defer + 20);
+          return clearTimer;
+        }
+        thumbYieldRef.current = 0;
+        let frame = 0;
+        let cancelled = false;
+        const apply = () => {
+          if (!cancelled) reveal();
+        };
+        if (typeof requestAnimationFrame === 'function') frame = requestAnimationFrame(apply);
+        else apply();
+        return () => {
+          cancelled = true;
+          if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+        };
+      }, [index, slides.length]);
+
+      /* 手动横向滚动预览窗格后让位 5 秒；程序滚动不触发，避免自己把自己锁住。 */
+      useEffect(() => {
+        const container = thumbsRef.current;
+        if (!container || typeof container.addEventListener !== 'function') return undefined;
+        const markManual = () => {
+          thumbYieldRef.current = Date.now() + THUMB_SCROLL_YIELD_MS;
+        };
+        const onWheel = (event) => {
+          const dx = Math.abs(Number(event.deltaX) || 0);
+          const dy = Math.abs(Number(event.deltaY) || 0);
+          if (event.shiftKey || dx > dy) markManual();
+        };
+        container.addEventListener('wheel', onWheel, { passive: true });
+        container.addEventListener('touchstart', markManual, { passive: true });
+        container.addEventListener('pointerdown', markManual);
+        return () => {
+          container.removeEventListener('wheel', onWheel);
+          container.removeEventListener('touchstart', markManual);
+          container.removeEventListener('pointerdown', markManual);
+        };
+      }, [slides.length]);
+
+      /* 窗口缩放 / 侧栏展开改变可视宽度后，当前页可能被裁掉：校正一次（即时滚动）。 */
+      useEffect(() => {
+        const container = thumbsRef.current;
+        if (!container) return undefined;
+        const keepVisible = () => {
+          const thumb = container.children ? container.children[indexRef.current] : null;
+          scrollThumbIntoView(container, thumb || null, 'auto');
+        };
+        if (typeof ResizeObserver === 'function') {
+          const observer = new ResizeObserver(keepVisible);
+          observer.observe(container);
+          return () => observer.disconnect();
+        }
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+          window.addEventListener('resize', keepVisible);
+          return () => window.removeEventListener('resize', keepVisible);
+        }
+        return undefined;
+      }, [slides.length]);
 
       useEffect(() => {
         aliveRef.current = true;
@@ -2588,16 +2761,20 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       }, [seriesId, notify]);
 
       const nextPage = useCallback(() => {
+        thumbYieldRef.current = 0;
         if (indexRef.current >= slidesRef.current.length - 1) {
           setPlaying(false);
           setStatus('已经到最后一页');
           return;
         }
+        indexSourceRef.current = 'user';
         setIndex(indexRef.current + 1);
       }, []);
 
       const prevPage = useCallback(() => {
+        thumbYieldRef.current = 0;
         if (indexRef.current <= 0) return;
+        indexSourceRef.current = 'user';
         setIndex(indexRef.current - 1);
       }, []);
 
@@ -2861,7 +3038,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           ),
           h(
             'div',
-            { className: 'blm-thumbs', role: 'tablist', 'aria-label': '逐页缩略图' },
+            { className: 'blm-thumbs', role: 'tablist', 'aria-label': '逐页缩略图', ref: thumbsRef },
             slides.map((item, itemIndex) =>
               h(SlideThumb, {
                 key: item.slide_index,
@@ -8162,6 +8339,10 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         downloadUrl,
         importOutcome,
         focusBookCard,
+        prefersReducedMotion,
+        thumbScrollLeft,
+        scrollThumbIntoView,
+        thumbScrollDeferMs,
         uploadZip,
         readPackagePolicy,
         savePackagePolicy,
