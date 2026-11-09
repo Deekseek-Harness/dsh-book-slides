@@ -512,23 +512,28 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       }
     }
 
+    /** 居中容差：当前页中心与可视区中心偏差不超过该值时不滚动，避免亚像素抖动。 */
+    const THUMB_CENTER_TOLERANCE = 2;
+
     /**
      * 预览窗格横向滚动目标（不直接操作 DOM，便于单测）：
-     * 当前页已完整可见返回 null；否则返回夹紧到 [0, 最大滚动量] 的 scrollLeft。
-     * relativeLeft / relativeRight 是缩略图相对滚动容器左边缘的偏移。
+     * 当前页尽量滚到可视区正中；首末页与内容不足一屏时夹紧到 [0, 最大滚动量]，不制造空白。
+     * 已居中（±THUMB_CENTER_TOLERANCE）时返回 null；relativeLeft / relativeRight 是缩略图相对滚动容器左边缘的偏移。
      */
     function thumbScrollLeft(scrollLeft, clientWidth, scrollWidth, relativeLeft, relativeRight) {
       const width = Number(clientWidth) || 0;
+      const base = Number(scrollLeft) || 0;
       const max = Math.max(0, (Number(scrollWidth) || 0) - width);
       if (width <= 0 || max <= 0) return null;
-      if (relativeLeft >= -1 && relativeRight <= width + 1) return null;
-      const delta = relativeLeft < 0 ? relativeLeft : relativeRight - width;
-      return Math.max(0, Math.min((Number(scrollLeft) || 0) + delta, max));
+      if (!Number.isFinite(relativeLeft) || !Number.isFinite(relativeRight)) return null;
+      const center = (relativeLeft + relativeRight) / 2;
+      const target = Math.max(0, Math.min(base + center - width / 2, max));
+      return Math.abs(target - base) <= THUMB_CENTER_TOLERANCE ? null : target;
     }
 
     /**
-     * 把当前页缩略图滚进预览窗格的可视区（播放器底部逐页缩略图）。
-     * 已完整可见时不滚动；只改 scrollLeft，不调用 scrollIntoView，避免带动外层页面纵向滚动。
+     * 把当前页缩略图滚到预览窗格正中（播放器底部逐页缩略图）。
+     * 首末页与内容不足一屏时夹紧到边界，不强制置中；只改 scrollLeft，不带动外层页面纵向滚动。
      */
     function scrollThumbIntoView(container, thumb, behavior) {
       if (!container || !thumb) return false;

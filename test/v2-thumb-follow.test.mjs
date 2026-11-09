@@ -61,34 +61,43 @@ function thumbAt(left, width = 108) {
   return { getBoundingClientRect: () => ({ left, right: left + width }) };
 }
 
-test('滚动目标：当前页完整可见不滚，左右越界按最小位移滚，首尾夹紧', () => {
-  // 容器可视区 [20, 420]；缩略图 [30, 138] 完整可见
-  assert.equal(helpers.thumbScrollLeft(0, 400, 1200, 10, 118), null);
-  // 右侧越界 8px
-  assert.equal(helpers.thumbScrollLeft(0, 400, 1200, 300, 408), 8);
-  // 左侧越界 30px（已滚到 100）
-  assert.equal(helpers.thumbScrollLeft(100, 400, 1200, -30, 78), 70);
+test('滚动目标：中间页居中，首末页夹紧，内容不足一屏与已居中不滚', () => {
+  // 可视区 [20,420] 宽 400：缩略图 [440,548] 中心 494，目标 494-200=274
+  assert.equal(helpers.thumbScrollLeft(0, 400, 1200, 420, 528), 274);
+  // 第 1 页在滚到 0 时本来就贴左，不产生滚动
+  assert.equal(helpers.thumbScrollLeft(0, 400, 1200, 0, 108), null);
+  // 首部页（已滚到 100）想居中会得到负值：夹到 0
+  assert.equal(helpers.thumbScrollLeft(100, 400, 1200, 0, 108), 0);
   // 滚到尾部时夹紧在最大滚动量 800
-  assert.equal(helpers.thumbScrollLeft(790, 400, 1200, 300, 420), 800);
-  assert.equal(helpers.thumbScrollLeft(790, 400, 1200, 300, 408), 798);
-  // 没有横向溢出 / 宽度未知
+  assert.equal(helpers.thumbScrollLeft(790, 400, 1200, 420, 528), 800);
+  // 已经居中（中心 200）与 ±2px 死区：不滚
+  assert.equal(helpers.thumbScrollLeft(100, 400, 1200, 150, 250), null);
+  assert.equal(helpers.thumbScrollLeft(100, 400, 1200, 151, 251), null);
+  assert.equal(helpers.thumbScrollLeft(100, 400, 1200, 153, 253), 103);
+  // 没有横向溢出 / 宽度未知 / 非法矩形
   assert.equal(helpers.thumbScrollLeft(0, 400, 400, 10, 118), null);
   assert.equal(helpers.thumbScrollLeft(0, 0, 1200, 10, 118), null);
+  assert.equal(helpers.thumbScrollLeft(0, 400, 1200, NaN, 100), null);
 });
 
-test('scrollThumbIntoView：越界时用 scrollTo(smooth) 滚到刚好可见', () => {
+test('scrollThumbIntoView：中间页滚到窗格正中，已居中不滚', () => {
   const { container, calls } = strip();
   assert.equal(helpers.scrollThumbIntoView(container, thumbAt(440)), true);
-  assert.deepEqual(calls, [{ left: 128, behavior: 'smooth' }]);
+  assert.deepEqual(calls, [{ left: 274, behavior: 'smooth' }]);
 
-  // 已完整可见：不产生额外滚动
-  assert.equal(helpers.scrollThumbIntoView(container, thumbAt(40)), false);
+  // 已居中：不产生额外滚动
+  assert.equal(helpers.scrollThumbIntoView(container, thumbAt(166)), false);
   assert.equal(calls.length, 1);
 
-  // 左侧越界：从当前 100 回滚到 80
+  // 可见但偏在一侧：点击后仍会拉到中间
+  const off = strip();
+  assert.equal(helpers.scrollThumbIntoView(off.container, thumbAt(300)), true);
+  assert.deepEqual(off.calls, [{ left: 134, behavior: 'smooth' }]);
+
+  // 首部页：从当前 100 回到 0
   const left = strip({ scrollLeft: 100 });
   assert.equal(helpers.scrollThumbIntoView(left.container, thumbAt(0)), true);
-  assert.deepEqual(left.calls, [{ left: 80, behavior: 'smooth' }]);
+  assert.deepEqual(left.calls, [{ left: 0, behavior: 'smooth' }]);
 
   // 尾部夹紧
   const tail = strip({ scrollLeft: 790 });
@@ -102,7 +111,7 @@ test('scrollThumbIntoView：减少动态效果用 auto；无 scrollTo / 老环�
   try {
     const reduced = strip();
     assert.equal(helpers.scrollThumbIntoView(reduced.container, thumbAt(440)), true);
-    assert.deepEqual(reduced.calls, [{ left: 128, behavior: 'auto' }]);
+    assert.deepEqual(reduced.calls, [{ left: 274, behavior: 'auto' }]);
   } finally {
     if (original === undefined) delete globalThis.matchMedia;
     else globalThis.matchMedia = original;
@@ -116,7 +125,7 @@ test('scrollThumbIntoView：减少动态效果用 auto；无 scrollTo / 老环�
     getBoundingClientRect: () => ({ left: 20, right: 420 }),
   };
   assert.equal(helpers.scrollThumbIntoView(plain, thumbAt(440)), true);
-  assert.equal(plain.scrollLeft, 128);
+  assert.equal(plain.scrollLeft, 274);
 
   // 老嵌入环境不接受 behavior 参数：退回不带 behavior 的调用
   const calls = [];
@@ -131,7 +140,7 @@ test('scrollThumbIntoView：减少动态效果用 auto；无 scrollTo / 老环�
     },
   };
   assert.equal(helpers.scrollThumbIntoView(oldBrowser, thumbAt(440)), true);
-  assert.deepEqual(calls, [{ left: 128 }]);
+  assert.deepEqual(calls, [{ left: 274 }]);
 
   assert.equal(helpers.scrollThumbIntoView(null, thumbAt(0)), false);
   assert.equal(helpers.scrollThumbIntoView({}, null), false);
@@ -154,6 +163,7 @@ test('接线：.blm-thumbs 挂 ref，播放/键盘入口统一到 index 变化',
     '缩略图容器应挂 ref 供滚动定位',
   );
   assert.match(source, /const THUMB_SCROLL_YIELD_MS = 5000;/, '让位期应为 5 秒');
+  assert.match(source, /const THUMB_CENTER_TOLERANCE = 2;/, '居中死区应为 2px');
 
   const advance = source.slice(
     source.indexOf('const advance = useCallback'),
