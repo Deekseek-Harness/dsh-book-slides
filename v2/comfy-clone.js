@@ -152,7 +152,7 @@ function normalizeAudioRef(value, source) {
   return text;
 }
 
-function normalizeRefEntry(raw, source) {
+function normalizeRefEntry(raw, fallbackSource) {
   if (!raw || typeof raw !== 'object') return null;
   const id = String(raw.id == null ? '' : raw.id).trim().slice(0, 64);
   const name = String(raw.name == null ? '' : raw.name).trim().slice(0, 64);
@@ -161,6 +161,7 @@ function normalizeRefEntry(raw, source) {
   if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new TtsError('E_TTS_VOICE_REF', '参考 voice id 只能用字母/数字/._-：' + id, '');
   if (!refText) throw new TtsError('E_TTS_VOICE_REF', '参考 voice「' + name + '」缺少参考文本', 'ref_text 必须是参考音频的逐字转写。');
   if (refText.length > TTS_REF_TEXT_MAX) throw new TtsError('E_TTS_VOICE_REF', '参考文本超过 ' + TTS_REF_TEXT_MAX + ' 字', '截短参考音频后重试。');
+  const source = fallbackSource === 'builtin' ? 'builtin' : raw.source === 'builtin' ? 'builtin' : 'imported';
   const entry = {
     id,
     name,
@@ -180,16 +181,16 @@ function normalizeRefEntry(raw, source) {
 export function normalizeRefTable(raw, meta) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const list = Array.isArray(raw) ? raw : Array.isArray(source.voices) ? source.voices : null;
-  if (!list) throw new TtsError('E_TTS_VOICE_REF', '参考库缺少 voices 数组', '提供 {voices:[...]}。');
-  if (!list.length) throw new TtsError('E_TTS_VOICE_REF', '参考库至少要有 1 项', '');
-  if (list.length > TTS_REF_MAX_ITEMS) throw new TtsError('E_TTS_VOICE_REF', '参考库最多 ' + TTS_REF_MAX_ITEMS + ' 项', '');
+  if (!list) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 表缺少 voices 数组', '提供 {voices:[...]}。');
+  if (!list.length) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 表至少要有 1 项', '');
+  if (list.length > TTS_REF_MAX_ITEMS) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 表最多 ' + TTS_REF_MAX_ITEMS + ' 项', '');
   const opts = meta && typeof meta === 'object' ? meta : {};
   const src = opts.source === 'builtin' ? 'builtin' : 'imported';
   const voices = [];
   const seen = new Set();
   let defaultCount = 0;
   for (const item of list) {
-    const entry = normalizeRefEntry(item, src === 'builtin' ? 'builtin' : 'imported');
+    const entry = normalizeRefEntry(item, opts.source === 'builtin' ? 'builtin' : 'imported');
     if (!entry) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 缺少 id 或 name', '每项至少要有 id/name/audio/ref_text。');
     if (seen.has(entry.id)) throw new TtsError('E_TTS_VOICE_REF', '参考 voice id 重复：' + entry.id, '');
     seen.add(entry.id);
@@ -228,7 +229,7 @@ export function readRefTable() {
     });
   } catch (err) {
     const fallback = defaultRefTable();
-    fallback.warning = '参考库文件损坏，已回落到内置：' + String((err && err.message) || err);
+    fallback.warning = '参考 voice 表损坏，已回落到内置：' + String((err && err.message) || err);
     return fallback;
   }
 }
@@ -270,8 +271,39 @@ export function saveRefTable(body) {
     }
     return refTablePayload();
   }
+  if (input.remove != null) {
+    const id = String(input.remove).trim();
+    const current = readRefTable();
+    const target = current.voices.find((item) => item.id === id);
+    if (!target) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 不存在：' + (id || '(空)'), '刷新后重试。');
+    if (target.source === 'builtin') throw new TtsError('E_TTS_VOICE_REF', '内置参考不能删除', '用「恢复默认」回到内置 2 项。');
+    const voices = current.voices
+      .filter((item) => item.id !== id)
+      .map((item) => Object.assign({}, item, { default: item.id === current.defaultVoice }));
+    if (!voices.some((item) => item.source === 'imported')) {
+      try {
+        fs.rmSync(TTS_REFVOICES_FILE, { force: true });
+      } catch {
+        /* 删不掉就留空表，读取侧仍会回落到内置 */
+      }
+      return refTablePayload();
+    }
+    const table = normalizeRefTable(
+      { name: current.name, model: current.model, voices },
+      { source: 'imported', name: current.name, model: current.model, savedAt: nowIso() },
+    );
+    writeAtomic(
+      TTS_REFVOICES_FILE,
+      JSON.stringify(
+        { version: 1, name: table.name, model: table.model, source: 'imported', savedAt: table.savedAt, voices: table.voices },
+        null,
+        2,
+      ) + '\n',
+    );
+    return refTablePayload();
+  }
   const raw = input.table && typeof input.table === 'object' ? input.table : input.table || input;
-  if (bytesOfJson(raw) > TTS_REF_TABLE_MAX_BYTES) throw new TtsError('E_TTS_VOICE_REF', '参考库超过 256 KB', '');
+  if (bytesOfJson(raw) > TTS_REF_TABLE_MAX_BYTES) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 表超过 256 KB', '');
   const table = normalizeRefTable(raw, {
     source: 'imported',
     name: input.name || (raw && raw.name),
@@ -305,9 +337,99 @@ export function saveRefTable(body) {
   return refTablePayload();
 }
 
+function refVoiceIdFrom(name, used) {
+  const base = String(name || '')
+    .toLowerCase()
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 40);
+  const stem = base || 'ref-' + crypto.randomBytes(4).toString('hex');
+  let id = 'ref-' + stem;
+  let n = 2;
+  while (used.has(id)) {
+    id = 'ref-' + stem + '-' + n;
+    n += 1;
+  }
+  return id.slice(0, 64);
+}
+
+/**
+ * 成对导入一个参考 voice：参考音频 + 逐字转写文本。
+ * 音频复制到数据根 voices/，条目追加到当前参考库（保留内置项），返回整表与新条目。
+ */
+export function addRefVoice(input) {
+  const audioBuffer = input && Buffer.isBuffer(input.audioBuffer) ? input.audioBuffer : null;
+  if (!audioBuffer || audioBuffer.length < 1024) {
+    throw new TtsError('E_TTS_VOICE_REF', '没有收到可用的参考音频', '选择一个 wav/flac/mp3/ogg 文件（≤32MB）。');
+  }
+  if (audioBuffer.length > TTS_REF_AUDIO_MAX_BYTES) {
+    throw new TtsError('E_TTS_VOICE_REF', '参考音频超过 32MB', '截短参考音频后重试。');
+  }
+  const audioName = String((input && input.audioName) || '').trim();
+  const ext = audioExtOf(audioName);
+  if (!ext) {
+    throw new TtsError('E_TTS_VOICE_REF', '参考音频格式不支持：' + (audioName || '未命名'), '支持 wav/flac/mp3/ogg。');
+  }
+  const refText = String((input && input.refText) || '').replace(/^\uFEFF/, '').trim();
+  if (!refText) {
+    throw new TtsError('E_TTS_VOICE_REF', '参考文本为空', '请同时选择参考音频的逐字转写 .txt。');
+  }
+  if (refText.length > TTS_REF_TEXT_MAX) {
+    throw new TtsError('E_TTS_VOICE_REF', '参考文本超过 ' + TTS_REF_TEXT_MAX + ' 字', '截短参考音频后重试。');
+  }
+  const table = readRefTable();
+  if (table.voices.length >= TTS_REF_MAX_ITEMS) {
+    throw new TtsError('E_TTS_VOICE_REF', '参考 voice 库最多 ' + TTS_REF_MAX_ITEMS + ' 项', '先删除一些参考 voice。');
+  }
+  const display =
+    String((input && input.name) || audioName.replace(/\.[^.]+$/, '')).trim().slice(0, 64) || '参考 voice';
+  const id = refVoiceIdFrom(display, new Set(table.voices.map((item) => item.id)));
+  const fileName = id + '.' + ext;
+  const file = path.join(TTS_VOICES_DIR, fileName);
+  const duration = flacDurationMs(audioBuffer) || wavDurationMs(audioBuffer) || 0;
+  fs.mkdirSync(TTS_VOICES_DIR, { recursive: true });
+  writeAtomic(file, audioBuffer);
+  const voices = table.voices.map((item) => ({
+    id: item.id,
+    name: item.name,
+    label: item.label,
+    audio: item.audio,
+    ref_text: item.ref_text,
+    lang: item.lang,
+    duration_ms: item.duration_ms,
+    sha256: item.sha256,
+    source: item.source,
+    default: item.id === table.defaultVoice,
+  }));
+  voices.push({
+    id,
+    name: display,
+    audio: 'voices/' + fileName,
+    ref_text: refText,
+    lang: '',
+    duration_ms: duration,
+    sha256: sha256(audioBuffer),
+    source: 'imported',
+    default: false,
+  });
+  const tableName = table.source === 'builtin' ? '自定义参考' : table.name;
+  try {
+    const saved = saveRefTable({ table: { name: tableName, model: table.model, voices }, name: tableName });
+    return { table: saved, entry: (saved.voices || []).find((item) => item.id === id) || null };
+  } catch (err) {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      /* 回滚音频失败时保留文件也无害 */
+    }
+    throw err;
+  }
+}
+
 export function resolveRefVoice(table, wanted) {
   const voices = table && Array.isArray(table.voices) ? table.voices : [];
-  if (!voices.length) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 库为空', '导入参考库或恢复默认。');
+  if (!voices.length) throw new TtsError('E_TTS_VOICE_REF', '参考 voice 库为空', '导入参考 voice 或恢复默认。');
   const id = String(wanted == null ? '' : wanted).trim();
   if (!id) return voices.find((item) => item.id === table.defaultVoice) || voices[0];
   const exact = voices.find((item) => item.id === id);
@@ -326,7 +448,7 @@ export function refVoiceFile(voice) {
   try {
     stat = fs.statSync(file);
   } catch {
-    throw new TtsError('E_TTS_VOICE_REF', '参考音频文件不存在：' + entry.audio, '重新导入参考音频或恢复默认。');
+    throw new TtsError('E_TTS_VOICE_REF', '参考音频文件不存在：' + entry.audio, '把参考音频放到数据根 voices/ 下，或恢复默认。');
   }
   if (!stat.isFile() || stat.size < 1024) throw new TtsError('E_TTS_VOICE_REF', '参考音频为空或不可读：' + entry.audio, '');
   if (stat.size > TTS_REF_AUDIO_MAX_BYTES) throw new TtsError('E_TTS_VOICE_REF', '参考音频超过 32MB', '');

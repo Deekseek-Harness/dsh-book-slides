@@ -212,6 +212,36 @@ test('设置页：配图组（策略/地址/工作流/测试）与书档导出�
   }
 });
 
+test('设置页：参考 voice 一次导入音频 + .txt（不再导入 JSON）', () => {
+  const html = renderToString(
+    React.createElement(clientModule.__components.Settings, {
+      onBack: () => {},
+      notify: () => {},
+      initial: {
+        voice: { provider: 'comfyui-tts', comfyRefVoice: 'builtin-vivian', model: 'qwen3-tts-flash', textNode: '' },
+        voiceTable: {
+          name: '内置',
+          model: '',
+          source: 'builtin',
+          count: 2,
+          defaultVoice: 'builtin-vivian',
+          voices: [
+            { id: 'builtin-vivian', name: 'Vivian', source: 'builtin', default: true, duration_ms: 21300 },
+            { id: 'builtin-uncle-fu', name: 'Uncle Fu', source: 'builtin', default: false, duration_ms: 22000 },
+          ],
+        },
+      },
+    }),
+  );
+  for (const text of ['参考 voice 库', '导入参考 voice', '一次选两个文件']) {
+    assert.ok(html.includes(text), '设置页应包含「' + text + '」');
+  }
+  assert.ok(html.includes('audio/*'), '文件选择应接受音频');
+  assert.ok(html.includes('.txt'), '文件选择应接受 .txt');
+  assert.ok(source.includes("api('/voice/refvoices/import'"), '应调用成对导入接口');
+  assert.ok(!source.includes("id: 'blm-tts-table-input'"), '不应再出现 JSON 清单文件选择');
+});
+
 test('播放器配图：image_status=ready 时渲染 img，占位时渲染提示词入口', () => {
   const ready = renderToString(
     React.createElement(clientModule.__components.SlideStage, {

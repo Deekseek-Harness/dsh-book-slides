@@ -225,7 +225,8 @@ export const ROUTE_AUDIO = ROUTE_PREFIX + '/audio';
 export const ROUTE_VOICE = ROUTE_PREFIX + '/voice';
 export const ROUTE_VOICE_PROBE = ROUTE_PREFIX + '/voice/probe';
 export const ROUTE_VOICE_WORKFLOW = ROUTE_PREFIX + '/voice/workflow';
-export const ROUTE_VOICE_SPEAKERS = ROUTE_PREFIX + '/voice/speakers';
+export const ROUTE_VOICE_REFVOICES = ROUTE_PREFIX + '/voice/refvoices';
+export const ROUTE_VOICE_REFVOICES_IMPORT = ROUTE_PREFIX + '/voice/refvoices/import';
 export const ROUTE_VOICE_COMFY_PROBE = ROUTE_PREFIX + '/voice/comfy/probe';
 export const ROUTE_PAGES = ROUTE_PREFIX + '/pages';
 export const ROUTE_PROGRESS = ROUTE_PREFIX + '/progress';
@@ -2936,7 +2937,9 @@ export function apply(ctx) {
 
     route(ROUTE_VOICE_WORKFLOW, routeV2);
 
-    route(ROUTE_VOICE_SPEAKERS, routeV2);
+    route(ROUTE_VOICE_REFVOICES, routeV2);
+
+    route(ROUTE_VOICE_REFVOICES_IMPORT, routeV2);
 
     route(ROUTE_VOICE_COMFY_PROBE, routeV2);
 

@@ -3,10 +3,10 @@
 DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认一个 **Part**，由讲纲规划成 N 讲，
 逐讲生成并做可机检的接缝；播放时左侧 PDF 原文、右侧讲稿连播。**2.0 与 1.x 数据不兼容。**
 
-**当前构建：包 `2.0.0-alpha.9` / 产品 `2.0` / 数据 schema `2`**（2026-11-09，M1–M5 完成；v1.18 重复导入书架内定位书卡，v1.17 书签树/Part 只选根，含 v1.16 自动级联与强制来源）。
+**当前构建：包 `2.0.0-alpha.10` / 产品 `2.0` / 数据 schema `2`**（2026-11-09，M1–M5 完成；v1.19 参考 voice 改为音频 + `.txt` 成对导入并修复 `/voice/refvoices` 405，v1.18 重复导入书架内定位书卡，v1.17 书签树/Part 只选根，含 v1.16 自动级联与强制来源）。
 变更记录 [CHANGELOG.md](CHANGELOG.md) · 实现进度与验收 [doc/2.0-实现进度.md](doc/2.0-实现进度.md) · 需求 [doc/requirements/规范需求2.0.md](doc/requirements/规范需求2.0.md)。
 
-## 2.0 预发布（alpha.9）
+## 2.0 预发布（alpha.10）
 
 > 2.0 是**不兼容重写**：同包名覆盖安装 1.x，同数据根 `~/.dsh/book-slides/`，只认 `meta.json.schema=2`。
 > 检测到 1.x 数据时自动把整根备份到同父目录 `book-slides.backup-<时间>/`，随后初始化空书架；**不迁移、不导入**，请重新导入 PDF。
@@ -14,9 +14,9 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 
 | 项 | 内容 |
 |---|---|
-| 包版本 | `2.0.0-alpha.9`（tag `v2.0.0-alpha.9`） |
-| 产品 / schema | 产品 `2.0`、数据 schema `2`、SRS 文档 v1.18 |
-| 已完成 | M1 数据根/导入/分章/书架（**v1.17 书签树/根章/单根下移/Part 只选根**） · M2 Part/briefs/讲纲 · M3 生成/预缝/后验缝/作业 · M4 播放器/连播/偏好/设置/语音 · M5 书档/练习/配图/导出 PPT/**本地 ComfyUI Qwen3-TTS VoiceClone 配音（参考 voice 库）** · P0–P2 作业态恢复/长任务取消/目录范围、导入策略与 view 持久化 · v1.1 子能力（逐页缩略图/配图提示词面板/配音与配图四态按钮/单页换一张/失败可见） |
+| 包版本 | `2.0.0-alpha.10`（tag `v2.0.0-alpha.10`） |
+| 产品 / schema | 产品 `2.0`、数据 schema `2`、SRS 文档 v1.19 |
+| 已完成 | M1 数据根/导入/分章/书架（**v1.17 书签树/根章/单根下移/Part 只选根**） · M2 Part/briefs/讲纲 · M3 生成/预缝/后验缝/作业 · M4 播放器/连播/偏好/设置/语音 · M5 书档/练习/配图/导出 PPT/**本地 ComfyUI Qwen3-TTS VoiceClone 配音（参考 voice 音频 + `.txt` 成对导入）** · P0–P2 作业态恢复/长任务取消/目录范围、导入策略与 view 持久化 · v1.1 子能力（逐页缩略图/配图提示词面板/配音与配图四态按钮/单页换一张/失败可见） |
 | 待完成 | M6 真书验收、发布门（AC-92 ~ AC-158）与正式版 `2.0.0` |
 | 兼容 | 不读 1.x 数据、不迁移、无独立单讲；1.x 最后版本仍是 1.4.0 |
 
@@ -43,8 +43,8 @@ DSH 左侧栏的独立面板：把带文字层的 PDF 拆成章节，先确认�
 ├── image.json               ← 配图配置（策略/地址/风格后缀）
 ├── comfy-workflow.json      ← ComfyUI 配图工作流
 ├── comfy-tts-workflow.json  ← ComfyUI 克隆配音工作流（没有就用内置）
-├── comfy-tts-refvoices.json ← 参考 voice 库（默认内置 2 项）
-├── voices/                  ← 用户导入的参考音频 + 同名 txt
+├── comfy-tts-refvoices.json ← 参考 voice 表（内部存储；导入后生成，没有就用内置 2 项）
+├── voices/                  ← 导入的参考音频（与 .txt 一起导入时复制到这里）
 ├── audio-cache/             ← TTS 缓存
 ├── image-cache/             ← 配图缓存
 ├── trash/<bookId>/          ← 软删除（7 天可恢复）
@@ -177,6 +177,7 @@ dsh plugin --profile web remove dsh-book-slides
 - **本地 ComfyUI（Qwen3-TTS）**：v1.3 起默认是 **VoiceClone 克隆**——工作流 `workflows/qwen3-tts-通过克隆配音/`（API 格式：`LoadAudio → FB_Qwen3TTSVoiceClone → SaveAudio`），内置参考 `Vivian` / `Uncle Fu` 两组（flac + 同名 txt），每页只替换 `target_text`，并把 `(参考音频, 参考文本)` 注入请求；**换参考不重写工作流**。
 - ComfyUI 的地址与配图共用 `image.json`；配音与配图共用**全局串行队列**，同一时间只跑一个 ComfyUI 作业。设置页提供「连接测试」（只读 `/system_stats` + `/object_info`）与「试听测试」（真跑一次，不落盘/不缓存）。
 - 参考是**成对资产**：`ref_text` 必须是参考音频的逐字转写，与目标正文无关；`x_vector_only` 必须为 `false`（为 `true` 只克隆说话人、参考文本失效，导入时会 `E_TTS_WORKFLOW_NODE` 拒绝）。参考音频会经 `/upload/image` 上传到 ComfyUI 的 `input/`，按 sha256 去重。
+- **导入参考 voice**：一个参考 voice = 参考音频 + 它的逐字转写（`.txt`）。设置页「导入参考 voice」一次选两个文件（wav/flac/mp3/ogg + `.txt`，建议同名），插件把音频复制到数据根 `voices/`、把文本作为 `ref_text` 追加到库里，并保留内置 `Vivian` / `Uncle Fu`；选中自定义项可点「删除」，内置项只能通过「恢复默认」回到 2 项。`comfy-tts-refvoices.json` 是插件内部存储，不需要用户编辑或导入。
 - ComfyUI 输出可能是 `.flac`/`.ogg`：播放器可直接播；导出 PPT 只嵌 `.wav`/`.mp3`，其它格式给 warning 并提示把工作流输出改成 `SaveAudio`（`audio_format=wav`）。
 
 > Qwen3-TTS 走 `/api/v1/services/aigc/multimodal-generation/generation`，`input` 只放
@@ -238,8 +239,8 @@ book-slides/
 ├── image.json                     ← 配图策略 / ComfyUI 地址 / 提示词节点
 ├── comfy-workflow.json            ← 用户导入的配图工作流（没有就用内置默认）
 ├── comfy-tts-workflow.json        ← 用户导入的克隆配音工作流（没有就用内置）
-├── comfy-tts-refvoices.json       ← 参考 voice 库（默认内置 2 项）
-├── voices/                        ← 用户导入的参考音频 + 同名 txt
+├── comfy-tts-refvoices.json       ← 参考 voice 表（内部存储；导入后生成，没有就用内置 2 项）
+├── voices/                        ← 导入的参考音频（与 .txt 一起导入时复制到这里）
 ├── preference.json                ← 分隔条比例、语速、静音
 ├── progress.json                  ← {lastBookId, lastModuleId, lastSlide}
 ├── audio-cache/<sha256>.<ext>     ← 语音缓存（云端 wav / ComfyUI wav|flac|mp3|ogg）
@@ -319,7 +320,7 @@ npm test          # 1.4.0 冻结套件，仅作 1.x 回归参考
 
 | 测试 | 跑什么 |
 |---|---|
-| `npm run test:v2` | **2.0 门禁**：全量测试 —— 数据根/分章、Part/讲纲、生成/接缝、播放器、设置/偏好、语音/配音、ComfyUI 克隆配音/工作流/参考库、系列删除、路由唯一注册 |
+| `npm run test:v2` | **2.0 门禁**：全量测试 —— 数据根/分章、Part/讲纲、生成/接缝、播放器、设置/偏好、语音/配音、ComfyUI 克隆配音/工作流/参考 voice 库（音频 + .txt 成对导入）、系列删除、路由唯一注册与宿主接口可达 |
 | `node test/smoke.test.mjs` | 纯逻辑：正则、清洗、切章、存储、PDF 读取 |
 | `node test/server.test.mjs` | 起真服务：导入/书架/书封/Range/改名/删除 + 原文页/偏好/回收站清理 + pdf.js 资源转发 |
 | `node test/panel.test.mjs` | react-dom/server 渲染：书架、详情、生成进度、幻灯片舞台、PDF 窗格、高亮几何、播放器首屏 |

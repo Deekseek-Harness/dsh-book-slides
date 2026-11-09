@@ -73,11 +73,13 @@ import {
 } from './voice.js';
 import { deleteBackup, diagnosticsPayload, listBackups, openBackup, settingsPayload } from './settings.js';
 import {
+  addRefVoice,
   probeComfyTts,
   saveRefTable,
   saveWorkflow as saveTtsWorkflow,
   refTablePayload,
   workflowPayload,
+  TTS_REF_AUDIO_MAX_BYTES,
 } from './comfy-clone.js';
 import {
   cancelPracticeJob,
@@ -1148,6 +1150,43 @@ async function handleVoiceRefVoices(req, res) {
   }
 }
 
+async function handleVoiceRefVoiceImport(req, res) {
+  ensureRoot();
+  if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') {
+    sendError(res, 'E_METHOD', '不支持的方法', '用 POST 上传参考音频和 .txt。');
+    return;
+  }
+  const contentType = String((req.headers && req.headers['content-type']) || '');
+  if (!/^multipart\/form-data/i.test(contentType)) {
+    sendError(res, 'E_TTS_VOICE_REF', '导入参考 voice 需要同时上传参考音频和 .txt', '在设置页点「导入参考 voice」，一次选择参考音频和它的逐字转写。');
+    return;
+  }
+  let form = null;
+  try {
+    const buffer = await readBody(req, TTS_REF_AUDIO_MAX_BYTES + 2 * 1024 * 1024);
+    form = await new Response(buffer, { headers: { 'content-type': contentType } }).formData();
+  } catch (err) {
+    sendError(res, 'E_TTS_VOICE_REF', '读取参考音频失败：' + String((err && err.message) || err), '参考音频不超过 32MB，且需要同时选择 .txt。');
+    return;
+  }
+  const audio = form.get('audio');
+  if (!audio || typeof audio === 'string' || typeof audio.arrayBuffer !== 'function') {
+    sendError(res, 'E_TTS_VOICE_REF', '没有收到参考音频', '一次选择参考音频和它的 .txt。');
+    return;
+  }
+  try {
+    const out = addRefVoice({
+      audioBuffer: Buffer.from(await audio.arrayBuffer()),
+      audioName: String(audio.name || ''),
+      refText: String(form.get('ref_text') || ''),
+      name: String(form.get('name') || ''),
+    });
+    sendJson(res, 200, { ok: true, table: out.table, entry: out.entry });
+  } catch (err) {
+    sendError(res, (err && err.code) || 'E_TTS_VOICE_REF', String((err && err.message) || err), (err && err.hint) || '');
+  }
+}
+
 async function handleVoiceComfyProbe(req, res, options) {
   ensureRoot();
   try {
@@ -1925,6 +1964,10 @@ async function routeM1Inner(req, res, url, options = {}) {
   }
   if (pathname === PREFIX + '/voice/refvoices') {
     await handleVoiceRefVoices(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/voice/refvoices/import') {
+    await handleVoiceRefVoiceImport(req, res);
     return true;
   }
   if (pathname === PREFIX + '/voice/comfy/probe') {

@@ -286,14 +286,15 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         }
       }
       if (data === null) {
-        const err = new Error(
-          '插件服务无响应（HTTP ' + res.status + '）。' +
-            (res.status === 404
-              ? '插件可能没加载，重启 DSH 后再试。'
-              : '稍后重试；一直这样就把 DSH 重启一次。'),
-        );
+        const why =
+          res.status === 404
+            ? '插件可能没加载，重启 DSH 后再试。'
+            : res.status === 405
+              ? '接口没注册到 DSH，或方法不匹配（插件版本与宿主不一致）。重启无效，请更新或重装插件。'
+              : '稍后重试；一直这样就把 DSH 重启一次。';
+        const err = new Error('插件服务无响应（HTTP ' + res.status + '）。' + why);
         err.code = 'E_BAD_RESPONSE';
-        err.detail = { status: res.status, body: raw.slice(0, 300) };
+        err.detail = { status: res.status, path: API + path, body: raw.slice(0, 300) };
         throw err;
       }
       if (!data || data.ok !== true) {
@@ -5728,34 +5729,46 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
         }
       };
 
-      const importVoiceTable = async (file) => {
-        if (!file) return;
+      const importVoicePair = async (files) => {
+        const list = Array.from(files || []);
+        if (!list.length) return;
         setTtsBusy(true);
         setTtsMsg('');
         try {
-          const text = (await file.text()).replace(/^\uFEFF/, '');
-          let table = null;
-          try {
-            table = JSON.parse(text);
-          } catch {
-            setTtsMsg('参考库不是合法 JSON');
+          const audios = list.filter((file) => /\.(wav|flac|mp3|ogg)$/i.test(file.name));
+          const texts = list.filter((file) => /\.txt$/i.test(file.name));
+          if (list.length !== 2 || audios.length !== 1 || texts.length !== 1) {
+            setTtsMsg('一次选一个参考音频和它的 .txt 逐字转写（共两个文件）。');
             return;
           }
-          const out = await api('/voice/refvoices', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ table, name: file.name }),
-          });
+          const audio = audios[0];
+          if (audio.size > 32 * 1024 * 1024) {
+            setTtsMsg('参考音频超过 32MB，截短后再导入。');
+            return;
+          }
+          const refText = (await texts[0].text()).replace(/^\uFEFF/, '').trim();
+          if (!refText) {
+            setTtsMsg('参考文本为空：.txt 必须是参考音频的逐字转写。');
+            return;
+          }
+          if (refText.length > 2000) {
+            setTtsMsg('参考文本超过 2000 字，截短后再导入。');
+            return;
+          }
+          const form = new FormData();
+          form.append('audio', audio, audio.name);
+          form.append('ref_text', refText);
+          form.append('name', audio.name.replace(/\.[^.]+$/, ''));
+          const out = await api('/voice/refvoices/import', { method: 'POST', body: form });
           setTtsTable(out.table || null);
           setTtsProbe(null);
-          if (out.table) {
-            const ids = (out.table.voices || []).map((item) => item.id);
-            setForm((prev) => Object.assign({}, prev, { comfyRefVoice: ids.includes(prev.comfyRefVoice) ? prev.comfyRefVoice : out.table.defaultVoice }));
+          if (out.entry && out.entry.id) {
+            setForm((prev) => Object.assign({}, prev, { comfyRefVoice: out.entry.id }));
           }
-          setTtsMsg('参考 voice 库已导入（' + ((out.table && out.table.count) || 0) + ' 项）');
+          setTtsMsg('已导入参考 voice「' + ((out.entry && out.entry.name) || audio.name) + '」');
         } catch (err) {
           const detail = (err && err.detail) || {};
-          setTtsMsg((detail.code || err.code || 'E_TTS_VOICE_REF') + '：' + (detail.error || err.message));
+          setTtsMsg((detail.code || err.code || 'E_TTS_VOICE_REF') + '：' + (detail.message || detail.error || err.message));
         } finally {
           setTtsBusy(false);
         }
@@ -6048,6 +6061,34 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
       const comfyRefVoiceValue = ttsRefs.some((item) => item.id === form.comfyRefVoice)
         ? form.comfyRefVoice
         : (ttsTable && ttsTable.defaultVoice) || '';
+      const selectedRef = ttsRefs.find((item) => item.id === comfyRefVoiceValue) || null;
+
+      const removeVoiceRef = async () => {
+        if (!selectedRef || selectedRef.source === 'builtin') return;
+        const ok = await confirmAction('删除参考 voice「' + selectedRef.name + '」？', {
+          title: '删除参考 voice',
+          okText: '删除',
+          danger: true,
+        });
+        if (!ok) return;
+        setTtsBusy(true);
+        try {
+          const out = await api('/voice/refvoices', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ remove: selectedRef.id }),
+          });
+          setTtsTable(out.table || null);
+          setTtsProbe(null);
+          setForm((prev) => Object.assign({}, prev, { comfyRefVoice: (out.table && out.table.defaultVoice) || '' }));
+          setTtsMsg('已删除参考 voice「' + selectedRef.name + '」');
+        } catch (err) {
+          const detail = (err && err.detail) || {};
+          setTtsMsg((detail.code || err.code || 'E_TTS_VOICE_REF') + '：' + (detail.message || detail.error || err.message));
+        } finally {
+          setTtsBusy(false);
+        }
+      };
 
       /* ------------------------------ 试听（FR-23 / AC-149） ------------------------------ */
 
@@ -6555,7 +6596,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                                 (item.default ? '（默认）' : ''),
                             ),
                           )
-                        : h('option', { value: '' }, '当前参考库为空'),
+                        : h('option', { value: '' }, '当前参考 voice 库为空'),
                     )
                   : h(
                       'select',
@@ -6570,8 +6611,8 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                       voices.map((item) => h('option', { key: item.voiceURI || item.name, value: item.name }, item.name + ' · ' + item.lang)),
                     ),
               form.provider === 'comfyui-tts'
-                ? h('span', { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') : '参考库未加载' },
-                    ttsTable ? (ttsTable.source === 'builtin' ? '内置参考库' : '自定义参考库') + ' · ' + (ttsTable.count || 0) + ' 项' : '参考库未加载')
+                ? h('span', { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') : '参考 voice 库未加载' },
+                    ttsTable ? (ttsTable.source === 'builtin' ? '内置' : '自定义') + '参考 voice 库 · ' + (ttsTable.count || 0) + ' 项' : '参考 voice 库未加载')
                 : null,
             ),
             form.provider === 'browser'
@@ -6701,27 +6742,39 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     h('span', { className: 'label' }, '参考 voice 库'),
                     h(
                       'span',
-                      { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') + ' · ' + (ttsTable.count || 0) + ' 项' : '参考库未加载' },
-                      ttsTable ? (ttsTable.source === 'builtin' ? '内置' : '自定义') + ' · ' + (ttsTable.count || 0) + ' 项参考' : '未加载',
+                      { className: 'blm-dim', style: { fontSize: 11 }, title: ttsTable ? ttsTable.name + ' · ' + (ttsTable.model || '未标注模型') + ' · ' + (ttsTable.count || 0) + ' 项' : '参考 voice 库未加载' },
+                      ttsTable ? (ttsTable.source === 'builtin' ? '内置' : '自定义') + '参考 voice 库 · ' + (ttsTable.count || 0) + ' 项' : '未加载',
                     ),
                     h('button', {
                       className: 'blm-btn',
                       disabled: saving || ttsBusy,
-                      title: '导入参考 voice 库 JSON（voices:[{id,name,audio,ref_text}]）；只写本地，不要求 ComfyUI 在线',
-                      onClick: () => document.getElementById('blm-tts-table-input')?.click(),
-                    }, '导入参考库'),
+                      title: '选择一个参考音频（wav/flac/mp3/ogg）和它的逐字转写 .txt；一次选两个文件；音频会复制到数据根 voices/，不要求 ComfyUI 在线',
+                      onClick: () => document.getElementById('blm-tts-refvoice-input')?.click(),
+                    }, '导入参考 voice'),
                     h('input', {
-                      id: 'blm-tts-table-input',
+                      id: 'blm-tts-refvoice-input',
                       type: 'file',
-                      accept: '.json,application/json',
+                      multiple: true,
+                      accept: '.wav,.flac,.mp3,.ogg,.txt,audio/*,text/plain',
                       style: { display: 'none' },
                       onChange: (event) => {
-                        const file = event.target.files && event.target.files[0];
+                        const files = event.target.files ? Array.from(event.target.files) : [];
                         event.target.value = '';
-                        importVoiceTable(file);
+                        importVoicePair(files);
                       },
                     }),
+                    h('button', {
+                      className: 'blm-btn',
+                      disabled: saving || ttsBusy || !selectedRef || selectedRef.source === 'builtin',
+                      title: selectedRef && selectedRef.source === 'builtin' ? '内置参考不能删除；用「恢复默认」回到内置 2 项' : '删除当前选中的自定义参考 voice（只删表项，不删原始文件）',
+                      onClick: removeVoiceRef,
+                    }, '删除'),
                     h('button', { className: 'blm-btn', disabled: saving || ttsBusy, title: '恢复内置参考 voice（Vivian / Uncle_fu）', onClick: resetVoiceTable }, '恢复默认'),
+                  ),
+                  h(
+                    'div',
+                    { className: 'blm-dim', style: { fontSize: 11, lineHeight: 1.5 } },
+                    '一个参考 voice = 参考音频 + 它的逐字转写（.txt）；一次选两个文件导入，音频会复制到数据根 voices/。',
                   ),
                   ttsMsg ? h('div', { className: 'blm-note' }, ttsMsg) : null,
                   ttsProbe && ttsProbe.warnings && ttsProbe.warnings.filter((item) => /参考/.test(String(item))).length
@@ -7026,7 +7079,7 @@ body[data-ds-dark-theme] .blm-note.warn{color:#ff8a80}
                     'dd',
                     null,
                     diagnostics.comfy && diagnostics.comfy.workflow
-                      ? (diagnostics.comfy.workflow.name || '—') + ' · ' + (diagnostics.comfy.workflow.format || '') + ' · 参考库 ' + ((diagnostics.comfy.voiceTable && diagnostics.comfy.voiceTable.name) || '—')
+                      ? (diagnostics.comfy.workflow.name || '—') + ' · ' + (diagnostics.comfy.workflow.format || '') + ' · 参考 voice 库 ' + ((diagnostics.comfy.voiceTable && diagnostics.comfy.voiceTable.name) || '—')
                       : '—',
                   ),
                   h('dt', null, '最近错误'),

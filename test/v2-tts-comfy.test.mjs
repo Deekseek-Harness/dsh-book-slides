@@ -317,6 +317,54 @@ test('参考库导入/校验/恢复默认', async () => {
   assert.equal(out.data.table.defaultVoice, 'builtin-vivian');
 });
 
+test('成对导入：参考音频 + .txt 复制到 voices/，保留内置项，删除自定义项，恢复默认清空', async () => {
+  const text = '这是成对导入的参考文本，必须和音频逐字对应。';
+  const form = new FormData();
+  form.append('audio', new Blob([makeWav(500)], { type: 'audio/wav' }), '参考样本.wav');
+  form.append('ref_text', text);
+  const res = await fetch(baseUrl + '/dsh-book-slides/voice/refvoices/import', { method: 'POST', body: form });
+  assert.equal(res.status, 200);
+  const out = await res.json();
+  assert.equal(out.ok, true);
+  assert.equal(out.table.count, 3);
+  assert.equal(out.entry.source, 'imported');
+  assert.equal(out.entry.ref_text, text);
+  assert.ok(out.entry.duration_ms > 0);
+  assert.ok(fs.existsSync(path.join(ROOT, 'voices', path.basename(out.entry.audio))), '音频必须复制到 voices/');
+  assert.deepEqual(
+    out.table.voices.filter((item) => item.source === 'builtin').map((item) => item.id).sort(),
+    ['builtin-uncle-fu', 'builtin-vivian'],
+    '导入后内置参考仍在',
+  );
+  const removed = await api('POST', '/voice/refvoices', { remove: out.entry.id });
+  assert.equal(removed.data.ok, true);
+  assert.equal(removed.data.table.count, 2);
+  assert.ok(removed.data.table.voices.every((item) => item.source === 'builtin'), '删掉最后一个自定义项后回到内置表');
+  await api('POST', '/voice/refvoices', { reset: true });
+  assert.equal((await api('GET', '/voice/refvoices')).data.table.count, 2);
+});
+
+test('成对导入校验：缺 .txt 与不支持的音频格式都拒绝', async () => {
+  const missing = new FormData();
+  missing.append('audio', new Blob([makeWav()], { type: 'audio/wav' }), 'no-text.wav');
+  const res = await fetch(baseUrl + '/dsh-book-slides/voice/refvoices/import', { method: 'POST', body: missing });
+  const out = await res.json();
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 'E_TTS_VOICE_REF');
+
+  const wrong = new FormData();
+  wrong.append('audio', new Blob([Buffer.alloc(2048, 1)], { type: 'application/octet-stream' }), 'bad.txt');
+  wrong.append('ref_text', '参考文本');
+  const res2 = await fetch(baseUrl + '/dsh-book-slides/voice/refvoices/import', { method: 'POST', body: wrong });
+  const out2 = await res2.json();
+  assert.equal(out2.ok, false);
+  assert.equal(out2.code, 'E_TTS_VOICE_REF');
+
+  const builtin = await api('POST', '/voice/refvoices', { remove: 'builtin-vivian' });
+  assert.equal(builtin.data.ok, false);
+  assert.equal(builtin.data.code, 'E_TTS_VOICE_REF');
+});
+
 test('工作流校验：x_vector_only=true 拒绝；UI 格式可转换', async () => {
   const bad = {
     '1': { class_type: 'FB_Qwen3TTSVoiceClone', inputs: { target_text: 'x', ref_text: 'y', x_vector_only: true, ref_audio: ['2', 0] } },

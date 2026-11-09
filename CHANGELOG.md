@@ -3,9 +3,28 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
-## [Unreleased]
+## [2.0.0-alpha.10] - 2026-11-09
+
+主题「参考 voice 成对导入」：设置页不再让用户导入 JSON，改为一次选择参考音频 + 逐字转写 `.txt`；修复 `/voice/refvoices` 宿主路由缺失导致的 HTTP 405。
 
 主题「重复导入定位书卡」：导入同一份 PDF 不再只弹一句提示，也不跳详情页；留在书架，把已存在的那张书卡滚进视野、聚焦并高亮 3 秒。
+
+### 版本与环境
+
+- 包 `2.0.0-alpha.10`（tag `v2.0.0-alpha.10`）、产品 `2.0`、数据 schema `2`、文档 v1.19。
+- 无数据 schema 变更；新增 `POST /voice/refvoices/import`；`comfy-tts-refvoices.json` 仍为内部存储。
+- 可直接覆盖 `alpha.9`；已有参考表继续读取，用户可在设置页补/删自定义参考。
+
+### 修复
+
+- **参考 voice 库「恢复默认」HTTP 405（阻断）**：`/voice/refvoices` 在 v1.3 改名后只更新了 `v2/api.js` / `v2/client.js`，`index.js` 的 DSH 宿主路由表仍注册旧 `/voice/speakers`，POST 未命中而落到静态 fallback，返回 `405 allow: GET, HEAD`。现注册 `ROUTE_VOICE_REFVOICES` 并移除失效的 `/voice/speakers`；`test/v2-m4-routes.test.mjs` 增加“经宿主路由表可达”的回归用例，不再只直调 `routeM1`。
+- **参考 voice 导入改回成对资产**：设置页不再让用户导入 JSON；「导入参考 voice」一次选择参考音频（wav/flac/mp3/ogg）和它的逐字转写 `.txt`。新增 `POST /voice/refvoices/import`：服务端把音频复制到数据根 `voices/`、读取时长/`sha256`，并把条目追加到参考库（保留内置 Vivian / Uncle_fu），失败不落盘、不改旧表；自定义项可删除，内置项拒绝。`comfy-tts-refvoices.json` 退回内部存储；旧 JSON 表接口保留为内部/兼容。
+- **405 提示**：`api()` 不再把 405 归为瞬时故障并建议重启，改为“接口没注册 / 方法不匹配（插件版本与宿主不一致），重启无效，请更新或重装插件”。
+
+### 测试（参考 voice 库）
+
+- `test/v2-m4-routes.test.mjs`：期望路径由 `/voice/speakers` 改为 `/voice/refvoices` 并补 `/voice/refvoices/import`；新增真实 HTTP 回归，POST `{reset:true}` 必须 200 且返回内置 2 项（Vivian 默认），multipart 成对导入必须 200 且表内 3 项。旧测试只直调 `routeM1`，覆盖不到宿主注册表。
+- `test/v2-tts-comfy.test.mjs` 新增 2 项：成对导入（音频复制到 `voices/`、内置项保留、删除自定义项、`reset` 清空）；缺 `.txt`、不支持的音频格式、删除内置项都返回 `E_TTS_VOICE_REF`。
 
 ### 变更
 
