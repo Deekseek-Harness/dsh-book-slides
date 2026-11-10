@@ -249,6 +249,11 @@ let packageA = null;
 let packageAll = null;
 
 test('AC-125：导出书档，manifest 索引与白名单', async () => {
+  // FR-18.2：view.json 是本机视图状态，不能随书档走
+  fs.writeFileSync(
+    path.join(ROOT, 'books', A.book.id, 'series', A.series.id, 'view.json'),
+    JSON.stringify({ schema: 1, series_id: A.series.id, layout: 'pdf-left', split: 0.3 }),
+  );
   const { res, buffer } = await binary('/dsh-book-slides/export?bookId=' + A.book.id);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'application/zip');
@@ -266,7 +271,7 @@ test('AC-125：导出书档，manifest 索引与白名单', async () => {
   assert.ok(names.includes('books/' + A.book.id + '/practice/questions.json'));
   assert.ok(names.includes('books/' + A.book.id + '/practice/sessions/sabcdefghi.json'));
   assert.ok(!names.some((name) => name.includes('explain-cache')));
-  for (const forbidden of ['voice.json', 'audio-cache/', 'trash/', 'preference.json', '/progress.json', '.tmp']) {
+  for (const forbidden of ['voice.json', 'audio-cache/', 'trash/', 'preference.json', '/progress.json', 'view.json', '.tmp']) {
     assert.ok(!names.some((name) => name.includes(forbidden)), '不得包含 ' + forbidden);
   }
 
@@ -314,6 +319,12 @@ test('AC-125：导出 → 删除 → 导入，书/章/系列/讲/音频/练习�
   const audio = await fetch(baseUrl + '/dsh-book-slides/audio?seriesId=' + restored.id + '&lecture=1&i=2');
   assert.equal(audio.status, 200);
   assert.equal(Buffer.from(await audio.arrayBuffer()).slice(0, 4).toString('ascii'), 'RIFF');
+
+  // FR-18.2：导入后布局回默认（view.json 不随包走）
+  const importedView = await json('/dsh-book-slides/series/view?seriesId=' + restored.id);
+  assert.equal(importedView.ok, true);
+  assert.equal(importedView.view.layout, 'ppt-left');
+  assert.equal(fs.existsSync(path.join(loaded.dir, 'series', restored.id, 'view.json')), false);
 
   const questions = JSON.parse(fs.readFileSync(path.join(loaded.dir, 'practice', 'questions.json'), 'utf8'));
   assert.equal(questions.questions.length, 1);

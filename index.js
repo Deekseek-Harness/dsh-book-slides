@@ -458,6 +458,8 @@ export function apply(ctx) {
 
     // 2.0 M4：偏好、系列进度、设置/诊断、升级备份
     route(ROUTE_PREFIX + '/series/progress', routeV2);
+    // 2.4 FR-18.2：按系列的播放布局（漏注册会线上 404）
+    route(ROUTE_PREFIX + '/series/view', routeV2);
     route(ROUTE_PREFIX + '/settings', routeV2);
     route(ROUTE_PREFIX + '/diagnostics', routeV2);
     route(ROUTE_PREFIX + '/backups', routeV2);

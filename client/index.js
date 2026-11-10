@@ -151,6 +151,8 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-player{position:absolute;inset:0;background:var(--blm-bg);color:var(--blm-text);z-index:12;display:flex;flex-direction:column;overflow:hidden}
 .blm-player-main{flex:1;min-height:0;display:grid;grid-template-columns:var(--blm-split,55%) 6px minmax(0,1fr)}
 .blm-pane-source{min-height:0;overflow:auto;padding:10px 12px 18px;border-right:1px solid var(--blm-line);background:var(--blm-bg)}
+/* 默认 ppt-left 时原文在右，分隔线挂在原文窗格左侧；pdf-left 时沿用 base 的右侧那条 */
+.blm-player-main:not(.pdf-left) .blm-pane-source{border-right:0;border-left:1px solid var(--blm-line)}
 .blm-pane-stage{min-height:0;overflow:auto;padding:12px;display:flex;align-items:flex-start;justify-content:center}
 .blm-divider{background:var(--blm-line);cursor:col-resize;position:relative;touch-action:none}
 .blm-divider::after{content:'';position:absolute;inset:0 -4px}
@@ -232,7 +234,11 @@ body[data-ds-dark-theme] .blm-player-alert{color:#ffd27a}
   .blm-player-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) 6px minmax(0,1fr)}
   .blm-pane-stage{order:1}
   .blm-divider{order:2;cursor:row-resize}
-  .blm-pane-source{order:3;border-right:0;border-top:1px solid var(--blm-line)}
+  /* 上下堆叠时只留顶部那条分隔线（需要压过 :not(.pdf-left) 的左右边框） */
+  .blm-player-main .blm-pane-source,
+  .blm-player-main:not(.pdf-left) .blm-pane-source{order:3;border:0;border-top:1px solid var(--blm-line)}
+  /* 窄屏是上下堆叠，没有左右可换：入口隐藏，堆叠顺序固定为上幻灯片 / 下原文 */
+  .blm-swap{display:none}
   .blm-stage{max-height:100%}
 }
 
@@ -594,6 +600,34 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const ratio = Number(value);
       if (!Number.isFinite(ratio)) return 0.55;
       return Math.round(Math.min(0.75, Math.max(0.25, ratio)) * 1000) / 1000;
+    }
+
+    /**
+     * 播放布局（FR-18.2）：只认两个方向，缺失/非法回默认 `ppt-left`。
+     * `split` 记的是**原文窗格**占比，与方向无关；换位不改宽度。
+     */
+    const PLAYER_LAYOUTS = ['ppt-left', 'pdf-left'];
+
+    function clampLayout(value) {
+      const text = String(value || '');
+      return PLAYER_LAYOUTS.includes(text) ? text : 'ppt-left';
+    }
+
+    /** 原文窗格占比 → 左栏占比（原文在左时相等，在右时取补；取补后按 3 位小数收敛误差）。 */
+    function leftRatioFor(layout, split) {
+      const ratio = clampSplitValue(split);
+      const left = clampLayout(layout) === 'pdf-left' ? ratio : 1 - ratio;
+      return Math.round(left * 1000) / 1000;
+    }
+
+    /** 左栏占比 → 原文窗格占比（leftRatioFor 的逆运算）。 */
+    function splitForLeftRatio(layout, leftRatio) {
+      const ratio = clampSplitValue(leftRatio);
+      return clampSplitValue(clampLayout(layout) === 'pdf-left' ? ratio : 1 - ratio);
+    }
+
+    function nextLayout(layout) {
+      return clampLayout(layout) === 'ppt-left' ? 'pdf-left' : 'ppt-left';
     }
 
     /** 语速吸附到 0.8/1.0/1.2 三档。 */
@@ -2113,7 +2147,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const [playing, setPlaying] = useState(false);
       const [progress, setProgress] = useState(null);
       const [pref, setPref] = useState({ split: 0.55, rate: 1, muted: false });
+      // FR-18.2：split 记原文窗格占比（与方向无关）；layout 决定两栏左右顺序。
       const [split, setSplit] = useState(0.55);
+      const [layout, setLayout] = useState('ppt-left');
       const [dragging, setDragging] = useState(false);
       const [status, setStatus] = useState('点「开始听」从这一页开始朗读');
       const [noAudio, setNoAudio] = useState(false);
@@ -2156,6 +2192,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const playingRef = useRef(playing);
       const prefRef = useRef(pref);
       const splitRef = useRef(split);
+      const layoutRef = useRef(layout);
       const lectureRef = useRef(lectureN);
       const slidesRef = useRef([]);
       const seriesRef = useRef(null);
@@ -2169,6 +2206,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       playingRef.current = playing;
       prefRef.current = pref;
       splitRef.current = split;
+      layoutRef.current = layout;
       lectureRef.current = lectureN;
       seriesRef.current = series;
 
@@ -2190,17 +2228,23 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           api('/series?seriesId=' + encodeURIComponent(seriesId)),
           api('/series/progress?seriesId=' + encodeURIComponent(seriesId)).catch(() => null),
           api('/preference').catch(() => null),
+          api('/series/view?seriesId=' + encodeURIComponent(seriesId)).catch(() => null),
         ])
-          .then(([seriesOut, progressOut, prefOut]) => {
+          .then(([seriesOut, progressOut, prefOut, viewOut]) => {
             if (!alive) return;
             const nextSeries = seriesOut.series;
             setSeries(nextSeries);
             const nextProgress = (progressOut && progressOut.progress) || null;
             setProgress(nextProgress);
             const nextPref = (prefOut && prefOut.preference) || {};
-            const splitValue = clampSplitValue(nextPref.split);
-            setPref({ split: splitValue, rate: clampRateValue(nextPref.rate), muted: nextPref.muted === true });
-            setSplit(splitValue);
+            // 布局按系列：view.json 缺失时服务端已把 preference.split 作为初始宽度返回。
+            const seedSplit = clampSplitValue(nextPref.split);
+            const nextView = (viewOut && viewOut.view) || {};
+            const viewSplit =
+              nextView.split === undefined || nextView.split === null ? seedSplit : nextView.split;
+            setPref({ split: seedSplit, rate: clampRateValue(nextPref.rate), muted: nextPref.muted === true });
+            setLayout(clampLayout(nextView.layout));
+            setSplit(clampSplitValue(viewSplit));
             const lectureList = (nextSeries.lectures || []).map((item) => Number(item.n));
             const wantedLecture = Number(initialLecture) || (nextProgress && nextProgress.lecture) || lectureList[0] || 1;
             const resolvedLecture = lectureList.includes(Number(wantedLecture)) ? Number(wantedLecture) : lectureList[0] || 1;
@@ -2430,6 +2474,23 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           body: JSON.stringify(patch),
         }).catch(() => {});
       }, []);
+
+      /** FR-18.2：布局按系列落到 series/<id>/view.json；失败不打断播放。 */
+      const saveSeriesView = useCallback(
+        (patch) => {
+          // 每次带上完整布局，避免「拖完立刻换位」时两次写入按磁盘旧值互相覆盖。
+          const body = Object.assign(
+            { seriesId, layout: layoutRef.current, split: splitRef.current },
+            patch || {},
+          );
+          api('/series/view', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          }).catch(() => {});
+        },
+        [seriesId],
+      );
 
       const stopAudio = useCallback(() => {
         tokenRef.current += 1;
@@ -2995,19 +3056,20 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         audio.volume = pref.muted ? 0 : 1;
       }, [pref.rate, pref.muted]);
 
-      /* 拖动分隔条：拖完才写偏好 */
+      /* 拖动分隔条：拖完才写该系列的布局（内存里始终存原文占比） */
       useEffect(() => {
         if (!dragging) return undefined;
         const move = (event) => {
           const rect = mainRef.current ? mainRef.current.getBoundingClientRect() : null;
           if (!rect || !rect.width) return;
-          const value = clampSplitValue((event.clientX - rect.left) / rect.width);
+          const leftRatio = (event.clientX - rect.left) / rect.width;
+          const value = splitForLeftRatio(layoutRef.current, leftRatio);
           splitRef.current = value;
           setSplit(value);
         };
         const up = () => {
           setDragging(false);
-          savePreference({ split: splitRef.current });
+          saveSeriesView({ split: splitRef.current });
         };
         window.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up, { once: true });
@@ -3015,14 +3077,36 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           window.removeEventListener('pointermove', move);
           window.removeEventListener('pointerup', up);
         };
-      }, [dragging, savePreference]);
+      }, [dragging, saveSeriesView]);
 
-      const adjustSplit = useCallback((delta) => {
-        const next = clampSplitValue(splitRef.current + delta);
-        splitRef.current = next;
-        setSplit(next);
-        savePreference({ split: next });
-      }, [savePreference]);
+      /** 写一个原文占比：夹紧、更新内存、落该系列 view.json。 */
+      const setSplitValue = useCallback(
+        (value) => {
+          const next = clampSplitValue(value);
+          splitRef.current = next;
+          setSplit(next);
+          saveSeriesView({ split: next });
+        },
+        [saveSeriesView],
+      );
+
+      /** delta 以「分隔条向左/右移动」为准；落盘时换算成原文占比（FR-18.2）。 */
+      const adjustSplit = useCallback(
+        (delta) => {
+          const current = leftRatioFor(layoutRef.current, splitRef.current);
+          const nextLeft = Math.min(0.75, Math.max(0.25, current + delta));
+          setSplitValue(splitForLeftRatio(layoutRef.current, nextLeft));
+        },
+        [setSplitValue],
+      );
+
+      /** 换位：只改方向，不改宽度；写该系列 view.json，不重建音频。 */
+      const toggleLayout = useCallback(() => {
+        const next = nextLayout(layoutRef.current);
+        layoutRef.current = next;
+        setLayout(next);
+        saveSeriesView({ layout: next });
+      }, [saveSeriesView]);
 
       const toggleFullscreen = useCallback(async () => {
         const element = rootRef.current;
@@ -3437,12 +3521,36 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         );
       }
 
+      // FR-18.2：两栏顺序由该系列的布局决定；宽度只看原文占比，换位不改变它。
+      const currentLayout = clampLayout(layout);
+      const leftRatio = leftRatioFor(currentLayout, split);
+      const sourcePane = h(SourcePane, { key: 'source', pdfDoc, pdfLoading, pdfError, slide, bookId });
+      const stagePane = h(
+        'div',
+        { key: 'stage', className: 'blm-pane-stage' },
+        h(
+          'div',
+          { className: 'blm-stage-stack' },
+          h(SlideStage, {
+            key: lectureN + '-' + (slide ? slide.slide_index : 0),
+            slide,
+            seriesId,
+            lecture: lectureN,
+            onRegenImage: regenImage,
+            onCancelImage: cancelRegenImage,
+            imageBusy: Boolean(imageKey) && imageBusyKey === imageKey,
+            imageLocked: Boolean(imageBusyKey) && imageBusyKey !== imageKey,
+          }),
+          h(SubtitlePane, { text: subtitleText(slide) }),
+        ),
+      );
+
       return h(
         'div',
         {
           className: 'blm-player',
           ref: rootRef,
-          style: { '--blm-split': (split * 100).toFixed(2) + '%', cursor: dragging ? 'col-resize' : undefined },
+          style: { '--blm-split': (leftRatio * 100).toFixed(2) + '%', cursor: dragging ? 'col-resize' : undefined },
         },
         h(
           'div',
@@ -3451,6 +3559,17 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           h('h1', null, series.title || '精讲'),
           h('span', { className: 'blm-chip' }, progressLine),
           h('div', { style: { flex: 1 } }),
+          h(
+            'button',
+            {
+              className: 'blm-btn blm-swap',
+              onClick: toggleLayout,
+              title: '交换原文与幻灯片的位置（布局按系列记住）',
+              'aria-label': '交换原文与幻灯片的位置',
+              'aria-pressed': currentLayout === 'pdf-left',
+            },
+            '⇄ 换位',
+          ),
           single ? null : h('button', { className: 'blm-btn', onClick: () => setDirectory(true) }, '系列目录'),
           h('button', { className: 'blm-btn', onClick: toggleFullscreen, title: '全屏（F）' }, fullscreen ? '退出全屏' : '全屏'),
           h(
@@ -3484,20 +3603,24 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           : null,
         h(
           'div',
-          { className: 'blm-player-main', ref: mainRef },
-          h(SourcePane, { pdfDoc, pdfLoading, pdfError, slide, bookId }),
+          {
+            className: 'blm-player-main' + (currentLayout === 'pdf-left' ? ' pdf-left' : ''),
+            ref: mainRef,
+          },
+          currentLayout === 'pdf-left' ? sourcePane : stagePane,
           h('div', {
+            key: 'divider',
             className: 'blm-divider',
             role: 'separator',
             'aria-orientation': 'vertical',
             'aria-label': '拖动调整原文与幻灯片宽度',
-            'aria-valuenow': Math.round(split * 100),
+            'aria-valuenow': Math.round(leftRatio * 100),
             tabIndex: 0,
             onPointerDown: (event) => {
               event.preventDefault();
               setDragging(true);
             },
-            onDoubleClick: () => adjustSplit(0.55 - splitRef.current),
+            onDoubleClick: () => setSplitValue(0.55),
             onKeyDown: (event) => {
               if (event.key === 'ArrowLeft') {
                 event.preventDefault();
@@ -3508,25 +3631,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               }
             },
           }),
-          h(
-            'div',
-            { className: 'blm-pane-stage' },
-            h(
-              'div',
-              { className: 'blm-stage-stack' },
-              h(SlideStage, {
-                key: lectureN + '-' + (slide ? slide.slide_index : 0),
-                slide,
-                seriesId,
-                lecture: lectureN,
-                onRegenImage: regenImage,
-                onCancelImage: cancelRegenImage,
-                imageBusy: Boolean(imageKey) && imageBusyKey === imageKey,
-                imageLocked: Boolean(imageBusyKey) && imageBusyKey !== imageKey,
-              }),
-              h(SubtitlePane, { text: subtitleText(slide) }),
-            ),
-          ),
+          currentLayout === 'pdf-left' ? stagePane : sourcePane,
         ),
         transition
           ? h(TransitionCard, {
@@ -8867,6 +8972,10 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       },
       __helpers: {
         clampSplitValue,
+        clampLayout,
+        leftRatioFor,
+        splitForLeftRatio,
+        nextLayout,
         clampRateValue,
         playerKeyAction,
         slideAudioMode,

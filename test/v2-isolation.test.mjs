@@ -95,7 +95,7 @@ test('AC-112：旧根自动备份，备份内文件与 mtime 保持，/meta 提�
 
   const meta = JSON.parse(fs.readFileSync(path.join(ROOT, 'meta.json'), 'utf8'));
   assert.equal(meta.schema, 2);
-  assert.equal(meta.product_version, '2.3');
+  assert.equal(meta.product_version, '2.4');
   assert.equal(meta.upgraded_from, path.basename(out.backup));
   assert.equal(meta.upgraded_to, out.backup);
   assert.equal(fs.existsSync(path.join(ROOT, 'books')), true);

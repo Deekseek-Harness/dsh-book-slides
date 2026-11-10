@@ -94,6 +94,7 @@ test('M4 路由：偏好/进度/语音/设置/诊断/备份均由 2.0 接管', (
   const expected = [
     '/preference',
     '/series/progress',
+    '/series/view',
     '/voice',
     '/voice/probe',
     '/voice/workflow',
@@ -211,8 +212,25 @@ test('FR-27 路由：/usage/summary 与 /usage/jobs 经宿主路由表可达（�
   }
 });
 
-test('M4 路由：PDF 仍是前缀路由（pdf.js worker/cmaps 同源）', () => {
-  const vendor = registered.find((item) => item.path === ROUTE_PREFIX + '/vendor/pdfjs');
+test('FR-18.2 路由：/series/view 经宿主路由表可达（缺失系列返回 E_NOT_FOUND 而非 404）', async () => {
+  const routePath = ROUTE_PREFIX + '/series/view';
+  assert.ok(
+    registered.some((item) => item.kind === 'exact' && item.path === routePath),
+    '缺少宿主路由注册：' + routePath,
+  );
+  const host = await startHost();
+  try {
+    const res = await fetch(host.base + routePath + '?seriesId=nosuchseries');
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, false);
+    assert.equal(data.code, 'E_NOT_FOUND');
+  } finally {
+    await host.close();
+  }
+});
+
+test('M4 路由：PDF 仍是前缀路由（pdf.js worker/cmaps 同源）', () => {  const vendor = registered.find((item) => item.path === ROUTE_PREFIX + '/vendor/pdfjs');
   assert.ok(vendor, '缺少 pdf.js vendor 前缀路由');
   assert.equal(vendor.kind, 'prefix');
 });

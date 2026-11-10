@@ -7,7 +7,7 @@
  * 三条硬边界：
  *   1. 零生成：导入全程不调 LLM/TTS/ComfyUI、不重新解析 PDF；
  *   2. 只收白名单：voice.json（含 Key）、audio-cache/、trash/、batches/、
- *      preference.json、progress.json、*.tmp、explain-cache 一律不入包；
+ *      preference.json、progress.json、view.json、*.tmp、explain-cache 一律不入包；
  *   3. 原子性：解压到数据根下的 .import/<jobId>/，整本校验通过后才 rename 进 books/；
  *      取消或失败清理 staging，不留半截数据。
  *
@@ -47,7 +47,7 @@ export const README_TEXT = [
   'dsh-book-slides 2.0 书档',
   '',
   'manifest.json 是唯一索引，里面的 sha256 是导入校验依据。',
-  '本包不含 voice.json（语音 Key）、audio-cache/、trash/、batches/、preference.json、progress.json、*.tmp。',
+  '本包不含 voice.json（语音 Key）、audio-cache/、trash/、batches/、preference.json、progress.json、view.json、*.tmp。',
   '导入后不需要重新生成；缺音频的页会按「本页无配音」降级。',
 ].join('\n');
 

@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { META_FILE, ROOT, getMeta, packageVersion, readJson } from './root.js';
+import { META_FILE, ROOT, getMeta, packageVersion, PRODUCT_VERSION, readJson } from './root.js';
 import { storageStats, dirSize } from './books.js';
 import { recentErrors } from './errors.js';
 import { resolveModel } from './llm.js';
@@ -203,7 +203,7 @@ export function settingsPayload(ctx) {
     model: model,
     modelNote: model ? '当前使用 DSH 默认模型（只读）' : 'DSH 还没有选好默认模型',
     version: packageVersion(),
-    productVersion: '2.3',
+    productVersion: PRODUCT_VERSION,
     schema: Number(meta.schema) || 2,
   };
 }
@@ -228,7 +228,7 @@ export function diagnosticsPayload() {
   }
   return {
     version: packageVersion(),
-    productVersion: '2.3',
+    productVersion: PRODUCT_VERSION,
     schema: Number(meta.schema) || 2,
     dataRoot: ROOT,
     metaFile: META_FILE(),

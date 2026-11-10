@@ -3,6 +3,42 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.4.0] - 2026-11-10
+
+**播放页左右换位（按系列记忆）**。功能增量，数据 schema 仍为 `2`；无迁移。
+
+### 版本与环境
+
+- 包 `2.4.0`（tag `v2.4.0`）、产品 `2.4`、数据 schema `2`、文档 v1.26。
+- 可覆盖安装 2.3.0；已有书/系列/音频/配图/练习与 `usage/` 账本继续可用；`series.json` / `slides.json` / `progress.json` 不新增字段。
+
+### 新增
+
+- **播放页左右换位（FR-18.2 / AC-169、AC-170、AC-171）**：原文窗格与幻灯片窗格可一键对调；**默认布局改为幻灯片在左、原文在右**（`ppt-left`）。换位不刷新、不重建音频、不回页首，两栏 DOM 节点保持（PDF 不重新渲染），全屏/目录/当前页状态不变。
+- **布局按系列记忆**：方向与原文宽度写入 `series/<seriesId>/view.json`（新文件，`{schema:1, series_id, layout, split, updated_at}`），新接口 `GET/POST /series/view`；A 系列换位不影响 B 系列，关闭播放页重开、重启 DSH 后保持。
+- 入口只在该系列的播放页顶栏（「⇄ 换位」，`aria-pressed` 反映当前方向）；书架与设置页不提供全局开关，也没有“全局默认方向”。
+- `split` 表示**原文窗格**宽度占比（0.25–0.75），换位只换位置、不改宽度；拖分隔条时条始终贴着原文边缘，双击复位为 55%。
+
+### 变更
+
+- **默认布局变化**：升级后首次进入任一未记录布局的系列，看到的是左幻灯片 / 右原文。原全局 `preference.split` 仍作为该系列的**初始原文宽度**生效（例如老用户调过的 55% 继续生效），只是不再由播放页回写。
+- `preference.json` 不新增 `layout`；记录仍只含 split/rate/muted/上次位置。权威布局值转到系列的 `view.json`。
+- 窄屏（<1040px）：隐藏「⇄ 换位」；上下堆叠顺序不变（上幻灯片、下原文）。
+
+### 边界
+
+- 老系列无 `view.json`：按默认方向 + 全局 `preference.split` 渲染，只读不落盘；首次换位/拖动才写该系列。
+- `view.json` 损坏/缺字段/`series_id` 不符：按默认值渲染（`series_id` 以目录为准），不覆盖坏文件、不崩。
+- 删除系列随目录一起清理，无孤儿记录；`view.json` 属于本机视图状态，**不入书档**，导入后回到默认布局。
+- 不改 `series.json`（避免与配音/配图作业写回互踩）、不改 `progress.json`、数据 `schema` 仍为 2。
+
+### 测试
+
+- `test/parity-player.test.mjs`：布局纯函数（`clampLayout` / `leftRatioFor` / `splitForLeftRatio` 互逆与夹紧）、顶栏按钮与列序换算契约、窄屏隐藏、换位不停音频不改宽度。
+- `test/parity-settings.test.mjs`：`/series/view` 默认值不落盘、双系列隔离、只改方向保留比例、删系列清理；非法方向/比例回落夹紧、坏 `view.json` 按默认、未知字段丢弃、`preference.json` 不出现 `layout`。
+- `test/v2-m4-routes.test.mjs`：`/series/view` 宿主路由可达（回归 404）；`test/v2-package.test.mjs`：书档不含 `view.json`、导入后回默认布局。
+- `npm run test:v2` 43 文件 / 389 项全绿；`npm run verify:plugin` PASS。
+
 ## [2.3.0] - 2026-11-10
 
 **播放页字幕**。功能增量，数据 schema 仍为 `2`；无数据/接口迁移。

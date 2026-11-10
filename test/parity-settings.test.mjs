@@ -144,7 +144,7 @@ test('AC-118：设置首屏给出数据根、占用、回收站、备份与只�
   assert.ok(out.bytes > 0);
   assert.equal(out.trashCount, 0);
   assert.deepEqual(out.backups, []);
-  assert.equal(out.productVersion, '2.3');
+  assert.equal(out.productVersion, '2.4');
   assert.equal(out.schema, 2);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
@@ -162,7 +162,7 @@ test('AC-118：诊断显示插件版本/产品版本/schema/DSH/pdfjs 与最近�
   assert.equal(out.ok, true);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
-  assert.equal(out.productVersion, '2.3');
+  assert.equal(out.productVersion, '2.4');
   assert.equal(out.schema, 2);
   assert.equal(typeof out.dshVersion, 'string');
   assert.ok(out.dshVersion.length > 0);
@@ -396,6 +396,122 @@ globalThis.window = {
   },
 };
 await import('../client/index.js');
+
+/* ------------------------------ FR-18.2 布局按系列（2.4） ------------------------------ */
+
+test('AC-170：/series/view 默认 ppt-left + 原文 55%，无记录不落盘；两个系列互不影响', async () => {
+  writePreference({ split: 0.55 });
+  const bookA = makeBook('view-a');
+  const seriesA = makeSeries(bookA, 'view-a');
+  const dirA = findSeries(seriesA.id).dir;
+  const viewPathA = path.join(dirA, 'view.json');
+  fs.rmSync(viewPathA, { force: true });
+
+  const initial = await json('/dsh-book-slides/series/view?seriesId=' + seriesA.id);
+  assert.equal(initial.ok, true);
+  assert.equal(initial.view.layout, 'ppt-left', '默认左幻灯片');
+  assert.equal(initial.view.split, 0.55, '默认原文宽度取 preference.split');
+  assert.equal(initial.view.series_id, seriesA.id);
+  assert.equal(fs.existsSync(viewPathA), false, '只读默认值不应落盘');
+
+  const swapped = await post('/dsh-book-slides/series/view', { seriesId: seriesA.id, layout: 'pdf-left', split: 0.3 });
+  assert.equal(swapped.ok, true);
+  assert.equal(swapped.view.layout, 'pdf-left');
+  assert.equal(swapped.view.split, 0.3);
+  assert.equal(fs.existsSync(viewPathA), true, '换位后要落盘');
+  const onDisk = JSON.parse(fs.readFileSync(viewPathA, 'utf8'));
+  assert.deepEqual(Object.keys(onDisk).sort(), ['layout', 'schema', 'series_id', 'split', 'updated_at']);
+  assert.equal(onDisk.schema, 1);
+  assert.equal(onDisk.series_id, seriesA.id);
+  assert.ok(Date.parse(onDisk.updated_at) > 0);
+
+  // 另一个系列（另一本书）保持默认，且不因 A 的写入而落盘
+  const bookB = makeBook('view-b');
+  const seriesB = makeSeries(bookB, 'view-b');
+  const viewPathB = path.join(findSeries(seriesB.id).dir, 'view.json');
+  const viewB = await json('/dsh-book-slides/series/view?seriesId=' + seriesB.id);
+  assert.equal(viewB.view.layout, 'ppt-left');
+  assert.equal(viewB.view.split, 0.55);
+  assert.equal(fs.existsSync(viewPathB), false);
+
+  // 回读 A：方向与比例都在
+  const reread = await json('/dsh-book-slides/series/view?seriesId=' + seriesA.id);
+  assert.equal(reread.view.layout, 'pdf-left');
+  assert.equal(reread.view.split, 0.3);
+
+  // 全局偏好的 split 仍是 0.55——按系列的宽度没有回写全局
+  assert.equal(readPreference().split, 0.55);
+
+  // 只改方向时保留比例
+  const layoutOnly = await post('/dsh-book-slides/series/view', { seriesId: seriesA.id, layout: 'ppt-left' });
+  assert.equal(layoutOnly.view.layout, 'ppt-left');
+  assert.equal(layoutOnly.view.split, 0.3);
+
+  // 删系列后目录与 view.json 一并消失
+  const removed = await json('/dsh-book-slides/series', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ seriesId: seriesA.id }),
+  });
+  assert.equal(removed.ok, true);
+  assert.equal(fs.existsSync(dirA), false);
+  const gone = await json('/dsh-book-slides/series/view?seriesId=' + seriesA.id);
+  assert.equal(gone.ok, false);
+  assert.equal(gone.code, 'E_NOT_FOUND');
+});
+
+test('AC-171：非法 layout/split 回落夹紧；坏 view.json 按默认渲染；不写 preference.layout', async () => {
+  const book = makeBook('view-bad');
+  const series = makeSeries(book, 'view-bad');
+  const dir = findSeries(series.id).dir;
+  const file = path.join(dir, 'view.json');
+
+  writePreference({ split: 0.5, rate: 1, muted: false });
+  const badLayout = await post('/dsh-book-slides/series/view', { seriesId: series.id, layout: 'sideways' });
+  assert.equal(badLayout.ok, true);
+  assert.equal(badLayout.view.layout, 'ppt-left', '非法方向回默认');
+
+  const high = await post('/dsh-book-slides/series/view', { seriesId: series.id, split: 0.98 });
+  assert.equal(high.view.split, 0.75);
+  const low = await post('/dsh-book-slides/series/view', { seriesId: series.id, split: 0.01 });
+  assert.equal(low.view.split, 0.25);
+  const junk = await post('/dsh-book-slides/series/view', { seriesId: series.id, split: 'x' });
+  assert.equal(junk.view.split, 0.25, '非法数值保留上一次的合法值');
+
+  // 缺字段不动另一字段
+  const onlyLayout = await post('/dsh-book-slides/series/view', { seriesId: series.id, layout: 'pdf-left' });
+  assert.equal(onlyLayout.view.layout, 'pdf-left');
+  assert.equal(onlyLayout.view.split, 0.25);
+
+  // 坏 JSON / 缺字段：按默认渲染，不崩、不覆盖
+  fs.writeFileSync(file, '{bad json');
+  const broken = await json('/dsh-book-slides/series/view?seriesId=' + series.id);
+  assert.equal(broken.ok, true);
+  assert.equal(broken.view.layout, 'ppt-left');
+  assert.equal(broken.view.split, 0.5, '损坏时原文宽度回落到 preference.split');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{bad json', '只读请求不得覆盖坏文件');
+
+  fs.writeFileSync(file, JSON.stringify({ schema: 1, layout: 'pdf-left' }));
+  const partial = await json('/dsh-book-slides/series/view?seriesId=' + series.id);
+  assert.equal(partial.view.layout, 'pdf-left');
+  assert.equal(partial.view.split, 0.5);
+  assert.equal(partial.view.series_id, series.id, 'series_id 以目录为准');
+
+  // 未知字段丢弃
+  const junkFields = await post('/dsh-book-slides/series/view', { seriesId: series.id, layout: 'pdf-left', extra: 1 });
+  assert.equal(junkFields.ok, true);
+  assert.deepEqual(Object.keys(junkFields.view).sort(), ['layout', 'schema', 'series_id', 'split', 'updated_at']);
+
+  // 缺失/非法 seriesId 仍是 404 语义，不是 500
+  const missing = await json('/dsh-book-slides/series/view?seriesId=');
+  assert.equal(missing.ok, false);
+  assert.equal(missing.code, 'E_NOT_FOUND');
+
+  // 全局偏好不出现 layout
+  const pref = JSON.parse(fs.readFileSync(path.join(ROOT, 'preference.json'), 'utf8'));
+  assert.equal('layout' in pref, false);
+  assert.equal(pref.split, 0.5);
+});
 
 test.after(() => {
   server.close();

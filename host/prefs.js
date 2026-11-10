@@ -5,6 +5,9 @@
  * 区间一律由服务端夹紧：面板拖到边界外、或旧客户端传了非法值，读回来也是合法值。
  * 与 1.x 的 preference.json 同根同文件，但字段不同（split 取代 splitRatio），
  * 2.0 只读自己认识的字段，读到 1.x 残留时按默认值处理。
+ *
+ * 2.4（FR-18.2）起，分隔条比例的权威存储改为按系列的 `series/<id>/view.json`；
+ * 这里的 `split` 只作为「该系列没有 view.json 时的初始宽度」，播放页不再回写。
  */
 import path from 'node:path';
 

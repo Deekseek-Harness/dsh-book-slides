@@ -8,7 +8,7 @@ import path from 'node:path';
 import { PdfError, PDF_ERROR, extractPages, guessTitle, totalChars } from '../lib/pdfread.js';
 import { coverSvg, hueOf } from '../lib/cover.js';
 import { suggestTocRange, tocTextOf } from '../lib/tocparse.js';
-import { ROOT, ensureRoot, getMeta, packageVersion, readJson, writeJson } from './root.js';
+import { ROOT, ensureRoot, getMeta, packageVersion, PRODUCT_VERSION, readJson, writeJson } from './root.js';
 import {
   clearTrash,
   createBook,
@@ -72,6 +72,7 @@ import { buildStitchReport, repairStitch, writeStitchReport } from './stitch.js'
 import { loadLecture } from './lectures.js';
 import { readPreference, writePreference } from './prefs.js';
 import { progressSummary, readProgress, saveProgress } from './progress.js';
+import { readView, saveView } from './view.js';
 import {
   activeRevoiceJob,
   cancelRevoiceJob,
@@ -243,7 +244,7 @@ function handleMeta(req, res) {
   sendJson(res, 200, {
     ok: true,
     version: packageVersion(),
-    product_version: '2.3',
+    product_version: PRODUCT_VERSION,
     schema: 2,
     legacy: false,
     notice: meta.upgraded_from ? '旧数据已备份到 ' + (meta.upgraded_to || meta.upgraded_from) : '',
@@ -1108,6 +1109,32 @@ function handleSeriesProgressGet(req, res, url) {
   if (!found) return;
   const progress = progressSummary(found.series, readProgress(found.dir, found.series));
   sendJson(res, 200, { ok: true, progress });
+}
+
+/** FR-18.2：该系列的播放布局；没有 view.json 时返回默认值且不落盘。 */
+function handleSeriesViewGet(req, res, url) {
+  ensureRoot();
+  const found = findSeriesOr404(res, url.searchParams.get('seriesId'));
+  if (!found) return;
+  sendJson(res, 200, { ok: true, view: readView(found.dir, found.series) });
+}
+
+async function handleSeriesViewPost(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const found = findSeriesOr404(res, body.seriesId);
+  if (!found) return;
+  try {
+    const view = saveView({
+      series: found.series,
+      dir: found.dir,
+      layout: body.layout,
+      split: body.split,
+    });
+    sendJson(res, 200, { ok: true, view });
+  } catch (err) {
+    sendError(res, err.code || 'E_VIEW', err.message || '布局没存下来', err.hint || '');
+  }
 }
 
 async function handleSeriesProgressPost(req, res) {
@@ -2041,6 +2068,18 @@ async function routeM1Inner(req, res, url, options = {}) {
     }
     if (req.method === 'POST') {
       await handleSeriesProgressPost(req, res);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '');
+    return true;
+  }
+  if (pathname === PREFIX + '/series/view') {
+    if (req.method === 'GET') {
+      handleSeriesViewGet(req, res, url);
+      return true;
+    }
+    if (req.method === 'POST') {
+      await handleSeriesViewPost(req, res);
       return true;
     }
     sendError(res, 'E_METHOD', '不支持的方法', '');

@@ -633,3 +633,65 @@ test('书架卡展示系列数与「继续听」；设置入口在书架栏', ()
   assert.ok(card.includes('2 个系列'));
   assert.ok(card.includes('继续听'));
 });
+
+/* ------------------------------ FR-18.2 左右换位（2.4） ------------------------------ */
+
+test('AC-169：布局纯函数——默认左幻灯片，split 是原文占比（换位不改宽度）', () => {
+  assert.equal(helpers.clampLayout('ppt-left'), 'ppt-left');
+  assert.equal(helpers.clampLayout('pdf-left'), 'pdf-left');
+  assert.equal(helpers.clampLayout('sideways'), 'ppt-left', '非法方向回落默认');
+  assert.equal(helpers.clampLayout(''), 'ppt-left');
+  assert.equal(helpers.clampLayout(null), 'ppt-left');
+  assert.equal(helpers.clampLayout(123), 'ppt-left');
+
+  // 默认 ppt-left：左栏是幻灯片 45%，原文 55%
+  assert.equal(helpers.leftRatioFor('ppt-left', 0.55), 0.45);
+  // pdf-left：原文 55% 换到左边，宽度不变
+  assert.equal(helpers.leftRatioFor('pdf-left', 0.55), 0.55);
+  // 原文宽度在两种布局下都不变（0.55），变的是它在哪一栏
+  assert.equal(helpers.splitForLeftRatio('ppt-left', 0.45), 0.55);
+  assert.equal(helpers.splitForLeftRatio('pdf-left', 0.55), 0.55);
+
+  for (const layout of ['ppt-left', 'pdf-left']) {
+    for (const split of [0.25, 0.4, 0.55, 0.61, 0.75]) {
+      assert.equal(helpers.splitForLeftRatio(layout, helpers.leftRatioFor(layout, split)), split);
+    }
+  }
+  // 夹紧与非法值
+  assert.equal(helpers.leftRatioFor('ppt-left', 0.9), 0.25);
+  assert.equal(helpers.leftRatioFor('pdf-left', 0.01), 0.25);
+  assert.equal(helpers.leftRatioFor('ppt-left', 'x'), 0.45);
+  assert.equal(helpers.nextLayout('ppt-left'), 'pdf-left');
+  assert.equal(helpers.nextLayout('pdf-left'), 'ppt-left');
+});
+
+test('AC-169：顶栏有换位按钮，列序按布局、宽度只由原文占比决定', () => {
+  assert.ok(source.includes("className: 'blm-btn blm-swap'"), '缺少「⇄ 换位」按钮');
+  assert.ok(source.includes("'aria-pressed': currentLayout === 'pdf-left'"), '按钮要反映当前方向');
+  assert.ok(source.includes("currentLayout === 'pdf-left' ? sourcePane : stagePane"));
+  assert.ok(source.includes("currentLayout === 'pdf-left' ? stagePane : sourcePane"));
+  assert.ok(source.includes("'--blm-split': (leftRatio * 100)"), '列宽必须按布局换算');
+  assert.ok(source.includes("className: 'blm-player-main' + (currentLayout === 'pdf-left' ? ' pdf-left' : '')"));
+  // 布局来自该系列，不是全局偏好
+  assert.ok(source.includes('/series/view?seriesId='), '首屏必须拉该系列的布局');
+  assert.ok(source.includes('saveSeriesView({ layout: next })'), '换位要写该系列');
+});
+
+test('AC-169：窄屏隐藏换位按钮，堆叠顺序仍是上幻灯片 / 下原文', () => {
+  assert.match(source, /@media \(max-width:1040px\)\{[\s\S]*?\.blm-swap\{display:none\}/, '窄屏应隐藏换位入口');
+  assert.ok(source.includes('.blm-pane-stage{order:1}'));
+  assert.ok(source.includes('.blm-pane-source{order:3'));
+});
+
+test('AC-169：换位只改方向，不停音频、不改宽度', () => {
+  const start = source.indexOf('const toggleLayout = useCallback');
+  assert.ok(start > 0, '找不到 toggleLayout');
+  const end = source.indexOf('}, [saveSeriesView]);', start);
+  assert.ok(end > start);
+  const body = source.slice(start, end);
+  assert.ok(body.includes('saveSeriesView({ layout: next })'));
+  assert.equal(body.includes('stopAudio'), false, '换位不得停音频');
+  assert.equal(body.includes('setSplit'), false, '换位不得改原文宽度');
+  assert.equal(body.includes('setIndex'), false, '换位不得翻页');
+});
+
