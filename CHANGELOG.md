@@ -3,6 +3,24 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.2.1] - 2026-11-10
+
+**体验修复**。无功能、数据 schema、HTTP 契约变更，可直接覆盖 2.2.0；无需数据迁移。
+
+### 版本与环境
+
+- 包 `2.2.1`（tag `v2.2.1`）、产品 `2.2`、数据 schema `2`、文档 v1.24。
+- 无接口/数据变更：已有书/系列/音频/配图/练习与 `usage/` 账本继续可用。
+
+### 修复
+
+- **切回窗口时播放断音并回退重播几个字**：窗口重新聚焦时，刷新逻辑原先无条件清空当前讲缓存，建源 effect 因此销毁并重建正在播的音频；重建时又按滞后的 `positionRef`（`timeupdate` 约 250ms 才更新一次）定位，表现为“卡一下 + 重播最后几个字”。现在改为“先拉后换”：先 `GET /lecture`，与现有 slides 比对，没变就不动音频；只有页数或当前页音频签名变化才重建，并用 `audio.currentTime` 精确续上。`focus` 与 `visibilitychange` 增加 300ms 去抖，最小化恢复不再刷两遍。切回仍会重拉 `/lecture` 与 `/series`，注入/手工改数据照常可见。
+
+### 测试
+
+- `test/parity-player.test.mjs`：新增刷新裁决（内容没变不重建、只换配图不打断、非当前页换音不影响、当前页换音/页数变化才重建）与“切回刷新不得先清空讲缓存”的源码契约。
+- `npm run test:v2` 43 文件 / 379 项全绿；`npm run verify:plugin` PASS。
+
 ## [2.2.0] - 2026-11-10
 
 **播放器暂停粒度**。功能增量，数据 schema 仍为 `2`；`progress.json` 追加可选字段（向后兼容），无需迁移。

@@ -121,6 +121,42 @@ test('换一张不重启播放：playbackKey 只认本页音频字段，图片�
   assert.equal(helpers.playbackKey(null), '');
 });
 
+test('切回窗口刷新：内容没变不重建；只换配图不打断；音频/页数变化才重建', () => {
+  const base = [
+    { slide_index: 1, title: '甲', audio_file: 'audio/001.wav', audio_provider: 'qwen3-tts', audio_ms: 1000, audio_script: '甲', image_file: 'images/001.png' },
+    { slide_index: 2, title: '乙', audio_file: 'audio/002.wav', audio_provider: 'qwen3-tts', audio_ms: 1000, audio_script: '乙', image_file: 'images/002.png' },
+  ];
+  const clone = (list) => JSON.parse(JSON.stringify(list));
+
+  assert.deepEqual(helpers.refreshDecision(base, clone(base), 1), { changed: false, rebuild: false }, '数据没变：不能动音频');
+
+  const imageOnly = clone(base);
+  imageOnly[1].image_file = 'images/002-v2.png';
+  assert.deepEqual(helpers.refreshDecision(base, imageOnly, 1), { changed: true, rebuild: false }, '只换配图：换数据不重建');
+
+  const otherPageAudio = clone(base);
+  otherPageAudio[0].audio_file = 'audio/001-v2.wav';
+  assert.deepEqual(helpers.refreshDecision(base, otherPageAudio, 1), { changed: true, rebuild: false }, '非当前页换音：不影响当前播放');
+
+  const currentAudio = clone(base);
+  currentAudio[1].audio_file = 'audio/002-v2.wav';
+  assert.deepEqual(helpers.refreshDecision(base, currentAudio, 1), { changed: true, rebuild: true }, '当前页换音：需要重建');
+
+  assert.deepEqual(helpers.refreshDecision(base, clone(base).slice(0, 1), 1), { changed: true, rebuild: true }, '页数变化：需要重建');
+  assert.deepEqual(helpers.refreshDecision(undefined, [], 0), { changed: false, rebuild: false }, '空数据安全');
+});
+
+test('切回窗口刷新不得先清空当前讲缓存（会销毁正在播的音频）', () => {
+  const start = source.indexOf('外部改了数据');
+  const end = source.indexOf('换讲/首次加载后决定起始页');
+  assert.ok(start >= 0 && end > start, '能找到刷新 effect');
+  const block = source.slice(start, end);
+  assert.equal(block.includes('delete next[lectureN]'), false, '刷新不能先把 slides 清空');
+  assert.ok(block.includes('refreshDecision'), '替换前要裁决「变没变 / 要不要重建」');
+  assert.ok(block.includes('rememberPlaybackPosition'), '确需重建时要用 currentTime 记位置');
+  assert.ok(block.includes('REFRESH_DEBOUNCE_MS'), 'focus 与 visibilitychange 要去抖');
+});
+
 test('播放 effect 依赖的是音频签名，不是整个 slides 数组', () => {
   assert.ok(/slides\.length,\s*pageAudioKey/.test(source), '依赖里应有 slides.length + pageAudioKey');
   assert.equal(source.includes('lectureN, seriesId, slides, advance'), false, '不应再把整个 slides 数组放进依赖');

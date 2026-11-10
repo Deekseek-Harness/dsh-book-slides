@@ -18,6 +18,8 @@ window.__ModuleLoader__.load({
     const RATE_STEPS = [0.8, 1, 1.2];
     const ACTIVE_LECTURE = ['queued', 'structuring', 'validate', 'anchor'];
     const READY_LECTURE = ['ready', 'ready_degraded'];
+    // 切回窗口时 focus 与 visibilitychange 常结伴触发：去抖窗口内只刷新一次
+    const REFRESH_DEBOUNCE_MS = 300;
 
     const CSS = `
 .blm-root{
@@ -651,6 +653,25 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         slide.audio_ms || 0,
         slide.audio_script || '',
       ].join('\u0001');
+    }
+
+    /**
+     * 切回窗口刷新时的裁决。与建源 effect 的依赖保持同一口径：
+     * 只有「页数变化 / 当前页音频签名变化 / 当前页不存在」才需要重建音频；
+     * 配图、文字排版等变化只换数据，不应打断正在播的声音。
+     * @returns {{changed:boolean, rebuild:boolean}}
+     */
+    function refreshDecision(prevSlides, nextSlides, index) {
+      const prev = Array.isArray(prevSlides) ? prevSlides : [];
+      const next = Array.isArray(nextSlides) ? nextSlides : [];
+      const current = Math.max(0, Math.round(Number(index) || 0));
+      return {
+        changed: JSON.stringify(prev) !== JSON.stringify(next),
+        rebuild:
+          prev.length !== next.length ||
+          (next.length > 0 && !next[current]) ||
+          playbackKey(prev[current]) !== playbackKey(next[current]),
+      };
     }
 
     /**
@@ -2100,6 +2121,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const rootRef = useRef(null);
       const mainRef = useRef(null);
       const aliveRef = useRef(true);
+      const lastRefreshRef = useRef(0);
       const audioRef = useRef(null);
       const preloadRef = useRef(null);
       const skipTimerRef = useRef(null);
@@ -2280,34 +2302,54 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         };
       }, [series, seriesId, lectureN, slidesByLecture]);
 
-      /* 外部改了数据（注入降级态 / 手工编辑）后，回到窗口时丢掉当前讲缓存并刷新系列，
-         否则播放器会一直用旧 slides，看起来“降级没生效”。 */
+      /**
+       * 音频即将被重建时，用媒体元素的真实 currentTime 记位置。
+       * positionRef 只在 timeupdate 时更新（约 250ms 一次），拿它当恢复点会回退重播。
+       */
+      const rememberPlaybackPosition = useCallback(() => {
+        const audio = audioRef.current;
+        const meta = audioMetaRef.current;
+        if (!audio || !meta) return;
+        const ms = Math.round(Number(audio.currentTime) * 1000);
+        if (!Number.isFinite(ms) || ms <= 0) return;
+        resumeRef.current = {
+          lecture: meta.lecture,
+          slide: meta.slide,
+          offsetMs: ms,
+          audioKey: meta.audioKey,
+          used: false,
+        };
+      }, []);
+
+      /**
+       * 外部改了数据（注入降级态 / 手工编辑）后，回到窗口时刷新当前讲与系列。
+       * 先拉后换：不预先清空当前讲缓存——清空会让建源 effect 把正在播的音频
+       * 销毁重建，切回窗口时就是「断一下 + 回退重播几个字」。
+       * 只有真正影响播放（页数 / 当前页音频签名）时才重建，并用 currentTime 续上。
+       */
       useEffect(() => {
         if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
         const refresh = () => {
           if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-          // 丢掉当前讲缓存会重建音频；先把页内位置挂到 resume，刷新后回到原秒。
-          const audio = audioRef.current;
-          const meta = audioMetaRef.current;
-          if (audio && meta && positionRef.current > 0) {
-            resumeRef.current = {
-              lecture: meta.lecture,
-              slide: meta.slide,
-              offsetMs: positionRef.current,
-              audioKey: meta.audioKey,
-              used: false,
-            };
-            pendingRestoreRef.current = true;
-          }
-          setSlidesByLecture((prev) => {
-            if (!prev[lectureN]) return prev;
-            const next = Object.assign({}, prev);
-            delete next[lectureN];
-            return next;
-          });
+          // focus 与 visibilitychange 常结伴触发（最小化恢复）：去抖后只刷一次
+          const now = Date.now();
+          if (now - lastRefreshRef.current < REFRESH_DEBOUNCE_MS) return;
+          lastRefreshRef.current = now;
+          const lecture = lectureRef.current;
+          api('/lecture?seriesId=' + encodeURIComponent(seriesId) + '&n=' + lecture)
+            .then((out) => {
+              if (!aliveRef.current || Number(lectureRef.current) !== Number(lecture)) return;
+              const list = (out.slides && out.slides.slides) || [];
+              const plan = refreshDecision(slidesRef.current, list, indexRef.current);
+              if (!plan.changed) return;
+              if (plan.rebuild) rememberPlaybackPosition();
+              setSlidesByLecture((prev) => Object.assign({}, prev, { [lecture]: list }));
+              if (list.length && indexRef.current >= list.length) setIndex(list.length - 1);
+            })
+            .catch(() => {});
           api('/series?seriesId=' + encodeURIComponent(seriesId))
             .then((out) => {
-              if (out && out.series) setSeries(out.series);
+              if (aliveRef.current && out && out.series) setSeries(out.series);
             })
             .catch(() => {});
         };
@@ -2318,7 +2360,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           window.removeEventListener('focus', refresh);
           if (hasDocEvents) document.removeEventListener('visibilitychange', refresh);
         };
-      }, [seriesId, lectureN]);
+      }, [seriesId, lectureN, rememberPlaybackPosition]);
 
       /* 换讲/首次加载后决定起始页（同一讲内更新图片不重置页码） */
       const startLectureRef = useRef(0);
@@ -8802,6 +8844,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         playerKeyAction,
         slideAudioMode,
         playbackKey,
+        refreshDecision,
         slideWithImageOverride,
         nextLectureAfter,
         formatSeriesProgress,
