@@ -1,8 +1,10 @@
 /**
- * 2.0 M4 设置与偏好对等（FR-21.5 / FR-21.7 / AC-118 / AC-122 / AC-127）。
+ * 2.0 M4 设置与偏好对等（FR-21.5 / FR-21.7 / AC-118 / AC-122 / AC-127）
+ * + 2.5 设置页顶栏标签（AC-172 ~ AC-174）。
  *
  * 覆盖：设置首屏、存储/回收站、升级备份列出与删除、诊断字段与错误环、
- * 偏好夹紧与持久化、系列进度（含「上次位置」）、作业文案与设置面板渲染。
+ * 偏好夹紧与持久化、系列进度（含「上次位置」）、作业文案与设置面板渲染、
+ * 标签栏渲染/会话记忆/键盘导航/减少动效降级。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +18,9 @@ const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'book-slides-v2-settings-'));
 process.env.DSH_BOOK_SLIDES_ROOT = ROOT;
 process.env.DSH_BOOK_SLIDES_NO_OPEN = '1';
 delete process.env.DSH_HOME;
+
+/** 客户端源码：2.5 标签栏的 CSS/键盘/会话记忆按源码契约断言。 */
+const source = fs.readFileSync(new URL('../client/index.js', import.meta.url), 'utf8');
 
 const require = createRequire(import.meta.url);
 const React = require('react');
@@ -144,7 +149,7 @@ test('AC-118：设置首屏给出数据根、占用、回收站、备份与只�
   assert.ok(out.bytes > 0);
   assert.equal(out.trashCount, 0);
   assert.deepEqual(out.backups, []);
-  assert.equal(out.productVersion, '2.4');
+  assert.equal(out.productVersion, '2.5');
   assert.equal(out.schema, 2);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
@@ -162,7 +167,7 @@ test('AC-118：诊断显示插件版本/产品版本/schema/DSH/pdfjs 与最近�
   assert.equal(out.ok, true);
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(out.version, pkg.version);
-  assert.equal(out.productVersion, '2.4');
+  assert.equal(out.productVersion, '2.5');
   assert.equal(out.schema, 2);
   assert.equal(typeof out.dshVersion, 'string');
   assert.ok(out.dshVersion.length > 0);
@@ -365,11 +370,82 @@ test('AC-122：作业进度文案为「第 k/N 讲 · 第 p/P 页」', () => {
   );
 });
 
-test('AC-118：设置面板渲染语音/模型/存储/诊断四组', () => {
+test('AC-118：设置面板渲染语音/模型/配图/用量/存储/诊断六组', () => {
   const html = renderToString(React.createElement(clientModule.__components.Settings, { onBack: () => {}, notify: () => {} }));
-  for (const text of ['语音', '模型（只读）', '配图', '存储与回收站', '诊断', '升级备份', '清空回收站']) {
+  for (const text of ['语音', '模型（只读）', '配图', '用量与费用', '存储与回收站', '诊断', '升级备份', '清空回收站']) {
     assert.ok(html.includes(text), '设置页应包含「' + text + '」');
   }
+});
+
+test('AC-172：设置页顶栏渲染六个标签，默认语音且只显示活动栏目', () => {
+  const html = renderToString(React.createElement(clientModule.__components.Settings, { onBack: () => {}, notify: () => {} }));
+  const labels = [...html.matchAll(/<button[^>]*role="tab"[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+  assert.deepEqual(labels, ['语音', '模型（只读）', '配图', '用量与费用', '存储与回收站', '诊断']);
+  assert.equal((html.match(/role="tab"/g) || []).length, 6);
+  assert.equal((html.match(/aria-selected="true"/g) || []).length, 1);
+  assert.match(html, /id="blm-tab-voice"[^>]*aria-selected="true"/);
+  for (const id of ['voice', 'model', 'image', 'usage', 'storage', 'diagnostics']) {
+    assert.ok(html.includes('id="blm-panel-' + id + '"'), '应有面板 blm-panel-' + id);
+    assert.ok(html.includes('aria-controls="blm-panel-' + id + '"'), '标签应控制面板 ' + id);
+    assert.ok(html.includes('aria-labelledby="blm-tab-' + id + '"'), '面板应关联标签 ' + id);
+  }
+  const panels = [...html.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((match) => match[0]);
+  assert.equal(panels.length, 6);
+  panels.forEach((tag, index) => {
+    assert.equal(/\shidden(=""|>|\s)/.test(tag), index !== 0, '面板 ' + index + ' 的 hidden 状态不对');
+  });
+});
+
+test('AC-173：标签栏有共享下划线指示条、会话记忆与减少动效降级（源码契约）', () => {
+  assert.match(source, /SETTINGS_TAB_KEY = 'blm-settings-tab'/);
+  assert.match(source, /saveSettingsTab\(activeTab\)/);
+  assert.match(source, /\.blm-tab-ink\{[^}]*transition:[^}]*transform 200ms/);
+  assert.match(
+    source,
+    /@media \(prefers-reduced-motion:reduce\)\{[\s\S]*?\.blm-tab,\.blm-tab-ink\{transition:none\}/,
+  );
+  // 离开语音标签时停止试听：不在后台继续出声。
+  assert.match(source, /if \(activeTab === 'voice'\) return;\s*\n\s*if \(probe\.phase === 'playing'\) stopProbe\(\);/);
+});
+
+test('AC-172：栏目会话记忆只认白名单，非法值回语音（sessionStorage）', () => {
+  const helpers = clientModule.__helpers;
+  const store = new Map();
+  globalThis.sessionStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+  };
+  try {
+    assert.equal(helpers.readSettingsTab(), 'voice');
+    helpers.saveSettingsTab('image');
+    assert.equal(store.get('blm-settings-tab'), 'image');
+    assert.equal(helpers.readSettingsTab(), 'image');
+    store.set('blm-settings-tab', 'nope');
+    assert.equal(helpers.readSettingsTab(), 'voice');
+  } finally {
+    delete globalThis.sessionStorage;
+  }
+});
+
+test('AC-174：标签键盘导航左右循环、Home/End 首尾', () => {
+  const helpers = clientModule.__helpers;
+  assert.equal(helpers.settingsTabIndexForKey(0, 'ArrowRight'), 1);
+  assert.equal(helpers.settingsTabIndexForKey(5, 'ArrowRight'), 0);
+  assert.equal(helpers.settingsTabIndexForKey(0, 'ArrowLeft'), 5);
+  assert.equal(helpers.settingsTabIndexForKey(4, 'ArrowLeft'), 3);
+  assert.equal(helpers.settingsTabIndexForKey(3, 'Home'), 0);
+  assert.equal(helpers.settingsTabIndexForKey(1, 'End'), 5);
+  assert.equal(helpers.settingsTabIndexForKey(2, 'Enter'), -1);
+});
+
+test('AC-174：标签栏键盘导航与单行横向滚动契约', () => {
+  assert.match(source, /role: 'tablist'/);
+  assert.match(source, /ArrowRight/);
+  assert.match(source, /ArrowLeft/);
+  assert.match(source, /'Home'/);
+  assert.match(source, /'End'/);
+  assert.match(source, /\.blm-tabs\{[^}]*overflow-x:auto/);
+  assert.match(source, /\.blm-tabs-wrap\{[^}]*position:sticky/);
 });
 
 /* ------------------------------ 加载 2.0 客户端 ------------------------------ */

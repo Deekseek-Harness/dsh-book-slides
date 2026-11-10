@@ -32,7 +32,7 @@ export const META_FILE = () => path.join(ROOT, 'meta.json');
  * 产品版本（2.x 线）：功能增量发布时改这一处，`GET /meta` 与设置诊断都读它。
  * 与插件包版本（package.json.version）分开：包版本按 SemVer 走，产品版本只到 `2.x`。
  */
-export const PRODUCT_VERSION = '2.4';
+export const PRODUCT_VERSION = '2.5';
 
 export function packageVersion() {
   try {

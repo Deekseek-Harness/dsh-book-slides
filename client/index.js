@@ -243,9 +243,22 @@ body[data-ds-dark-theme] .blm-player-alert{color:#ffd27a}
 }
 
 /* ---------- M4 设置 ---------- */
+/* 2.5：设置页顶栏标签（吸顶、单行横向滚动、共享下划线指示条） */
+.blm-tabs-wrap{position:sticky;top:0;z-index:3;background:var(--blm-bg);padding-top:2px;border-bottom:1px solid var(--blm-line);margin-bottom:12px}
+.blm-tabs{position:relative;display:flex;align-items:center;gap:2px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;padding:0 2px}
+.blm-tabs::-webkit-scrollbar{display:none}
+.blm-tab{appearance:none;border:0;background:transparent;color:var(--blm-dim);font:inherit;font-size:12px;line-height:1.4;padding:7px 10px 8px;border-radius:8px 8px 0 0;cursor:pointer;white-space:nowrap;transition:color 120ms ease,background-color 120ms ease}
+.blm-tab:hover{background:color-mix(in oklab,var(--blm-accent) 8%,transparent);color:var(--blm-text)}
+.blm-tab[aria-selected="true"]{color:var(--blm-text)}
+.blm-tab:focus-visible{outline:2px solid color-mix(in oklab,var(--blm-accent) 55%,transparent);outline-offset:-2px}
+.blm-tab-ink{position:absolute;left:0;bottom:0;height:2px;border-radius:1px;background:var(--blm-accent);pointer-events:none;transition:transform 200ms cubic-bezier(.2,.7,.2,1),width 200ms cubic-bezier(.2,.7,.2,1)}
 .blm-settings{display:flex;flex-direction:column;gap:14px}
+.blm-settings>[hidden]{display:none}
 .blm-group{border:1px solid var(--blm-line);border-radius:10px;background:var(--blm-card);padding:10px 12px}
 .blm-group h3{margin:0 0 8px;font-size:12px;font-weight:650;letter-spacing:.04em;color:var(--blm-dim)}
+@media (prefers-reduced-motion:reduce){
+  .blm-tab,.blm-tab-ink{transition:none}
+}
 .blm-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0;font-size:12px}
 .blm-field > .label{flex:0 0 68px;color:var(--blm-dim)}
 .blm-field > .label[title]{cursor:help}
@@ -6698,6 +6711,46 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       );
     }
 
+    /** 2.5 设置页栏目（顺序即标签顺序；id 同时用于 tab/tabpanel 的 DOM id 与持久化）。 */
+    const SETTINGS_TABS = [
+      { id: 'voice', label: '语音' },
+      { id: 'model', label: '模型（只读）' },
+      { id: 'image', label: '配图' },
+      { id: 'usage', label: '用量与费用' },
+      { id: 'storage', label: '存储与回收站' },
+      { id: 'diagnostics', label: '诊断' },
+    ];
+    const SETTINGS_TAB_KEY = 'blm-settings-tab';
+
+    /** 只认白名单里的栏目；sessionStorage 不可用（隐私模式/SSR）时回「语音」。 */
+    function readSettingsTab() {
+      try {
+        if (typeof sessionStorage === 'undefined') return 'voice';
+        const value = sessionStorage.getItem(SETTINGS_TAB_KEY);
+        return SETTINGS_TABS.some((tab) => tab.id === value) ? value : 'voice';
+      } catch {
+        return 'voice';
+      }
+    }
+
+    function saveSettingsTab(id) {
+      try {
+        if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(SETTINGS_TAB_KEY, String(id || ''));
+      } catch {
+        /* 隐私模式下 sessionStorage 会抛，忽略 */
+      }
+    }
+
+    /** 标签键盘导航：←/→ 循环，Home/End 首尾；不认识的键返回 -1（不拦截）。 */
+    function settingsTabIndexForKey(index, key) {
+      const count = SETTINGS_TABS.length;
+      if (key === 'ArrowRight') return (index + 1) % count;
+      if (key === 'ArrowLeft') return (index - 1 + count) % count;
+      if (key === 'Home') return 0;
+      if (key === 'End') return count - 1;
+      return -1;
+    }
+
     function Settings({ onBack, notify, initial, onOpenUsage }) {
       const seed = initial && typeof initial === 'object' ? initial : {};
       const [settings, setSettings] = useState(seed.settings || null);
@@ -6757,6 +6810,87 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const [localProviders, setLocalProviders] = useState('');
       const [usageMsg, setUsageMsg] = useState('');
       const [usageBusy, setUsageBusy] = useState(false);
+
+      /* ---------- 2.5 顶栏标签：状态、指示条与键盘 ---------- */
+      const [activeTab, setActiveTab] = useState(readSettingsTab);
+      const [ink, setInk] = useState(null);
+      const activeTabRef = useRef(activeTab);
+      const rootRef = useRef(null);
+      const tabsWrapRef = useRef(null);
+      const tabsRef = useRef(null);
+      const contentRef = useRef(null);
+      const tabScrollPendingRef = useRef(false);
+
+      /** 共享指示条：按活动按钮的 offsetLeft/offsetWidth 定位；resize、字体就绪后重测。 */
+      const measureSettingsInk = useCallback(() => {
+        const bar = tabsRef.current;
+        if (!bar) return;
+        const active = bar.querySelector('.blm-tab[aria-selected="true"]');
+        if (!active) return;
+        const left = active.offsetLeft;
+        const width = active.offsetWidth;
+        setInk((prev) => (prev && prev.left === left && prev.width === width ? prev : { left, width }));
+        // 活动标签被挤出可视区（窄屏 / 窗口缩小）时滚回来。
+        if (left < bar.scrollLeft) bar.scrollLeft = left;
+        else if (left + width > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = left + width - bar.clientWidth;
+      }, []);
+
+      useEffect(() => {
+        activeTabRef.current = activeTab;
+        saveSettingsTab(activeTab);
+        measureSettingsInk();
+      }, [activeTab, measureSettingsInk]);
+
+      useEffect(() => {
+        const bar = tabsRef.current;
+        if (!bar) return undefined;
+        const remeasure = () => measureSettingsInk();
+        let observer = null;
+        if (typeof ResizeObserver !== 'undefined') {
+          observer = new ResizeObserver(remeasure);
+          observer.observe(bar);
+        }
+        window.addEventListener('resize', remeasure);
+        if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+          document.fonts.ready.then(remeasure).catch(() => {});
+        }
+        return () => {
+          if (observer) observer.disconnect();
+          window.removeEventListener('resize', remeasure);
+        };
+      }, [measureSettingsInk]);
+
+      const selectSettingsTab = (id) => {
+        if (id === activeTab || !SETTINGS_TABS.some((tab) => tab.id === id)) return;
+        tabScrollPendingRef.current = true;
+        setActiveTab(id);
+      };
+
+      const onSettingsTabKeyDown = (event, index) => {
+        const next = settingsTabIndexForKey(index, event.key);
+        if (next < 0) return;
+        event.preventDefault();
+        const target = SETTINGS_TABS[next];
+        selectSettingsTab(target.id);
+        const bar = tabsRef.current;
+        const button = bar && bar.querySelector('[data-settings-tab="' + target.id + '"]');
+        if (button && typeof button.focus === 'function') button.focus();
+      };
+
+      // 切栏目后把面板顶部滚到标签栏下沿；已经可见就不动，避免标题行无故滚走。
+      useEffect(() => {
+        if (!tabScrollPendingRef.current) return;
+        tabScrollPendingRef.current = false;
+        const root = rootRef.current;
+        const wrap = tabsWrapRef.current;
+        const content = contentRef.current;
+        if (!root || !wrap || !content) return;
+        const top = root.getBoundingClientRect().top;
+        const barHeight = wrap.offsetHeight || 0;
+        const contentTop = content.getBoundingClientRect().top;
+        if (contentTop >= top + barHeight - 1) return;
+        root.scrollTop += contentTop - (top + barHeight);
+      }, [activeTab]);
 
       const loadUsage = useCallback(async () => {
         const [monthOut, totalOut, priceOut] = await Promise.all([
@@ -7565,6 +7699,23 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         }
       };
 
+      /** 试听生成完成时若已离开「语音」标签：只置为可播放，不在后台出声。 */
+      const playProbeIfVoice = (cache) => {
+        if (activeTabRef.current === 'voice') {
+          startProbePlayback(cache);
+          return;
+        }
+        setProbe((prev) =>
+          Object.assign({}, prev, {
+            phase: 'ready',
+            elapsedMs: 0,
+            blocked: false,
+            tone: '',
+            note: '试听已生成：回到「语音」标签后点「播放试听」。',
+          }),
+        );
+      };
+
       /** 播放中再点「试听」= 停止，不重新生成。 */
       const stopProbe = () => {
         if (probe.phase !== 'playing') return;
@@ -7581,6 +7732,12 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           }),
         );
       };
+
+      // 离开「语音」标签：停止正在播放的试听（缓存保留，切回可直接重播）。
+      useEffect(() => {
+        if (activeTab === 'voice') return;
+        if (probe.phase === 'playing') stopProbe();
+      }, [activeTab, probe.phase]);
 
       /**
        * 试听：先把按钮置为「生成中」再 await；同配置再点走缓存「重听」，不重复跑 ComfyUI。
@@ -7642,7 +7799,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               genMs,
             };
             probeCacheRef.current = cache;
-            startProbePlayback(cache);
+            playProbeIfVoice(cache);
             return;
           }
           const raw = await res.text();
@@ -7677,7 +7834,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               voice: result.voice,
             };
             probeCacheRef.current = cache;
-            startProbePlayback(cache);
+            playProbeIfVoice(cache);
             return;
           }
           setProbe(
@@ -7755,7 +7912,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
       return h(
         'div',
-        { className: 'blm-body' },
+        { className: 'blm-body', ref: rootRef },
         h(
           'div',
           { className: 'blm-row', style: { marginBottom: 10 } },
@@ -7767,11 +7924,50 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         error ? h('div', { className: 'blm-error' }, String(error.message || error)) : null,
         h(
           'div',
-          { className: 'blm-settings' },
+          { className: 'blm-tabs-wrap', ref: tabsWrapRef },
+          h(
+            'div',
+            { className: 'blm-tabs', role: 'tablist', 'aria-label': '设置栏目', 'aria-orientation': 'horizontal', ref: tabsRef },
+            SETTINGS_TABS.map((tab, index) =>
+              h(
+                'button',
+                {
+                  key: tab.id,
+                  type: 'button',
+                  id: 'blm-tab-' + tab.id,
+                  className: 'blm-tab',
+                  role: 'tab',
+                  'data-settings-tab': tab.id,
+                  'aria-selected': activeTab === tab.id ? 'true' : 'false',
+                  'aria-controls': 'blm-panel-' + tab.id,
+                  tabIndex: activeTab === tab.id ? 0 : -1,
+                  onClick: () => selectSettingsTab(tab.id),
+                  onKeyDown: (event) => onSettingsTabKeyDown(event, index),
+                },
+                tab.label,
+              ),
+            ),
+            ink
+              ? h('span', {
+                  className: 'blm-tab-ink',
+                  'aria-hidden': 'true',
+                  style: { width: ink.width + 'px', transform: 'translateX(' + ink.left + 'px)' },
+                })
+              : null,
+          ),
+        ),
+        h(
+          'div',
+          { className: 'blm-settings', ref: contentRef },
           h(
             'section',
-            { className: 'blm-group' },
-            h('h3', null, '语音'),
+            {
+              className: 'blm-group',
+              id: 'blm-panel-voice',
+              role: 'tabpanel',
+              'aria-labelledby': 'blm-tab-voice',
+              hidden: activeTab !== 'voice',
+            },
             h(
               'div',
               { className: 'blm-field' },
@@ -8182,8 +8378,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           ),
           h(
             'section',
-            { className: 'blm-group' },
-            h('h3', null, '模型（只读）'),
+            {
+              className: 'blm-group',
+              id: 'blm-panel-model',
+              role: 'tabpanel',
+              'aria-labelledby': 'blm-tab-model',
+              hidden: activeTab !== 'model',
+            },
             h(
               'div',
               { className: 'blm-field' },
@@ -8194,8 +8395,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           ),
           h(
             'section',
-            { className: 'blm-group' },
-            h('h3', null, '配图'),
+            {
+              className: 'blm-group',
+              id: 'blm-panel-image',
+              role: 'tabpanel',
+              'aria-labelledby': 'blm-tab-image',
+              hidden: activeTab !== 'image',
+            },
             imageForm
               ? h(
                   React.Fragment,
@@ -8326,8 +8532,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           ),
           h(
             'section',
-            { className: 'blm-group' },
-            h('h3', null, '用量与费用'),
+            {
+              className: 'blm-group',
+              id: 'blm-panel-usage',
+              role: 'tabpanel',
+              'aria-labelledby': 'blm-tab-usage',
+              hidden: activeTab !== 'usage',
+            },
             h(
               'div',
               { className: 'blm-dim', style: { fontSize: 11 } },
@@ -8413,8 +8624,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           ),
           h(
             'section',
-            { className: 'blm-group' },
-            h('h3', null, '存储与回收站'),
+            {
+              className: 'blm-group',
+              id: 'blm-panel-storage',
+              role: 'tabpanel',
+              'aria-labelledby': 'blm-tab-storage',
+              hidden: activeTab !== 'storage',
+            },
             settings
               ? h(
                   'dl',
@@ -8459,8 +8675,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           ),
           h(
             'section',
-            { className: 'blm-group' },
-            h('h3', null, '诊断'),
+            {
+              className: 'blm-group',
+              id: 'blm-panel-diagnostics',
+              role: 'tabpanel',
+              'aria-labelledby': 'blm-tab-diagnostics',
+              hidden: activeTab !== 'diagnostics',
+            },
             diagnostics
               ? h(
                   'dl',
@@ -9027,6 +9248,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         savePackagePolicy,
         readSavedView,
         saveView,
+        settingsTabIndexForKey,
+        readSettingsTab,
+        saveSettingsTab,
       },
     };
   },
