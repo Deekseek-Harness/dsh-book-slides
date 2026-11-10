@@ -3,6 +3,26 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.3.0] - 2026-11-10
+
+**播放页字幕**。功能增量，数据 schema 仍为 `2`；无数据/接口迁移。
+
+### 版本与环境
+
+- 包 `2.3.0`（tag `v2.3.0`）、产品 `2.3`、数据 schema `2`、文档 v1.25。
+- 可覆盖安装 2.2.1；已有书/系列/音频/配图/练习与 `usage/` 账本继续可用；`slides.json` 不新增字段。
+
+### 新增
+
+- **播放页字幕（FR-18.1 / AC-167、AC-168）**：播放器右列幻灯片舞台卡下方只读展示当前页 `audio_script` 原文；随翻页/换讲切换，与播放/暂停/语速/静音无关；封面/引文页同样显示。
+- 数据源只认 `audio_script`：不截断、不加前缀、不取封面 `subtitle`；空稿/缺失不渲染；长英文/命令行长串强制换行。
+- 字幕不设焦点、不绑快捷键，不改变空格/←→/F/Esc、配图面板 `Esc` 优先级与现有布局；随右列滚动，不常驻（矮窗口需滚动，已知取舍）。
+
+### 测试
+
+- `test/parity-player.test.mjs`：新增 `subtitleText` 纯函数、`SubtitlePane` SSR（逐字/空稿/不取 `subtitle`）、长文本不截断与源码 CSS 契约。
+- `npm run test:v2` 43 文件 / 382 项全绿；`npm run verify:plugin` PASS。
+
 ## [2.2.1] - 2026-11-10
 
 **体验修复**。无功能、数据 schema、HTTP 契约变更，可直接覆盖 2.2.0；无需数据迁移。

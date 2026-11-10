@@ -470,6 +470,43 @@ test('FR-18：三种版式渲染米色舞台（cover / content_text / quote）',
   assert.ok(quote.includes('第 6 章'));
 });
 
+test('FR-18.1：字幕只取 audio_script，页级静态、空稿不渲染', () => {
+  const script = '在 C/C++ 里，用 malloc 或 new 拿到一块内存后，什么时候释放、由谁释放，都得程序员自己惦记。';
+  assert.equal(helpers.subtitleText({ audio_script: script, subtitle: '函数（中）' }), script);
+  assert.equal(helpers.subtitleText({ subtitle: '只有副标题' }), '');
+  assert.equal(helpers.subtitleText({ audio_script: '' }), '');
+  assert.equal(helpers.subtitleText(null), '');
+
+  const html = renderToString(React.createElement(components.SubtitlePane, { text: script }));
+  assert.ok(html.includes('class="blm-subtitle"'));
+  assert.ok(html.includes('role="region"'));
+  assert.ok(html.includes('aria-label="字幕"'));
+  assert.ok(html.includes(script), '字幕应逐字显示，不截断');
+
+  assert.equal(renderToString(React.createElement(components.SubtitlePane, { text: '' })), '');
+  assert.equal(renderToString(React.createElement(components.SubtitlePane, { text: '   ' })), '');
+  assert.equal(renderToString(React.createElement(components.SubtitlePane, {})), '');
+});
+
+test('FR-18.1：长文本与命令行完整渲染，不靠省略号截断', () => {
+  const script =
+    '实际怎么验证？先跑 go build -gcflags "-m -l" main.go，看到 escapes to heap 就说明变量去了堆。' +
+    '再进一步，用 go tool compile -S 看反汇编，找 newobject 这类堆分配痕迹。';
+  const html = renderToString(React.createElement(components.SubtitlePane, { text: script }));
+  assert.ok(html.includes('go build -gcflags'));
+  assert.ok(html.includes('main.go'));
+  assert.ok(html.includes('newobject'));
+  assert.ok(!html.includes('…'), '不得用省略号截断');
+  assert.ok(source.includes('overflow-wrap:anywhere'), '长英文/命令行必须强制换行');
+  assert.ok(source.includes('white-space:pre-wrap'));
+});
+
+test('FR-18.1：右列在舞台卡下方挂载字幕，不改舞台自身结构', () => {
+  assert.ok(source.includes("className: 'blm-stage-stack'"));
+  assert.ok(source.includes('h(SubtitlePane, { text: subtitleText(slide) })'));
+  assert.ok(source.includes('.blm-subtitle{'), '字幕样式需存在');
+});
+
 test('播放器首屏是「正在打开系列」，不抛异常', () => {
   const html = renderToString(
     React.createElement(components.Player, {

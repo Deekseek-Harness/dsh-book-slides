@@ -243,7 +243,7 @@ function handleMeta(req, res) {
   sendJson(res, 200, {
     ok: true,
     version: packageVersion(),
-    product_version: '2.2',
+    product_version: '2.3',
     schema: 2,
     legacy: false,
     notice: meta.upgraded_from ? '旧数据已备份到 ' + (meta.upgraded_to || meta.upgraded_from) : '',

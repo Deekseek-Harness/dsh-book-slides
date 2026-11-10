@@ -167,6 +167,8 @@ body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-pdf-hl{position:absolute;background:rgba(255,205,0,.38);border-radius:2px;box-shadow:0 0 0 1px rgba(214,160,0,.35) inset}
 .blm-pdf-page-no{position:absolute;right:6px;bottom:4px;font-size:10px;color:rgba(0,0,0,.45);line-height:1.4}
 .blm-stage-wrap{width:100%;max-width:520px}
+.blm-stage-stack{width:100%;max-width:520px}
+.blm-subtitle{margin-top:10px;padding-top:8px;border-top:1px solid var(--blm-line);font-size:14px;line-height:1.7;color:var(--blm-text);white-space:pre-wrap;overflow-wrap:anywhere;text-align:left}
 .blm-stage{position:relative;aspect-ratio:16/10;border-radius:8px;padding:26px 28px;display:flex;flex-direction:column;overflow:hidden;background:#f5f0e4;color:#2b2418;box-shadow:0 10px 26px rgba(0,0,0,.18);font-family:"Songti SC","SimSun",serif}
 .blm-stage-title{font-size:22px;font-weight:650;line-height:1.35;margin-bottom:12px}
 .blm-stage-kicker{font-size:11px;letter-spacing:.24em;color:#8a7b5a;margin-bottom:14px}
@@ -1983,6 +1985,21 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       );
     }
 
+    /** 字幕正文只取 audio_script；subtitle 是封面副标题，不能混用（FR-18.1）。 */
+    function subtitleText(slide) {
+      return String((slide && slide.audio_script) || '');
+    }
+
+    /**
+     * 播放页字幕：当前页 audio_script 的只读原文，贴在舞台卡下方。
+     * 页级静态，不跟音频进度；空稿不渲染（FR-18.1 / AC-167、AC-168）。
+     */
+    function SubtitlePane({ text }) {
+      const value = String(text || '');
+      if (!value.trim()) return null;
+      return h('div', { className: 'blm-subtitle', role: 'region', 'aria-label': '字幕' }, value);
+    }
+
     /** 底部逐页缩略图：16:9 迷你版式（AC-142），不是纯文字页码条。 */
     function SlideThumb({ slide, index, active, onClick }) {
       const layout = String((slide && slide.layout) || 'content_text');
@@ -3491,16 +3508,25 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               }
             },
           }),
-          h('div', { className: 'blm-pane-stage' }, h(SlideStage, {
-            key: lectureN + '-' + (slide ? slide.slide_index : 0),
-            slide,
-            seriesId,
-            lecture: lectureN,
-            onRegenImage: regenImage,
-            onCancelImage: cancelRegenImage,
-            imageBusy: Boolean(imageKey) && imageBusyKey === imageKey,
-            imageLocked: Boolean(imageBusyKey) && imageBusyKey !== imageKey,
-          })),
+          h(
+            'div',
+            { className: 'blm-pane-stage' },
+            h(
+              'div',
+              { className: 'blm-stage-stack' },
+              h(SlideStage, {
+                key: lectureN + '-' + (slide ? slide.slide_index : 0),
+                slide,
+                seriesId,
+                lecture: lectureN,
+                onRegenImage: regenImage,
+                onCancelImage: cancelRegenImage,
+                imageBusy: Boolean(imageKey) && imageBusyKey === imageKey,
+                imageLocked: Boolean(imageBusyKey) && imageBusyKey !== imageKey,
+              }),
+              h(SubtitlePane, { text: subtitleText(slide) }),
+            ),
+          ),
         ),
         transition
           ? h(TransitionCard, {
@@ -8337,7 +8363,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                   h('dt', null, '插件包版本'),
                   h('dd', null, diagnostics.version || '—'),
                   h('dt', null, '产品版本'),
-                  h('dd', null, diagnostics.productVersion || '2.2'),
+                  h('dd', null, diagnostics.productVersion || '2.3'),
                   h('dt', null, 'schema'),
                   h('dd', null, String(diagnostics.schema || 2)),
                   h('dt', null, 'DSH 版本'),
@@ -8822,6 +8848,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         Player,
         SourcePane,
         SlideStage,
+        SubtitlePane,
         StageFigure,
         SlideThumb,
         ConfirmHost,
@@ -8846,6 +8873,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         playbackKey,
         refreshDecision,
         slideWithImageOverride,
+        subtitleText,
         nextLectureAfter,
         formatSeriesProgress,
         formatJobLine,
