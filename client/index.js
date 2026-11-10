@@ -138,6 +138,29 @@ body[data-ds-dark-theme] .blm-single-root{color:#ffd27a}
 .blm-error{background:color-mix(in oklab,#c62828 10%,transparent);border:1px solid color-mix(in oklab,#c62828 30%,transparent);color:#c62828;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:12px}
 body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-note{background:color-mix(in oklab,currentColor 5%,transparent);border:1px solid var(--blm-line);color:var(--blm-dim);border-radius:8px;padding:8px 10px;margin-top:8px;font-size:12px}
+.blm-usage-list{display:flex;flex-direction:column;gap:6px}
+.blm-usage-item{border:1px solid var(--blm-line);border-radius:8px;background:var(--blm-card);color:var(--blm-text);overflow:hidden;transition:border-color .14s ease}
+.blm-usage-item:hover{border-color:color-mix(in oklab,var(--blm-accent) 32%,var(--blm-line))}
+.blm-usage-item.is-open{border-color:color-mix(in oklab,var(--blm-accent) 48%,var(--blm-line))}
+.blm-usage-summary{display:block;width:100%;box-sizing:border-box;text-align:left;padding:8px 10px;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;white-space:normal;overflow-wrap:anywhere}
+.blm-usage-summary:hover{background:var(--blm-btn-hover)}
+.blm-usage-summary:focus-visible{outline:2px solid var(--blm-accent);outline-offset:-2px}
+.blm-usage-item.is-open .blm-usage-summary{background:color-mix(in oklab,var(--blm-accent) 4%,transparent)}
+.blm-usage-caret{display:inline-block;color:var(--blm-dim);font-size:10px;line-height:1;transform:rotate(0);transition:transform .14s ease}
+.blm-usage-item.is-open .blm-usage-caret{transform:rotate(90deg)}
+.blm-usage-detail{padding:8px 10px 10px 12px;border-top:1px solid color-mix(in oklab,var(--blm-accent) 30%,var(--blm-line));border-left:3px solid color-mix(in oklab,var(--blm-accent) 55%,transparent);background:color-mix(in oklab,var(--blm-accent) 7%,var(--blm-card));color:var(--blm-text);font-size:11px;overflow-wrap:anywhere}
+body[data-ds-dark-theme] .blm-usage-item.is-open .blm-usage-summary{background:color-mix(in oklab,var(--blm-accent) 7%,transparent)}
+body[data-ds-dark-theme] .blm-usage-detail{background:color-mix(in oklab,var(--blm-accent) 12%,var(--blm-card))}
+.blm-usage-detail[hidden]{display:none}
+.blm-usage-detail-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.blm-usage-detail-head strong{font-size:12px}
+.blm-usage-detail .blm-btn{padding:2px 8px;font-size:11px;line-height:1.5}
+.blm-usage-detail .blm-note{margin-top:6px}
+.blm-usage-loading{color:var(--blm-dim);padding:2px 0}
+.blm-usage-error{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#c62828}
+body[data-ds-dark-theme] .blm-usage-error{color:#ff8a80}
+.blm-usage-model{margin-top:2px;font-size:11px;overflow-wrap:anywhere}
+@media (prefers-reduced-motion:reduce){.blm-usage-caret{transition:none}}
 .blm-progress{height:4px;background:var(--blm-line);border-radius:99px;overflow:hidden;margin:10px 0}
 .blm-progress i{display:block;height:100%;background:var(--blm-accent);transition:width .2s}
 .blm-select{border:1px solid var(--blm-line);border-radius:6px;padding:5px 8px;font:inherit;background:var(--blm-card);color:var(--blm-text);color-scheme:inherit}
@@ -6534,45 +6557,249 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
     /* ------------------------------ FR-27 用量历史 ------------------------------ */
 
+    const USAGE_DETAIL_IDLE = { status: 'idle', jobId: '', job: null, error: '' };
+
+    /** 稳定的 DOM id；jobId 只含安全字符时原样使用。 */
+    function usageDetailSafeId(jobId) {
+      return String(jobId || '').replace(/[^A-Za-z0-9_-]/g, '_') || 'job';
+    }
+
+    /** 单开互斥：点当前条返回空（收起），点其它条返回新的 jobId（收旧开新）。 */
+    function usageToggleJobId(current, jobId) {
+      return current === jobId ? '' : jobId;
+    }
+
+    function UsageRow({ job, open, detail, onToggle, onRetry, onCollapse, itemRef }) {
+      const summaryRef = useRef(null);
+      const summaryId = 'blm-usage-summary-' + usageDetailSafeId(job.jobId);
+      const detailId = 'blm-usage-detail-' + usageDetailSafeId(job.jobId);
+
+      const collapse = () => {
+        onCollapse();
+        if (summaryRef.current && typeof summaryRef.current.focus === 'function') summaryRef.current.focus();
+      };
+
+      const onKeyDown = (event) => {
+        if (!open || !event || event.key !== 'Escape') return;
+        if (typeof event.stopPropagation === 'function') event.stopPropagation();
+        collapse();
+      };
+
+      const head = (label) =>
+        h(
+          'div',
+          { className: 'blm-usage-detail-head' },
+          h('strong', null, '明细'),
+          h('span', { className: 'blm-dim' }, label),
+          h('div', { style: { flex: 1 } }),
+          h('button', { type: 'button', className: 'blm-btn', onClick: collapse }, '收起'),
+        );
+
+      let body = null;
+      if (open) {
+        const state = detail && detail.jobId === job.jobId ? detail : null;
+        if (!state || state.status === 'idle' || state.status === 'loading') {
+          body = h(
+            'div',
+            null,
+            head(usageKindLabel(job)),
+            h('div', { className: 'blm-usage-loading', role: 'status' }, '正在读取明细…'),
+          );
+        } else if (state.status === 'error') {
+          body = h(
+            'div',
+            null,
+            head(usageKindLabel(job)),
+            h(
+              'div',
+              { className: 'blm-usage-error', role: 'alert' },
+              h('span', null, '读取明细失败：' + (state.error || '未知错误')),
+              h('button', { type: 'button', className: 'blm-btn', onClick: onRetry }, '重试'),
+            ),
+          );
+        } else {
+          const current = state.job || {};
+          body = h(
+            'div',
+            null,
+            head(usageKindLabel(current)),
+            h(
+              'div',
+              { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
+              String(current.startedAt || '') + ' → ' + String(current.finishedAt || '') + ' · ' +
+                String(current.status || '') + ' · ' + String(current.billing || ''),
+            ),
+            h('div', { style: { fontSize: 12, marginTop: 4 } }, usageSummaryLine(current)),
+            h(
+              'div',
+              { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
+              '价格版本 ' + String(current.priceVersion || '—') +
+                (current.actual && current.actual.charsSource === 'text' ? ' · 字符按码点回落' : '') +
+                (current.actual && current.actual.charsSource === 'provider' ? ' · 字符口径：云端' : '') +
+                (current.actual && current.actual.unknownPrice ? ' · 部分缺价' : '') +
+                (current.actual && current.actual.unknownUsage ? ' · 缺模型用量' : ''),
+            ),
+            (current.billingModel || []).map((item) =>
+              h('div', { key: item.provider + '/' + item.model, className: 'blm-usage-model' },
+                item.provider + ' / ' + item.model + ' · ' + item.calls + ' 次 · ' +
+                formatTokens((item.tokens && item.tokens.input) || 0) + ' 输入 · ' +
+                (Number(item.tokens && item.tokens.cacheRead) ? formatTokens(item.tokens.cacheRead) + ' 缓存读 · ' : '') +
+                formatTokens((item.tokens && item.tokens.output) || 0) + ' 输出 · ' + formatMoney(item.cost)),
+            ),
+            Object.keys(current.byStage || {}).length
+              ? h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
+                  '分阶段：' + Object.keys(current.byStage).map((key) => key + ' ' + formatMoney(current.byStage[key].cost)).join(' · '))
+              : null,
+          );
+        }
+      }
+
+      return h(
+        'div',
+        { className: 'blm-usage-item' + (open ? ' is-open' : ''), ref: itemRef, onKeyDown },
+        h(
+          'button',
+          {
+            ref: summaryRef,
+            id: summaryId,
+            type: 'button',
+            className: 'blm-usage-summary',
+            'aria-expanded': open ? 'true' : 'false',
+            'aria-controls': detailId,
+            onClick: onToggle,
+            title: job.jobId,
+          },
+          h(
+            'div',
+            { className: 'blm-row' },
+            h('strong', null, usageKindLabel(job)),
+            h('span', { className: 'blm-dim', style: { fontSize: 11 } }, String(job.startedAt || '').replace('T', ' ').slice(0, 16)),
+            h('div', { style: { flex: 1 } }),
+            h('span', null, formatMoney(job.actual && job.actual.cost)),
+            h('span', { className: 'blm-usage-caret', 'aria-hidden': 'true' }, '▸'),
+          ),
+          h(
+            'div',
+            { className: 'blm-dim', style: { fontSize: 11, marginTop: 3 } },
+            [job.book && job.book.title, job.series && job.series.title].filter(Boolean).join(' · ') || '(未归属)',
+          ),
+          h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 2 } }, usageSummaryLine(job)),
+        ),
+        h(
+          'div',
+          {
+            id: detailId,
+            className: 'blm-usage-detail',
+            role: 'region',
+            'aria-labelledby': summaryId,
+            hidden: !open,
+          },
+          body,
+        ),
+      );
+    }
+
     function UsageView({ onBack, notify }) {
       const [summary, setSummary] = useState(null);
       const [total, setTotal] = useState(null);
       const [jobs, setJobs] = useState([]);
       const [kind, setKind] = useState('');
-      const [detail, setDetail] = useState(null);
+      const [openJobId, setOpenJobId] = useState('');
+      const [detailState, setDetailState] = useState(USAGE_DETAIL_IDLE);
       const [busy, setBusy] = useState(false);
+      const detailSeqRef = useRef(0);
+      const loadSeqRef = useRef(0);
+      const openJobIdRef = useRef('');
+      const openItemRef = useRef(null);
+      const headerRef = useRef(null);
+      const filterRef = useRef(null);
+
+      const closeDetail = useCallback(() => {
+        detailSeqRef.current += 1;
+        openJobIdRef.current = '';
+        setOpenJobId('');
+        setDetailState(USAGE_DETAIL_IDLE);
+      }, []);
+
+      const loadDetail = useCallback((jobId) => {
+        const seq = ++detailSeqRef.current;
+        openJobIdRef.current = jobId;
+        setOpenJobId(jobId);
+        setDetailState({ status: 'loading', jobId, job: null, error: '' });
+        api('/usage/job?jobId=' + encodeURIComponent(jobId))
+          .then((out) => {
+            if (seq !== detailSeqRef.current) return;
+            setDetailState({ status: 'ready', jobId, job: (out && out.job) || null, error: '' });
+          })
+          .catch((err) => {
+            if (seq !== detailSeqRef.current) return;
+            setDetailState({ status: 'error', jobId, job: null, error: (err && err.message) || '未知错误' });
+          });
+      }, []);
+
+      const toggleJob = useCallback((job) => {
+        const next = usageToggleJobId(openJobIdRef.current, job.jobId);
+        if (!next) {
+          closeDetail();
+          return;
+        }
+        loadDetail(next);
+      }, [closeDetail, loadDetail]);
 
       const load = useCallback(async () => {
+        const seq = ++loadSeqRef.current;
         setBusy(true);
         try {
           const query = kind ? '&kind=' + encodeURIComponent(kind) : '';
           const [monthOut, totalOut, jobsOut] = await Promise.all([
             api('/usage/summary?from=' + encodeURIComponent(monthStartIso()) + query).catch(() => null),
             api('/usage/summary' + (query ? '?' + query.slice(1) : '')).catch(() => null),
-            api('/usage/jobs?limit=100' + query).catch(() => null),
+            api('/usage/jobs?limit=100' + query).catch((err) => {
+              if (seq === loadSeqRef.current) notify((err && err.message) || '刷新用量历史失败');
+              return null;
+            }),
           ]);
+          if (seq !== loadSeqRef.current) return;
           if (monthOut) setSummary(monthOut);
           if (totalOut) setTotal(totalOut);
-          setJobs((jobsOut && jobsOut.jobs) || []);
+          if (jobsOut && Array.isArray(jobsOut.jobs)) {
+            const list = jobsOut.jobs;
+            setJobs(list);
+            const current = openJobIdRef.current;
+            if (current) {
+              if (list.some((job) => job.jobId === current)) loadDetail(current);
+              else closeDetail();
+            }
+          }
         } catch (err) {
-          notify(err.message);
+          if (seq === loadSeqRef.current) notify(err.message);
         } finally {
-          setBusy(false);
+          if (seq === loadSeqRef.current) setBusy(false);
         }
-      }, [kind, notify]);
+      }, [kind, notify, loadDetail, closeDetail]);
 
       useEffect(() => {
         load();
       }, [load]);
 
-      const openDetail = async (job) => {
-        try {
-          const out = await api('/usage/job?jobId=' + encodeURIComponent(job.jobId));
-          setDetail(out.job);
-        } catch (err) {
-          notify(err.message);
-        }
-      };
+      // 点空白收起；工具栏与确认弹窗除外；点其它条交给该条 onClick 切换。
+      useEffect(() => {
+        if (!openJobId || typeof document === 'undefined') return undefined;
+        const onDocClick = (event) => {
+          const target = event && event.target;
+          if (!target || !openItemRef.current) return;
+          if (openItemRef.current.contains(target)) return;
+          if (headerRef.current && headerRef.current.contains(target)) return;
+          if (filterRef.current && filterRef.current.contains(target)) return;
+          if (typeof target.closest === 'function') {
+            if (target.closest('.blm-modal-mask')) return;
+            if (target.closest('.blm-usage-item')) return;
+          }
+          closeDetail();
+        };
+        document.addEventListener('click', onDocClick, true);
+        return () => document.removeEventListener('click', onDocClick, true);
+      }, [openJobId, closeDetail]);
 
       const clearAll = async () => {
         const ok = await confirmAction('清空全部用量历史？只删账本，不影响书、系列与音频。', {
@@ -6584,7 +6811,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         try {
           const out = await api('/usage/jobs', { method: 'DELETE' });
           notify('已清空 ' + (Number(out.removed) || 0) + ' 条记录');
-          setDetail(null);
+          closeDetail();
           await load();
         } catch (err) {
           notify(err.message);
@@ -6596,7 +6823,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         { className: 'blm-body' },
         h(
           'div',
-          { className: 'blm-row', style: { marginBottom: 10 } },
+          { className: 'blm-row', ref: headerRef, style: { marginBottom: 10 } },
           h('button', { className: 'blm-btn', onClick: onBack }, '← 设置'),
           h('h1', { style: { fontSize: 15, margin: 0 } }, '用量与费用'),
           h('div', { style: { flex: 1 } }),
@@ -6611,13 +6838,16 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         ),
         h(
           'div',
-          { className: 'blm-row', style: { margin: '8px 0' } },
+          { className: 'blm-row', ref: filterRef, style: { margin: '8px 0' } },
           h(
             'select',
             {
               className: 'blm-select',
               value: kind,
-              onChange: (event) => setKind(event.target.value),
+              onChange: (event) => {
+                closeDetail();
+                setKind(event.target.value);
+              },
               'aria-label': '用量类型筛选',
             },
             h('option', { value: '' }, '全部类型'),
@@ -6632,39 +6862,18 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         jobs.length
           ? h(
               'div',
-              null,
+              { className: 'blm-usage-list' },
               jobs.map((job) =>
-                h(
-                  'button',
-                  {
-                    key: job.jobId,
-                    className: 'blm-btn',
-                    style: {
-                      display: 'block',
-                      width: '100%',
-                      textAlign: 'left',
-                      marginBottom: 6,
-                      padding: '8px 10px',
-                      whiteSpace: 'normal',
-                    },
-                    onClick: () => openDetail(job),
-                    title: job.jobId,
-                  },
-                  h(
-                    'div',
-                    { className: 'blm-row' },
-                    h('strong', null, usageKindLabel(job)),
-                    h('span', { className: 'blm-dim', style: { fontSize: 11 } }, String(job.startedAt || '').replace('T', ' ').slice(0, 16)),
-                    h('div', { style: { flex: 1 } }),
-                    h('span', null, formatMoney(job.actual && job.actual.cost)),
-                  ),
-                  h(
-                    'div',
-                    { className: 'blm-dim', style: { fontSize: 11, marginTop: 3 } },
-                    [job.book && job.book.title, job.series && job.series.title].filter(Boolean).join(' · ') || '(未归属)',
-                  ),
-                  h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 2 } }, usageSummaryLine(job)),
-                ),
+                h(UsageRow, {
+                  key: job.jobId,
+                  job,
+                  open: openJobId === job.jobId,
+                  detail: detailState,
+                  onToggle: () => toggleJob(job),
+                  onRetry: () => loadDetail(job.jobId),
+                  onCollapse: closeDetail,
+                  itemRef: openJobId === job.jobId ? openItemRef : null,
+                }),
               ),
             )
           : h(
@@ -6674,40 +6883,6 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               h('div', null, '生成一次讲义、配音或配图后，这里会出现记录。'),
               h('div', { className: 'blm-dim' }, '本地调用不写入账本。'),
             ),
-        detail
-          ? h(
-              'div',
-              { className: 'blm-note', style: { marginTop: 10 } },
-              h(
-                'div',
-                { className: 'blm-row' },
-                h('strong', null, usageKindLabel(detail)),
-                h('div', { style: { flex: 1 } }),
-                h('button', { className: 'blm-btn', onClick: () => setDetail(null) }, '收起'),
-              ),
-              h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
-                String(detail.startedAt || '') + ' → ' + String(detail.finishedAt || '') + ' · ' + String(detail.status || '') +
-                ' · ' + String(detail.billing || '')),
-              h('div', { style: { fontSize: 12, marginTop: 4 } }, usageSummaryLine(detail)),
-              h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
-                '价格版本 ' + String(detail.priceVersion || '—') +
-                (detail.actual && detail.actual.charsSource === 'text' ? ' · 字符按码点回落' : '') +
-                (detail.actual && detail.actual.charsSource === 'provider' ? ' · 字符口径：云端' : '') +
-                (detail.actual && detail.actual.unknownPrice ? ' · 部分缺价' : '') +
-                (detail.actual && detail.actual.unknownUsage ? ' · 缺模型用量' : '')),
-              (detail.billingModel || []).map((item) =>
-                h('div', { key: item.provider + '/' + item.model, style: { fontSize: 11, marginTop: 2 } },
-                  item.provider + ' / ' + item.model + ' · ' + item.calls + ' 次 · ' +
-                  formatTokens((item.tokens && item.tokens.input) || 0) + ' 输入 · ' +
-                  (Number(item.tokens && item.tokens.cacheRead) ? formatTokens(item.tokens.cacheRead) + ' 缓存读 · ' : '') +
-                  formatTokens((item.tokens && item.tokens.output) || 0) + ' 输出 · ' + formatMoney(item.cost)),
-              ),
-              Object.keys(detail.byStage || {}).length
-                ? h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
-                    '分阶段：' + Object.keys(detail.byStage).map((key) => key + ' ' + formatMoney(detail.byStage[key].cost)).join(' · '))
-                : null,
-            )
-          : null,
       );
     }
 
@@ -9187,6 +9362,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         ChapterSourceBadge,
         Settings,
         UsageView,
+        UsageRow,
         PracticePanel,
         ExportDialog,
         ImportPackageDialog,
@@ -9230,6 +9406,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         formatMoney,
         usageKindLabel,
         usageSummaryLine,
+        usageDetailSafeId,
+        usageToggleJobId,
         monthStartIso,
         bindMenuDismiss,
         useLongPress,
