@@ -139,6 +139,18 @@ body[data-ds-dark-theme] .blm-single-root{color:#ffd27a}
 body[data-ds-dark-theme] .blm-error{color:#ff8a80}
 .blm-note{background:color-mix(in oklab,currentColor 5%,transparent);border:1px solid var(--blm-line);color:var(--blm-dim);border-radius:8px;padding:8px 10px;margin-top:8px;font-size:12px}
 .blm-usage-list{display:flex;flex-direction:column;gap:6px}
+.blm-usage-group{display:flex;flex-direction:column;gap:6px}
+.blm-usage-group-head{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;padding:8px 10px;border:1px dashed var(--blm-line);border-radius:8px;background:transparent;color:var(--blm-dim);font:inherit;font-size:12px;cursor:pointer;text-align:left}
+.blm-usage-group-head:hover{background:var(--blm-btn-hover);color:var(--blm-text)}
+.blm-usage-group-head:focus-visible{outline:2px solid var(--blm-accent);outline-offset:-2px}
+.blm-usage-group-head[aria-expanded="true"] .blm-usage-caret{transform:rotate(90deg)}
+.blm-usage-group-body{display:flex;flex-direction:column;gap:6px}
+.blm-usage-group-body[hidden]{display:none}
+.blm-usage-group-count{color:var(--blm-dim);font-size:11px}
+.blm-usage-group-trunc{color:var(--blm-dim);font-size:11px;padding:2px 4px}
+.blm-usage-range-error{color:#c62828;font-size:12px;padding:0 2px 4px}
+body[data-ds-dark-theme] .blm-usage-range-error{color:#ff8a80}
+.blm-usage-date{flex:0 0 auto;min-width:0;width:132px}
 .blm-usage-item{border:1px solid var(--blm-line);border-radius:8px;background:var(--blm-card);color:var(--blm-text);overflow:hidden;transition:border-color .14s ease}
 .blm-usage-item:hover{border-color:color-mix(in oklab,var(--blm-accent) 32%,var(--blm-line))}
 .blm-usage-item.is-open{border-color:color-mix(in oklab,var(--blm-accent) 48%,var(--blm-line))}
@@ -1063,9 +1075,85 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       return parts.join(' · ');
     }
 
-    function monthStartIso() {
-      const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    /** 用量历史时间筛选：日粒度预设 + 自定义起止日期（2.6 / FR-27.6）。 */
+    const USAGE_TIME_PRESETS = [
+      { id: 'all', label: '全部时间' },
+      { id: '7d', label: '近 7 天' },
+      { id: '30d', label: '近 30 天' },
+      { id: 'month', label: '本月' },
+      { id: 'custom', label: '自定义' },
+    ];
+
+    function isoLocalDay(date) {
+      const p = (n) => String(n).padStart(2, '0');
+      return date.getFullYear() + '-' + p(date.getMonth() + 1) + '-' + p(date.getDate());
+    }
+
+    function shiftLocalDays(date, days) {
+      return new Date(date.getFullYear(), date.getMonth(), date.getDate() + Number(days || 0));
+    }
+
+    /** 预设区间在每次加载时按“现在”重算；最小粒度 1 个本地日。 */
+    function usageRangeFor(preset, custom, now) {
+      const at = now instanceof Date ? now : new Date();
+      const pick = custom && typeof custom === 'object' ? custom : {};
+      if (preset === '7d') return { from: isoLocalDay(shiftLocalDays(at, -6)), to: isoLocalDay(at) };
+      if (preset === '30d') return { from: isoLocalDay(shiftLocalDays(at, -29)), to: isoLocalDay(at) };
+      if (preset === 'month') return { from: monthStartIso(at), to: isoLocalDay(at) };
+      if (preset === 'custom') return { from: String(pick.from || ''), to: String(pick.to || '') };
+      return { from: '', to: '' };
+    }
+
+    /** 空串合法（单边/无范围）；非空必须是 YYYY-MM-DD，且 from ≤ to。 */
+    function usageRangeError(range) {
+      const from = String((range && range.from) || '');
+      const to = String((range && range.to) || '');
+      const shape = /^\d{4}-\d{2}-\d{2}$/;
+      const validDay = (value) => {
+        if (!shape.test(value)) return false;
+        const date = new Date(value + 'T00:00:00');
+        return !Number.isNaN(date.getTime()) && isoLocalDay(date) === value;
+      };
+      if (from && !validDay(from)) return '开始日期格式应为 YYYY-MM-DD';
+      if (to && !validDay(to)) return '结束日期格式应为 YYYY-MM-DD';
+      if (from && to && from > to) return '开始日期不能晚于结束日期';
+      return '';
+    }
+
+    /** 用量接口查询串：kind/from/to/limit 都可选，参数顺序固定，便于源码契约断言。 */
+    function usageQuery(params) {
+      const opts = params && typeof params === 'object' ? params : {};
+      const list = [];
+      if (opts.kind) list.push('kind=' + encodeURIComponent(String(opts.kind)));
+      if (opts.from) list.push('from=' + encodeURIComponent(String(opts.from)));
+      if (opts.to) list.push('to=' + encodeURIComponent(String(opts.to)));
+      if (opts.limit) list.push('limit=' + encodeURIComponent(String(opts.limit)));
+      return list.length ? '?' + list.join('&') : '';
+    }
+
+    /** 时间按本地时区显示到分钟；账本仍存 ISO UTC，不改数据。 */
+    function formatUsageTime(iso) {
+      if (!iso) return '—';
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return String(iso);
+      const p = (n) => String(n).padStart(2, '0');
+      return isoLocalDay(date) + ' ' + p(date.getHours()) + ':' + p(date.getMinutes());
+    }
+
+    /** 主列表与「其他」分组：分组只影响呈现，不改总账与筛选语义。 */
+    function splitUsageJobs(jobs) {
+      const main = [];
+      const other = [];
+      for (const job of Array.isArray(jobs) ? jobs : []) {
+        if (job && String(job.kind) === 'other') other.push(job);
+        else main.push(job);
+      }
+      return { main, other };
+    }
+
+    function monthStartIso(now) {
+      const at = now instanceof Date ? now : new Date();
+      const start = new Date(at.getFullYear(), at.getMonth(), 1);
       const p = (n) => String(n).padStart(2, '0');
       return start.getFullYear() + '-' + p(start.getMonth() + 1) + '-' + p(start.getDate());
     }
@@ -6626,7 +6714,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             h(
               'div',
               { className: 'blm-dim', style: { fontSize: 11, marginTop: 4 } },
-              String(current.startedAt || '') + ' → ' + String(current.finishedAt || '') + ' · ' +
+              formatUsageTime(current.startedAt) + ' → ' + formatUsageTime(current.finishedAt) + ' · ' +
                 String(current.status || '') + ' · ' + String(current.billing || ''),
             ),
             h('div', { style: { fontSize: 12, marginTop: 4 } }, usageSummaryLine(current)),
@@ -6673,7 +6761,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             'div',
             { className: 'blm-row' },
             h('strong', null, usageKindLabel(job)),
-            h('span', { className: 'blm-dim', style: { fontSize: 11 } }, String(job.startedAt || '').replace('T', ' ').slice(0, 16)),
+            h('span', { className: 'blm-dim', style: { fontSize: 11 } }, formatUsageTime(job.startedAt)),
             h('div', { style: { flex: 1 } }),
             h('span', null, formatMoney(job.actual && job.actual.cost)),
             h('span', { className: 'blm-usage-caret', 'aria-hidden': 'true' }, '▸'),
@@ -6699,11 +6787,52 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       );
     }
 
+    /** 「其他」分组：默认收起，组头显示条数；组内仍是普通 UsageRow（可继续行内展开）。 */
+    function UsageOtherGroup({ count, open, shown, onToggle, children }) {
+      const total = Number(count) || 0;
+      const visible = Number(shown) || 0;
+      return h(
+        'div',
+        { className: 'blm-usage-group' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'blm-usage-group-head',
+            'aria-expanded': open ? 'true' : 'false',
+            'aria-controls': 'blm-usage-other-group',
+            onClick: onToggle,
+          },
+          h('span', { className: 'blm-usage-caret', 'aria-hidden': 'true' }, '▸'),
+          h('span', null, '其他'),
+          h('span', { className: 'blm-usage-group-count' }, '（' + total + ' 条）'),
+        ),
+        h(
+          'div',
+          { id: 'blm-usage-other-group', className: 'blm-usage-group-body', hidden: !open },
+          children,
+          visible < total
+            ? h(
+                'div',
+                { className: 'blm-usage-group-trunc' },
+                visible > 0 ? '仅显示最近 ' + visible + ' 条' : '列表已达 500 条上限，请缩小时间范围',
+              )
+            : null,
+        ),
+      );
+    }
+
     function UsageView({ onBack, notify }) {
       const [summary, setSummary] = useState(null);
       const [total, setTotal] = useState(null);
       const [jobs, setJobs] = useState([]);
       const [kind, setKind] = useState('');
+      const [timePreset, setTimePreset] = useState('all');
+      const [customFrom, setCustomFrom] = useState('');
+      const [customTo, setCustomTo] = useState('');
+      const [otherOpen, setOtherOpen] = useState(false);
+      const [otherCount, setOtherCount] = useState(0);
+      const [rangeError, setRangeError] = useState('');
       const [openJobId, setOpenJobId] = useState('');
       const [detailState, setDetailState] = useState(USAGE_DETAIL_IDLE);
       const [busy, setBusy] = useState(false);
@@ -6748,13 +6877,23 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
 
       const load = useCallback(async () => {
         const seq = ++loadSeqRef.current;
+        const range = usageRangeFor(timePreset, { from: customFrom, to: customTo });
+        const rangeErr = usageRangeError(range);
+        if (rangeErr) {
+          setBusy(false);
+          setRangeError(rangeErr);
+          return;
+        }
+        setRangeError('');
         setBusy(true);
         try {
-          const query = kind ? '&kind=' + encodeURIComponent(kind) : '';
-          const [monthOut, totalOut, jobsOut] = await Promise.all([
-            api('/usage/summary?from=' + encodeURIComponent(monthStartIso()) + query).catch(() => null),
-            api('/usage/summary' + (query ? '?' + query.slice(1) : '')).catch(() => null),
-            api('/usage/jobs?limit=100' + query).catch((err) => {
+          const kindOnly = usageQuery({ kind });
+          const countQuery = usageQuery({ from: range.from, to: range.to });
+          const [monthOut, totalOut, countsOut, jobsOut] = await Promise.all([
+            api('/usage/summary' + usageQuery({ from: monthStartIso(), kind })).catch(() => null),
+            api('/usage/summary' + kindOnly).catch(() => null),
+            api('/usage/summary' + countQuery).catch(() => null),
+            api('/usage/jobs' + usageQuery({ limit: 500, kind, from: range.from, to: range.to })).catch((err) => {
               if (seq === loadSeqRef.current) notify((err && err.message) || '刷新用量历史失败');
               return null;
             }),
@@ -6762,6 +6901,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           if (seq !== loadSeqRef.current) return;
           if (monthOut) setSummary(monthOut);
           if (totalOut) setTotal(totalOut);
+          if (countsOut && Array.isArray(countsOut.byKind)) {
+            const otherCountNext = countsOut.byKind
+              .filter((item) => String(item.kind) === 'other')
+              .reduce((sum, item) => sum + (Number(item.jobs) || 0), 0);
+            setOtherCount(otherCountNext);
+            if (!otherCountNext) setOtherOpen(false);
+          }
           if (jobsOut && Array.isArray(jobsOut.jobs)) {
             const list = jobsOut.jobs;
             setJobs(list);
@@ -6776,7 +6922,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         } finally {
           if (seq === loadSeqRef.current) setBusy(false);
         }
-      }, [kind, notify, loadDetail, closeDetail]);
+      }, [kind, timePreset, customFrom, customTo, notify, loadDetail, closeDetail]);
 
       useEffect(() => {
         load();
@@ -6818,6 +6964,31 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         }
       };
 
+      const renderRow = (job) =>
+        h(UsageRow, {
+          key: job.jobId,
+          job,
+          open: openJobId === job.jobId,
+          detail: detailState,
+          onToggle: () => toggleJob(job),
+          onRetry: () => loadDetail(job.jobId),
+          onCollapse: closeDetail,
+          itemRef: openJobId === job.jobId ? openItemRef : null,
+        });
+
+      const grouped = splitUsageJobs(jobs);
+      const groupCount = otherCount > 0 ? otherCount : grouped.other.length;
+      const showGroup = !kind && groupCount > 0;
+      const visible = kind ? jobs : grouped.main;
+
+      const toggleOther = () => {
+        if (otherOpen) {
+          const current = openJobIdRef.current;
+          if (grouped.other.some((job) => job.jobId === current)) closeDetail();
+        }
+        setOtherOpen(!otherOpen);
+      };
+
       return h(
         'div',
         { className: 'blm-body' },
@@ -6846,6 +7017,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               value: kind,
               onChange: (event) => {
                 closeDetail();
+                setOtherOpen(false);
                 setKind(event.target.value);
               },
               'aria-label': '用量类型筛选',
@@ -6856,25 +7028,70 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             h('option', { value: 'image' }, '配图'),
             h('option', { value: 'other' }, '其他'),
           ),
+          h(
+            'select',
+            {
+              className: 'blm-select',
+              value: timePreset,
+              onChange: (event) => {
+                closeDetail();
+                setOtherOpen(false);
+                setRangeError('');
+                setTimePreset(event.target.value);
+              },
+              'aria-label': '用量时间范围',
+            },
+            USAGE_TIME_PRESETS.map((item) => h('option', { key: item.id, value: item.id }, item.label)),
+          ),
+          timePreset === 'custom'
+            ? h('input', {
+                type: 'date',
+                className: 'blm-input blm-usage-date',
+                value: customFrom,
+                max: customTo || undefined,
+                'aria-label': '开始日期',
+                onChange: (event) => {
+                  closeDetail();
+                  setOtherOpen(false);
+                  setRangeError('');
+                  setCustomFrom(event.target.value);
+                },
+              })
+            : null,
+          timePreset === 'custom' ? h('span', { className: 'blm-dim' }, '至') : null,
+          timePreset === 'custom'
+            ? h('input', {
+                type: 'date',
+                className: 'blm-input blm-usage-date',
+                value: customTo,
+                min: customFrom || undefined,
+                'aria-label': '结束日期',
+                onChange: (event) => {
+                  closeDetail();
+                  setOtherOpen(false);
+                  setRangeError('');
+                  setCustomTo(event.target.value);
+                },
+              })
+            : null,
           h('div', { style: { flex: 1 } }),
           h('button', { className: 'blm-btn', disabled: busy || !jobs.length, onClick: clearAll }, '清空历史'),
         ),
-        jobs.length
+        rangeError
+          ? h('div', { className: 'blm-usage-range-error', role: 'alert' }, rangeError)
+          : null,
+        visible.length || showGroup
           ? h(
               'div',
               { className: 'blm-usage-list' },
-              jobs.map((job) =>
-                h(UsageRow, {
-                  key: job.jobId,
-                  job,
-                  open: openJobId === job.jobId,
-                  detail: detailState,
-                  onToggle: () => toggleJob(job),
-                  onRetry: () => loadDetail(job.jobId),
-                  onCollapse: closeDetail,
-                  itemRef: openJobId === job.jobId ? openItemRef : null,
-                }),
-              ),
+              visible.map(renderRow),
+              showGroup
+                ? h(
+                    UsageOtherGroup,
+                    { count: groupCount, open: otherOpen, shown: grouped.other.length, onToggle: toggleOther },
+                    grouped.other.map(renderRow),
+                  )
+                : null,
             )
           : h(
               'div',
@@ -9363,6 +9580,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         Settings,
         UsageView,
         UsageRow,
+        UsageOtherGroup,
         PracticePanel,
         ExportDialog,
         ImportPackageDialog,
@@ -9409,6 +9627,12 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         usageDetailSafeId,
         usageToggleJobId,
         monthStartIso,
+        usageRangeFor,
+        usageRangeError,
+        usageQuery,
+        formatUsageTime,
+        splitUsageJobs,
+        USAGE_TIME_PRESETS,
         bindMenuDismiss,
         useLongPress,
         confirmAction,

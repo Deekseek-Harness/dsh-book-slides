@@ -658,8 +658,12 @@ export function readJob(id) {
   return data && data.jobId ? data : null;
 }
 
+/** 账本存 ISO UTC；from/to 按用户本地日比较，与客户端「本月」/预设同一口径。 */
 function dayOf(iso) {
-  return String(iso || '').slice(0, 10);
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return String(iso || '').slice(0, 10);
+  const p = (n) => String(n).padStart(2, '0');
+  return date.getFullYear() + '-' + p(date.getMonth() + 1) + '-' + p(date.getDate());
 }
 
 function matchesRange(job, from, to) {

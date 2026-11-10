@@ -522,6 +522,56 @@ test('AC-164：历史筛选、汇总、清空与归属快照', async () => {
   assert.equal(usage.clearUsageJobs(), 0, '二次清空幂等');
 });
 
+/* ------------------------------ AC-178 / AC-179 ------------------------------ */
+
+test('AC-178：from/to 按本地日过滤；AC-179：汇总仍含 other', () => {
+  const jobsDir = path.join(ROOT, 'usage', 'jobs');
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const localIso = (date) => date.toISOString();
+  const before = new Date(2020, 4, 6, 23, 30); // 本地 2020-05-06 23:30
+  const after = new Date(2020, 4, 7, 0, 30); // 本地 2020-05-07 00:30
+  const write = (id, kind, startedAt) => {
+    fs.writeFileSync(
+      path.join(jobsDir, id + '.json'),
+      JSON.stringify({
+        usageSchema: 1,
+        jobId: id,
+        kind,
+        phase: kind === 'other' ? 'probe' : 'generate',
+        status: 'done',
+        billing: 'cloud',
+        startedAt,
+        finishedAt: startedAt,
+        book: { id: 'b', title: '书' },
+        series: { id: 's', title: '系列' },
+        actual: { calls: 1, tokens: { input: 10, output: 5 }, chars: 0, images: 0, cost: 0.01, currency: 'CNY' },
+      }),
+    );
+  };
+  write('gday10', 'lecture', localIso(before));
+  write('gday11', 'lecture', localIso(after));
+  write('gday11other', 'other', localIso(after));
+  try {
+    assert.deepEqual(
+      usage.listUsageJobs({ from: '2020-05-07', to: '2020-05-07' }).jobs.map((job) => job.jobId).sort(),
+      ['gday11', 'gday11other'],
+      '本地 00:30 的记录属于 05-07，不属于 05-06',
+    );
+    assert.deepEqual(
+      usage.listUsageJobs({ from: '2020-05-06', to: '2020-05-06' }).jobs.map((job) => job.jobId),
+      ['gday10'],
+    );
+    const summary = usage.usageSummary({ from: '2020-05-07', to: '2020-05-07' });
+    assert.equal(summary.totals.jobs, 2);
+    assert.equal(summary.byKind.find((item) => item.kind === 'other').jobs, 1, '折叠只影响呈现，汇总仍含 other');
+    assert.equal(summary.byKind.find((item) => item.kind === 'lecture').jobs, 1);
+  } finally {
+    for (const id of ['gday10', 'gday11', 'gday11other']) {
+      fs.rmSync(path.join(jobsDir, id + '.json'), { force: true });
+    }
+  }
+});
+
 /* ------------------------------ AC-165 ------------------------------ */
 
 test('AC-165：running 归一 interrupted；坏记录跳过', () => {

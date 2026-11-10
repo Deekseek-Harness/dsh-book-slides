@@ -1,6 +1,7 @@
 /**
  * FR-27 客户端静态走查（C15 / §7.9 / §7.10 / FR-27.6）：设置「用量与费用」组、历史页、
- * 历史条目行内展开（AC-175 ~ AC-177）、预估确认与「本次用量」摘要必须真的存在于面板源码与渲染结果里。
+ * 历史条目行内展开（AC-175 ~ AC-177）、时间筛选与「其他」分组折叠（AC-178 ~ AC-179）、
+ * 预估确认与「本次用量」摘要必须真的存在于面板源码与渲染结果里。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -51,16 +52,88 @@ test('设置页：用量与费用组（本月/累计、价格表、本地 provid
   }
 });
 
-test('历史页：空态、类型筛选、返回设置与清空入口', () => {
+test('历史页：空态、类型/时间筛选、返回设置与清空入口', () => {
   const html = renderToString(
     React.createElement(clientModule.__components.UsageView, { onBack: () => {}, notify: () => {} }),
   );
-  for (const text of ['用量与费用', '还没有用量记录', '全部类型', '清空历史', '← 设置']) {
+  for (const text of ['用量与费用', '还没有用量记录', '全部类型', '全部时间', '近 7 天', '本月', '其他', '清空历史', '← 设置']) {
     assert.ok(html.includes(text), '历史页应包含「' + text + '」');
   }
-  for (const text of ["api('/usage/jobs?limit=100'", "api('/usage/summary'", "api('/usage/job?jobId='"]) {
-    assert.ok(source.includes(text), '历史页源码应请求 ' + text);
+  for (const text of ["api('/usage/jobs' + usageQuery({ limit: 500", "api('/usage/summary'", "api('/usage/job?jobId='", 'usageRangeFor']) {
+    assert.ok(source.includes(text), '历史页源码应请求/实现 ' + text);
   }
+});
+
+test('历史页：时间预设、自定义范围与非法范围（AC-178）', () => {
+  const helpers = clientModule.__helpers;
+  const now = new Date(2026, 10, 11, 10, 0, 0); // 本地 2026-11-11
+  assert.deepEqual(helpers.usageRangeFor('all', {}, now), { from: '', to: '' });
+  assert.deepEqual(helpers.usageRangeFor('7d', {}, now), { from: '2026-11-05', to: '2026-11-11' });
+  assert.deepEqual(helpers.usageRangeFor('30d', {}, now), { from: '2026-10-13', to: '2026-11-11' });
+  assert.deepEqual(helpers.usageRangeFor('month', {}, now), { from: '2026-11-01', to: '2026-11-11' });
+  assert.deepEqual(
+    helpers.usageRangeFor('custom', { from: '2026-11-01', to: '2026-11-03' }, now),
+    { from: '2026-11-01', to: '2026-11-03' },
+  );
+  assert.deepEqual(helpers.usageRangeFor('custom', { from: '2026-11-03' }, now), { from: '2026-11-03', to: '' });
+
+  assert.equal(helpers.usageRangeError({ from: '', to: '' }), '', '空范围合法');
+  assert.equal(helpers.usageRangeError({ from: '2026-11-03', to: '2026-11-01' }), '开始日期不能晚于结束日期');
+  assert.match(helpers.usageRangeError({ from: '2026/11/03' }), /YYYY-MM-DD/);
+  assert.match(helpers.usageRangeError({ to: '2026-13-01' }), /YYYY-MM-DD/);
+
+  assert.equal(
+    helpers.usageQuery({ kind: 'other', from: '2026-11-01', to: '2026-11-02', limit: 500 }),
+    '?kind=other&from=2026-11-01&to=2026-11-02&limit=500',
+    '参数顺序固定，非法范围由调用方拦截',
+  );
+});
+
+test('历史时间：按本地时区显示到分钟（AC-178）', () => {
+  const helpers = clientModule.__helpers;
+  const local = new Date(2026, 10, 11, 9, 5, 0);
+  assert.equal(helpers.formatUsageTime(local.toISOString()), '2026-11-11 09:05');
+  assert.equal(helpers.formatUsageTime(''), '—');
+  assert.equal(helpers.formatUsageTime('bad'), 'bad', '坏时间不崩溃，原样回显');
+  assert.equal(helpers.monthStartIso(new Date(2026, 10, 11)), '2026-11-01');
+});
+
+test('历史页：「其他」默认分组折叠（AC-179）', () => {
+  const helpers = clientModule.__helpers;
+  const jobs = [
+    { jobId: 'a', kind: 'lecture' },
+    { jobId: 'b', kind: 'other' },
+    { jobId: 'c', kind: 'tts' },
+    { jobId: 'd', kind: 'other' },
+  ];
+  const { main, other } = helpers.splitUsageJobs(jobs);
+  assert.deepEqual(main.map((job) => job.jobId), ['a', 'c']);
+  assert.deepEqual(other.map((job) => job.jobId), ['b', 'd']);
+  assert.deepEqual(helpers.splitUsageJobs(null), { main: [], other: [] });
+
+  const closed = renderToString(
+    React.createElement(
+      clientModule.__components.UsageOtherGroup,
+      { count: 3, open: false, shown: 2, onToggle: () => {} },
+      React.createElement('div', null, 'row-b'),
+    ),
+  );
+  assert.ok(closed.includes('其他'), '组头应显示「其他」');
+  assert.ok(closed.includes('（3 条）'), '组头应显示条数');
+  assert.ok(closed.includes('aria-expanded="false"'), '默认收起');
+  assert.match(closed, /class="blm-usage-group-body"[^>]*hidden/, '收起时组体 hidden');
+  assert.ok(closed.includes('仅显示最近 2 条'), '列表截断时提示');
+
+  const open = renderToString(
+    React.createElement(
+      clientModule.__components.UsageOtherGroup,
+      { count: 2, open: true, shown: 2, onToggle: () => {} },
+      React.createElement('div', null, 'row-b'),
+    ),
+  );
+  assert.ok(open.includes('aria-expanded="true"'), '展开态 aria-expanded=true');
+  assert.ok(!/class="blm-usage-group-body"[^>]*hidden/.test(open), '展开时不 hidden');
+  assert.ok(open.includes('row-b'), '展开后渲染组内条目');
 });
 
 const USAGE_JOB = {
@@ -179,6 +252,33 @@ test('历史条目：源码契约（行内结构、竞态、外部点击与视�
     assert.ok(source.includes(css), '样式应包含「' + css + '」');
   }
   assert.ok(!source.includes("className: 'blm-note', style: { marginTop: 10 }"), '旧底部详情块应删除');
+});
+
+test('历史筛选与分组：源码/CSS 契约（AC-178 ~ AC-179）', () => {
+  for (const text of [
+    'USAGE_TIME_PRESETS',
+    '用量时间范围',
+    "type: 'date'",
+    'setRangeError',
+    'if (rangeErr)',
+    'splitUsageJobs',
+    'UsageOtherGroup',
+    "className: 'blm-usage-group-head'",
+    'blm-usage-other-group',
+    'setOtherOpen(false)',
+    '仅显示最近',
+  ]) {
+    assert.ok(source.includes(text), '源码应包含「' + text + '」');
+  }
+  for (const css of [
+    '.blm-usage-group-head{',
+    '.blm-usage-group-head[aria-expanded="true"] .blm-usage-caret{transform:rotate(90deg)}',
+    '.blm-usage-group-body[hidden]{display:none}',
+    '.blm-usage-range-error{',
+    '.blm-usage-date{',
+  ]) {
+    assert.ok(source.includes(css), '样式应包含「' + css + '」');
+  }
 });
 
 test('用量格式化：万/千分位、金额缺价与阈值、类型标签', () => {
