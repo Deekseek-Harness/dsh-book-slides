@@ -3,6 +3,23 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [2.7.0-alpha.2] - 2026-11-12
+
+**must_keep 误报与质量面板语义修复**。包 `2.7.0-alpha.2`（tag `v2.7.0-alpha.2`）、产品 `2.5`、数据 schema `2`、SRS v3.0。
+
+### 版本与环境
+
+- 包 `2.7.0-alpha.2`（tag `v2.7.0-alpha.2`）、产品 `2.5`、数据 schema `2`、文档 `v3.0`。
+- 覆盖 alpha.1；已有书/系列/音频/配图/练习、别名表与 `usage/` 账本继续可用。
+
+### 修复
+
+- **节标题 Unicode 归一化**：`−/–/—/－` 与 ASCII `-` 视为同一节，全角空格/普通空格不影响 leaf 匹配；修复“3.4 在∞和−∞处的极限”被误判为硬冒充/丢节。
+- **must_keep 审计补 `quote_source`**：引文页的出处也能覆盖 must_keep（如“小结”），不再误报。
+- **同一页多个 must_keep 不再互相覆盖**：补讲按页分组，一次覆盖本页全部缺失词，修复“补讲记录有、页面仍缺”的矛盾。
+- **质量面板语义修正**：`真实缺失` → `自动未覆盖`，`内容待核对` → `内容告警`；新增 `POST /lecture/quality/recheck` 与「重新审计」按钮，明确“机器审计不是人工结论”。
+- **数据修复**：对已生成系列重新审计后 `content_ok` 可恢复 true；报告系列 `i53uoty44c` 复核为 `content_ok=true`、`real=0`、`hard=0`。
+
 ## [2.7.0-alpha.1] - 2026-11-11
 
 **3.0 信息密度/结构修复 alpha**。包 `2.7.0-alpha.1`（tag `v2.7.0-alpha.1`）、产品 `2.5`、数据 schema `2`、SRS v3.0；alpha 期间 `product_version` 保持 `2.5`，3.0 正式版再升。
@@ -34,13 +51,6 @@
 - **3.1 模型化补讲（FR-17.2）**：有模型时先让模型只改写该页要点/口播并校验 must_keep；失败回退原文短句补讲。
 - **3.1 4-lite-b 提示**：`lec-v2-sections-f` 要求 4–5 条×25–40 个汉字，短词必须扩成完整句；仍以 `density_ok` 验收。
 - `package.json`：`test:v2` 纳入 `test/v2-p0.test.mjs`（书签刷新、缓存键、planned/actual）。
-
-### 修复
-
-- **节标题 Unicode 归一化**：`−/–/—/－` 与 ASCII `-` 视为同一节，全角空格/普通空格不影响 leaf 匹配；修复“3.4 在∞和−∞处的极限”被误判为硬冒充/丢节。
-- **must_keep 审计补 `quote_source`**：引文页的出处也能覆盖 must_keep（如“小结”），不再误报。
-- **同一页多个 must_keep 不再互相覆盖**：补讲按页分组，一次覆盖本页全部缺失词，修复“补讲记录有、页面仍缺”的矛盾。
-- **质量面板语义修正**：`真实缺失` → `自动未覆盖`，`内容待核对` → `内容告警`；新增 `POST /lecture/quality/recheck` 与「重新审计」按钮，明确“机器审计不是人工结论”。
 
 ## [2.6.0] - 2026-11-11
 
