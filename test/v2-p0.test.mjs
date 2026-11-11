@@ -97,6 +97,9 @@ test('P0：进度/系列总页数按实际页数，计划页数不覆盖实际',
 
 test('3.1：must_keep 别名表可覆盖/恢复，且与内置表合并', () => {
   assert.ok(DEFAULT_ALIASES.length >= 10);
+  for (const term of ['周期性', '同终边角', '化简', '加减周期', '六个函数']) {
+    assert.ok(!DEFAULT_ALIASES.some((rule) => rule.term === term), '本书别名不得写进默认表：' + term);
+  }
   writeMustKeepAliases([{ term: '测试别名', any: ['甲', '乙'] }]);
   const merged = readMustKeepAliases();
   assert.ok(merged.some((rule) => rule.term === '测试别名'));
@@ -202,7 +205,7 @@ test('3.1：节标题分号/逗号差异不造成误报', () => {
       title: '2.2.2　[0; 2π] 以外的三角函数',
       page: 6,
       pages: 1,
-      must_keep: ['周期性', '同终边角', '化简', '加减周期'],
+      must_keep: ['拉回来', '同一条射线', '退回'],
     }],
   };
   const slides = [{

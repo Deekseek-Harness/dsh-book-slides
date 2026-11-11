@@ -3,6 +3,14 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [Unreleased]
+
+### 修复
+
+- **别名不再硬编码**：`周期性`/`同终边角`/`化简`/`加减周期`/`六个函数`/`左右不等`/`正无穷`/`函数值` 等本书/本学科措辞从 `DEFAULT_ALIASES` 移到数据根 `must-keep-aliases.json`；源码只保留 11 条通用/稳定别名。
+- **无 leaf 整章回退**：`sections=[]` 时不再把每页判成硬冒充；`第 1 章 全文` 保留展示。
+- **节名分号/逗号归一化**：`[0; 2π]` 与 `[0, 2π]` 视为同一节，避免整节误报。
+
 ## [2.7.0-alpha.2] - 2026-11-12
 
 **must_keep 误报与质量面板语义修复**。包 `2.7.0-alpha.2`（tag `v2.7.0-alpha.2`）、产品 `2.5`、数据 schema `2`、SRS v3.0。
