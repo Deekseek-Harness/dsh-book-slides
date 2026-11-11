@@ -50,7 +50,8 @@ import {
 } from './series.js';
 import { buildPlan } from './plan.js';
 import { readBriefs } from './briefs.js';
-import { readMustKeepAliasConfig, resetMustKeepAliases, writeMustKeepAliases } from './aliases.js';
+import { readMustKeepAliasConfig, readMustKeepAliases, resetMustKeepAliases, writeMustKeepAliases } from './aliases.js';
+import { applyQualityReview, QualityReviewError, reviewLectureQuality } from './quality-review.js';
 import { resolveModel } from './llm.js';
 import {
   billingForLlm,
@@ -74,7 +75,7 @@ import {
   startSeriesJob,
 } from './generate.js';
 import { buildStitchReport, repairStitch, writeStitchReport } from './stitch.js';
-import { loadLecture, writeLectureOutputs } from './lectures.js';
+import { loadLecture, seriesChapterTexts, writeLectureOutputs } from './lectures.js';
 import { readPreference, writePreference } from './prefs.js';
 import { progressSummary, readProgress, saveProgress } from './progress.js';
 import { readView, saveView } from './view.js';
@@ -928,6 +929,49 @@ async function handleLectureQualityRecheck(req, res) {
   });
   persistSeries(found.series);
   sendJson(res, 200, { ok: true, quality, series: found.series });
+}
+
+async function handleLectureQualityAiReview(req, res, options) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const found = findSeries(String(body.seriesId || ''));
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个系列', '');
+    return;
+  }
+  const n = Number(body.n);
+  const planLecture = (found.series.lectures || []).find((item) => Number(item.n) === n);
+  if (!planLecture) {
+    sendError(res, 'E_NOT_FOUND', '找不到这一讲', '');
+    return;
+  }
+  const doc = loadLecture(found.dir, n);
+  if (!doc || !doc.slidesDoc || !Array.isArray(doc.slidesDoc.slides)) {
+    sendError(res, 'E_LECTURE_EMPTY', '这一讲还没有生成内容', '先生成讲义再做 AI 审阅。');
+    return;
+  }
+  const texts = seriesChapterTexts(found.series.book_id, found.series);
+  if (!texts) {
+    sendError(res, 'E_REVIEW_FAILED', '读不到这本书的原文', '检查书是否已删除或数据是否完整。');
+    return;
+  }
+  try {
+    const review = await reviewLectureQuality({
+      ctx: options.ctx || null,
+      book: texts.loaded && texts.loaded.book,
+      lecture: planLecture,
+      slides: doc.slidesDoc.slides,
+      quality: doc.slidesDoc.quality || doc.lecture.quality || {},
+      pages: texts.pages,
+      aliases: readMustKeepAliases(),
+    });
+    const applied = applyQualityReview(doc, review);
+    writeLectureOutputs(found.dir, n, applied.lecture, applied.slidesDoc);
+    sendJson(res, 200, { ok: true, review, quality: applied.slidesDoc.quality });
+  } catch (err) {
+    const code = err instanceof QualityReviewError ? err.code : 'E_REVIEW_FAILED';
+    sendError(res, code, err.message || 'AI 审阅失败', err.hint || '');
+  }
 }
 
 function handleSeriesGet(req, res, url) {
@@ -2327,6 +2371,14 @@ async function routeM1Inner(req, res, url, options = {}) {
       return true;
     }
     sendError(res, 'E_METHOD', '不支持的方法', '用 POST 重新审计。');
+    return true;
+  }
+  if (pathname === PREFIX + '/lecture/quality/review') {
+    if (req.method === 'POST') {
+      await handleLectureQualityAiReview(req, res, options);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '用 POST 做 AI 审阅。');
     return true;
   }
   if (pathname === PREFIX + '/lecture') {

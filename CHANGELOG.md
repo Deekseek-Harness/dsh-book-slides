@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **3.2 只读 AI 审阅（FR-17.5）**：`POST /lecture/quality/review` 汇总 `quality`/`slides`/讲纲/相关原文/别名/repair，调用 `quality-review-v1` 返回逐项 `judgment`/`evidence`/`confidence`/`action`；只写 `quality.review`，不改 `slides[]`；质量面板增加「AI 审阅」入口与只读结果展示。
+
 ### 修复
 
 - **别名不再硬编码**：`周期性`/`同终边角`/`化简`/`加减周期`/`六个函数`/`左右不等`/`正无穷`/`函数值` 等本书/本学科措辞从 `DEFAULT_ALIASES` 移到数据根 `must-keep-aliases.json`；源码只保留 11 条通用/稳定别名。

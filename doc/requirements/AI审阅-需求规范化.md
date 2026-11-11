@@ -161,7 +161,7 @@
 |---|---|
 | AC-192 | 输入包含 quality/slides/lecture/source/aliases；source 只含相关页；不含整本 PDF |
 | AC-193 | 合法 JSON 通过校验；非法 JSON 返回 `E_REVIEW_INVALID`，旧 review 不变 |
-| AC-194 | 审阅前后 `slides.json` 内容哈希不变；仅 `quality.review` 变化 |
+| AC-194 | 审阅前后 `slides[]` 正文哈希不变；仅 `quality.review` 变化 |
 | AC-195 | UI 显示 verdict/items/evidence/action；无“应用/自动改 slides”入口 |
 
 ## 8. 开放问题

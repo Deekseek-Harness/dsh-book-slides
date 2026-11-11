@@ -4550,15 +4550,32 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
     }
 
 
-    function QualityPanel({ state, onClose, onRecheck, onRegenerate }) {
+    function QualityPanel({ state, onClose, onRecheck, onRegenerate, onAiReview }) {
       if (!state) return null;
       const q = state.quality || {};
       const density = q.density || {};
+      const review = q.review || null;
       const fallbackSections = (state.sections || []).filter((section) => section && section.must_keep_fallback);
       const line = (label, value) => h('div', { className: 'blm-plan-line' }, h('strong', null, label + '：'), value);
       const list = (items, format) => (Array.isArray(items) && items.length
         ? h('div', { className: 'blm-plan-line' }, items.map(format).join('；'))
         : null);
+      const verdictLabel = { pass: '通过', needs_fix: '建议修复', needs_human: '需人工确认' };
+      const judgmentLabel = {
+        covered: '已覆盖',
+        synonym: '同义覆盖',
+        missing: '真实缺失',
+        section_mismatch: '节名不匹配',
+        false_positive: '误报',
+        unclear: '无法判断',
+      };
+      const actionLabel = {
+        none: '无需动作',
+        add_alias: '建议加别名',
+        rewrite_page: '建议补讲该页',
+        regenerate: '建议重生成',
+        human_review: '需人工核对',
+      };
       return h(
         'div',
         { className: 'blm-modal-mask', onClick: (event) => { if (event.target === event.currentTarget) onClose(); } },
@@ -4570,6 +4587,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             { className: 'blm-row' },
             h('strong', null, '质量与密度 · 第 ' + state.n + ' 讲'),
             h('div', { style: { flex: 1 } }),
+            onAiReview ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onAiReview }, 'AI 审阅') : null,
             onRecheck ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onRecheck }, '重新审计') : null,
             onRegenerate ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onRegenerate }, '重新生成本讲') : null,
             h('button', { className: 'blm-btn', onClick: onClose }, '关闭'),
@@ -4609,6 +4627,28 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 (density.thin_pages || []).length ? line('薄页', (density.thin_pages || []).join('、')) : null,
                 (q.repair && ((q.repair.dropped_pages || []).length || (q.repair.repaired_must_keep || []).length))
                   ? line('修复记录', '删页 ' + ((q.repair.dropped_pages || []).join('、') || '无') + '；补讲 ' + ((q.repair.repaired_must_keep || []).map((item) => item.must_keep).join('、') || '无'))
+                  : null,
+                review
+                  ? h('div', { style: { marginTop: 10, borderTop: '1px dashed var(--blm-line)', paddingTop: 8 } },
+                      line('AI 审阅', (verdictLabel[review.verdict] || review.verdict || '—')
+                        + (review.model ? ' · ' + review.model : '')
+                        + (review.prompt_version ? ' · ' + review.prompt_version : '')),
+                      review.summary ? h('div', { className: 'blm-note', style: { marginTop: 4 } }, review.summary) : null,
+                      (review.items || []).slice(0, 20).map((item) => h('div', { className: 'blm-plan-line', key: item.id || item.page + '-' + item.judgment },
+                        '第 ' + (item.page || '—') + ' 页 · '
+                          + (judgmentLabel[item.judgment] || item.judgment || '—') + ' · '
+                          + (actionLabel[item.action] || item.action || '—')
+                          + (Number.isFinite(Number(item.confidence)) ? ' · 置信 ' + Math.round(Number(item.confidence) * 100) + '%' : ''),
+                        item.evidence && item.evidence.slide_quote
+                          ? '｜稿：' + String(item.evidence.slide_quote).slice(0, 120)
+                          : '',
+                        item.evidence && item.evidence.source_quote
+                          ? '｜原文：' + String(item.evidence.source_quote).slice(0, 120)
+                          : '',
+                      )),
+                      h('div', { className: 'blm-dim', style: { marginTop: 4, fontSize: 11 } },
+                        'AI 审阅是只读建议，不会改 slides；最终仍以「重新审计」的 content_ok 为准。'),
+                    )
                   : null,
                 h('div', { className: 'blm-note', style: { marginTop: 8 } },
                   '“自动未覆盖”是机器审计，不是人工结论：同义说法请加到设置→must_keep 别名，确实没讲请重新生成本讲；重新审计通过后 content_ok 才会变 true。'),
@@ -4768,6 +4808,24 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || '重新审计失败');
           setQualityState({ n, loading: false, error: '', quality: out.quality || {}, sections: qualityState.sections || [] });
           notify(out.quality && out.quality.content_ok ? '重新审计通过' : '重新审计完成，仍有待处理项');
+          await onReload();
+        } catch (err) {
+          setQualityState(Object.assign({}, qualityState, { loading: false, error: err.message || String(err) }));
+        }
+      };
+      const aiReviewQuality = async () => {
+        if (!qualityState || !qualityState.n) return;
+        const n = qualityState.n;
+        setQualityState(Object.assign({}, qualityState, { loading: true, error: '' }));
+        try {
+          const out = await api('/lecture/quality/review', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, n }),
+          });
+          if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || 'AI 审阅失败');
+          setQualityState({ n, loading: false, error: '', quality: out.quality || {}, sections: qualityState.sections || [] });
+          notify('AI 审阅完成（只读，不改 slides）');
           await onReload();
         } catch (err) {
           setQualityState(Object.assign({}, qualityState, { loading: false, error: err.message || String(err) }));
@@ -5468,6 +5526,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           ? h(QualityPanel, {
               state: qualityState,
               onClose: () => setQualityState(null),
+              onAiReview: aiReviewQuality,
               onRecheck: recheckQuality,
               onRegenerate: () => {
                 const n = qualityState.n;
