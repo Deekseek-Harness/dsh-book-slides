@@ -193,6 +193,145 @@ function bookmarkFromOutline(outline, pages, requestedDepth, storedDepth) {
   };
 }
 
+export class BookmarkError extends Error {
+  constructor(code, message, hint) {
+    super(message);
+    this.name = 'BookmarkError';
+    this.code = code;
+    this.hint = hint || '';
+  }
+}
+
+function decodeXmlText(value) {
+  return String(value || '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, num) => String.fromCodePoint(Number(num)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * 解析 PDF 阅读器导出的 XML 书签（ITEM NAME/PAGE/INDENT）。
+ * PAGE 是 0 基，应用内统一 1 基；INDENT 只用于还原层级。
+ */
+export function parseBookmarkXml(xml, totalPages) {
+  const text = String(xml || '');
+  const items = [];
+  const itemRe = /<ITEM\b([^>]*?)\/?>/gi;
+  let match;
+  while ((match = itemRe.exec(text))) {
+    const attrs = match[1] || '';
+    const values = {};
+    const attrRe = /\b([A-Za-z_][\w:-]*)\s*=\s*("([^"]*)"|'([^']*)')/g;
+    let attr;
+    while ((attr = attrRe.exec(attrs))) {
+      values[attr[1].toUpperCase()] = decodeXmlText(attr[3] !== undefined ? attr[3] : attr[4]);
+    }
+    const title = String(values.NAME || '').trim();
+    const pageRaw = Number(values.PAGE);
+    if (!title || !Number.isFinite(pageRaw)) continue;
+    const page = Math.max(1, Math.min(Number(totalPages) || 1, Math.round(pageRaw) + 1));
+    const indentRaw = Number(values.INDENT);
+    items.push({ title, page, indent: Number.isFinite(indentRaw) ? Math.max(0, Math.round(indentRaw)) : 0 });
+  }
+  if (!items.length) return [];
+  const baseIndent = Math.min(...items.map((item) => item.indent));
+  return items.map((item) => ({
+    title: item.title,
+    page: item.page,
+    depth: Math.max(0, item.indent - baseIndent),
+  }));
+}
+
+function titleKey(value) {
+  return String(value || '').replace(/\s+/g, '').toLowerCase();
+}
+
+/** 用现有 chapters 标题猜 XML 的章根层；避免把封面/前言层当章。 */
+function guessRootDepth(tree, total, chapters) {
+  const wanted = new Set((Array.isArray(chapters) ? chapters : []).map((chapter) => titleKey(chapter && chapter.title)).filter(Boolean));
+  if (!wanted.size) return null;
+  let bestDepth = null;
+  let bestCount = 0;
+  const maxDepth = 8;
+  for (let depth = 0; depth <= maxDepth; depth += 1) {
+    const entries = rootNodesAtDepth(tree, depth, total);
+    if (!entries.length) continue;
+    const count = entries.filter((node) => wanted.has(titleKey(node.title))).length;
+    if (count > bestCount) {
+      bestCount = count;
+      bestDepth = depth;
+    }
+  }
+  return bestCount > 0 ? bestDepth : null;
+}
+
+function rootTreeFromOutline(outline, pages, requestedDepth, storedDepth, chapters = []) {
+  const tree = outlineTree(outline);
+  if (!tree.length) throw new BookmarkError('E_BOOKMARK_EMPTY', '书签里没有可用条目', '检查 XML/PDF outline 后重试。');
+  const guessed = guessRootDepth(tree, pages.length, chapters);
+  const depth = Number.isInteger(requestedDepth) && requestedDepth >= 0
+    ? requestedDepth
+    : (guessed === null ? storedDepth : guessed);
+  const selected = chooseOutlineRoot(tree, pages, depth, storedDepth);
+  if (!selected.entries.length) {
+    throw new BookmarkError('E_BOOKMARK_EMPTY', '书签当前根层没有可用条目', '调整根层后重试。');
+  }
+  for (const node of nodesAtDepth(tree, selected.rootDepth)) delete node.n;
+  selected.entries.forEach((node, index) => {
+    node.n = index + 1;
+  });
+  return {
+    tree,
+    rootDepth: selected.rootDepth,
+    rootCount: selected.entries.length,
+    outline: outlineInfo(tree, selected.rootDepth, pages.length),
+  };
+}
+
+/**
+ * 只刷新书签树，不改 chapters.json、不重分章。
+ * source='pdf' 读 source.pdf；source='xml' 读外部 XML（字符串）。
+ */
+export async function refreshBookmarkTree(loaded, pages, { source = 'pdf', xml = '', outlineDepth = null } = {}) {
+  const resolved = String(source || 'pdf').toLowerCase();
+  let outline = [];
+  if (resolved === 'xml') {
+    outline = parseBookmarkXml(xml, pages.length);
+    if (!outline.length) {
+      throw new BookmarkError('E_BOOKMARK_PARSE', 'XML 里没有可用书签', '确认文件是 PDF 阅读器导出的书签 XML，且含 ITEM NAME/PAGE。');
+    }
+  } else if (resolved === 'pdf') {
+    try {
+      const buffer = fs.readFileSync(path.join(loaded.dir, 'source.pdf'));
+      outline = await extractOutline(buffer);
+    } catch (err) {
+      throw new BookmarkError(
+        'E_BOOKMARK_SOURCE',
+        '读取 PDF 书签失败',
+        String((err && err.message) || err).slice(0, 160),
+      );
+    }
+    if (!outline.length) {
+      throw new BookmarkError('E_BOOKMARK_SOURCE', 'PDF 没有书签', '换用 XML 文件，或重新导入带书签的 PDF。');
+    }
+  } else {
+    throw new BookmarkError('E_BOOKMARK_SOURCE', '不支持的书签来源', 'source 只能是 pdf 或 xml。');
+  }
+
+  const result = rootTreeFromOutline(
+    outline,
+    pages,
+    Number.isInteger(outlineDepth) && outlineDepth >= 0 ? outlineDepth : null,
+    loaded.book.bookmarkRootDepth,
+    loaded.chapters || [],
+  );
+  return Object.assign({ source: resolved, flatCount: outline.length }, result);
+}
+
 function normalizeRange(pages, range) {
   const total = pages.length;
   const from = Math.round(Number(range && range.from) || 0);

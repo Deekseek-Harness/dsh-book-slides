@@ -101,7 +101,7 @@ function makeCtx(replies) {
 
 test('AC-101：seams 数 ≠ N−1 判不合格并重试 1 次，第二次合格则采用', async () => {
   const ctx = makeCtx([briefsGood, withSeams([]), JSON.stringify(planBase)]);
-  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true });
+  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true, sectionAllocation: false });
   assert.equal(ctx.state.calls, 3, 'briefs 1 次 + 讲纲 2 次（重试 1 次）');
   assert.equal(out.plan.source, 'model');
   assert.equal(out.plan.seams.length, 1, '2 讲恰有 1 条 seam');
@@ -111,7 +111,7 @@ test('AC-101：seams 数 ≠ N−1 判不合格并重试 1 次，第二次合格
 test('AC-101：两次 seams 数都不对 → 规则 plan（unstitched），仍覆盖 Part 且可进入生成', async () => {
   const twoSeams = withSeams([seam, { from: 2, to: 3, concept: '多余', sentence: '多余的一条。' }]);
   const ctx = makeCtx([briefsGood, twoSeams, withSeams([])]);
-  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true });
+  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true, sectionAllocation: false });
   assert.equal(ctx.state.calls, 3, '两次坏讲纲也只重试 1 次');
   assert.equal(out.plan.source, 'rule');
   assert.equal(out.plan.stitched, false);
@@ -133,7 +133,7 @@ test('AC-101：两次 seams 数都不对 → 规则 plan（unstitched），仍�
 
 test('AC-102：术语凭空发明判不合格并重试 1 次，第二次合格则采用（briefs 里的词可合法）', async () => {
   const ctx = makeCtx([briefsGood, withTerm('不存在的术语'), withTerm('接口对比')]);
-  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true });
+  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true, sectionAllocation: false });
   assert.equal(ctx.state.calls, 3, '术语校验失败同样只重试 1 次');
   assert.equal(out.plan.source, 'model');
   assert.equal(out.plan.terms[0].name, '接口对比', '出现在 briefs 里的术语必须放行');
@@ -141,7 +141,7 @@ test('AC-102：术语凭空发明判不合格并重试 1 次，第二次合格�
 
 test('AC-102：两次凭空发明 → 规则 plan，warning 含“术语”', async () => {
   const ctx = makeCtx([briefsGood, withTerm('不存在的术语'), withTerm('另一个不存在的词')]);
-  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true });
+  const out = await buildPlan({ ctx, book: loaded.book, part, chapters, dir: loaded.dir, force: true, sectionAllocation: false });
   assert.equal(ctx.state.calls, 3);
   assert.equal(out.plan.source, 'rule');
   assert.equal(out.plan.stitched, false);

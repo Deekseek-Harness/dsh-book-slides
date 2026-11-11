@@ -4550,6 +4550,64 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
     }
 
 
+    function QualityPanel({ state, onClose }) {
+      if (!state) return null;
+      const q = state.quality || {};
+      const density = q.density || {};
+      const line = (label, value) => h('div', { className: 'blm-plan-line' }, h('strong', null, label + '：'), value);
+      const list = (items, format) => (Array.isArray(items) && items.length
+        ? h('div', { className: 'blm-plan-line' }, items.map(format).join('；'))
+        : null);
+      return h(
+        'div',
+        { className: 'blm-modal-mask', onClick: (event) => { if (event.target === event.currentTarget) onClose(); } },
+        h(
+          'div',
+          { className: 'blm-modal blm-plan-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '质量与密度' },
+          h(
+            'div',
+            { className: 'blm-row' },
+            h('strong', null, '质量与密度 · 第 ' + state.n + ' 讲'),
+            h('div', { style: { flex: 1 } }),
+            h('button', { className: 'blm-btn', onClick: onClose }, '关闭'),
+          ),
+          state.loading ? h('div', { className: 'blm-dim', style: { marginTop: 10 } }, '加载中…') : null,
+          state.error ? h('div', { className: 'blm-note warn', style: { marginTop: 10 } }, state.error) : null,
+          !state.loading && !state.error
+            ? h(
+                'div',
+                { style: { marginTop: 8 } },
+                line('页数', '计划 ' + (q.planned_pages || 0) + ' / 实际 ' + (q.actual_pages || 0) + (q.over_budget ? '（超预算，仅 warning）' : '')),
+                line('内容', q.content_ok ? '通过' : '待核对'),
+                line('密度', q.density_ok ? '达标' : '偏低（软目标）'),
+                q.content_ok === false && (q.must_keep_real_missing || []).length
+                  ? line('真实缺失', list(q.must_keep_real_missing, (item) => (item.section || '') + ' · ' + item.must_keep))
+                  : null,
+                (q.must_keep_aliases || []).length
+                  ? line('别名覆盖', list(q.must_keep_aliases, (item) => (item.section || '') + ' · ' + item.must_keep))
+                  : null,
+                (q.hard_impersonations || []).length || (q.soft_impersonations || []).length
+                  ? line('冒充', '硬 ' + (q.hard_impersonations || []).length + ' / 软 ' + (q.soft_impersonations || []).length)
+                  : null,
+                (q.placeholders || []).length ? line('占位页', String((q.placeholders || []).length)) : null,
+                q.duplicate_pairs ? line('讲内重复', String(q.duplicate_pairs)) : null,
+                density.avg_content_chars || density.avg_audio_chars
+                  ? line('平均', '内容 ' + (density.avg_content_chars || 0) + ' 字 / 口播 ' + (density.avg_audio_chars || 0) + ' 字')
+                  : null,
+                (density.audio_short_pages || []).length ? line('口播短页', (density.audio_short_pages || []).join('、')) : null,
+                (density.bullet_short_pages || []).length ? line('要点短页', (density.bullet_short_pages || []).join('、')) : null,
+                (density.quote_short_pages || []).length ? line('引文短页', (density.quote_short_pages || []).join('、')) : null,
+                (density.thin_pages || []).length ? line('薄页', (density.thin_pages || []).join('、')) : null,
+                (q.repair && ((q.repair.dropped_pages || []).length || (q.repair.repaired_must_keep || []).length))
+                  ? line('修复记录', '删页 ' + ((q.repair.dropped_pages || []).join('、') || '无') + '；补讲 ' + ((q.repair.repaired_must_keep || []).map((item) => item.must_keep).join('、') || '无'))
+                  : null,
+                h('div', { className: 'blm-dim', style: { marginTop: 8, fontSize: 11 } }, '质量/密度只作审查提示，不阻断播放；不会自动压回计划页数。'),
+              )
+            : null,
+        ),
+      );
+    }
+
     function SeriesCard({ series, part, notify, onReload, onPlay }) {
       const [job, setJob] = useState(null);
       const [jobUsage, setJobUsage] = useState(null);
@@ -4558,6 +4616,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const [imageJob, setImageJob] = useState(null);
       const [practiceOpen, setPracticeOpen] = useState(false);
       const [exportOpen, setExportOpen] = useState(false);
+      const [qualityState, setQualityState] = useState(null);
       const [busy, setBusy] = useState(false);
       const doneRef = useRef(false);
       const lectures = series.lectures || [];
@@ -4573,6 +4632,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const imageJobActive = imageJob != null && IMAGE_ACTIVE.includes(String(imageJob.status || ''));
       const imageActive = imageJobActive || (imageJob == null && IMAGE_ACTIVE.includes(imageStatus));
       const playable = lectures.filter((lec) => READY_LECTURE.includes(String(lec.status)));
+      const qualityWarnings = lectures.filter((lec) => lec.quality_summary
+        && (lec.quality_summary.content_ok === false || lec.quality_summary.density_ok === false));
+      const overBudgetCount = lectures.filter((lec) => lec.quality_summary && lec.quality_summary.over_budget).length;
       const snapshotVersion = seriesSnapshotVersion(series, part);
       const voicePending = playable.filter((lec) => String(lec.voice_status || 'none') !== 'ready');
       const voiceAllReady = playable.length > 0 && voicePending.length === 0;
@@ -4639,6 +4701,18 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         );
         if (!ok) return;
         revoice({ missingOnly: true });
+      };
+      const openQuality = async (lec) => {
+        setQualityState({ n: lec.n, loading: true, error: '', quality: null });
+        try {
+          const out = await api('/lecture?seriesId=' + encodeURIComponent(series.id) + '&n=' + encodeURIComponent(lec.n));
+          const quality = (out && out.slides && out.slides.quality)
+            || (out && out.lecture && out.lecture.quality)
+            || {};
+          setQualityState({ n: lec.n, loading: false, error: '', quality });
+        } catch (err) {
+          setQualityState({ n: lec.n, loading: false, error: String((err && err.message) || err), quality: null });
+        }
       };
       const runImages = async () => {
         const estimate = await fetchEstimate('image', { force: imageState === 'done' });
@@ -5155,6 +5229,17 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             ? h('span', { className: 'blm-badge' + (['stitched', 'verified'].includes(series.stitch) ? ' ok' : '') },
                 series.stitch === 'verified' ? '已验收' : series.stitch === 'stitched' ? '已衔接' : '未衔接')
             : null,
+          qualityWarnings.length
+            ? h('button', {
+                className: 'blm-badge warn',
+                style: { cursor: 'pointer' },
+                title: '点击查看质量与密度明细',
+                onClick: () => openQuality(qualityWarnings[0]),
+              }, '质量待核对 ' + qualityWarnings.length + ' 讲')
+            : null,
+          overBudgetCount
+            ? h('span', { className: 'blm-badge warn', title: '计划/实际页数差，不自动压页' }, '超预算 ' + overBudgetCount + ' 讲')
+            : null,
           snapshotVersion
             ? h('span', {
                 className: 'blm-badge warn',
@@ -5215,6 +5300,17 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                   h('span', { className: 'blm-dim' }, '第 ' + lec.n + ' 讲'),
                   h('span', { className: 'grow', title: lec.title }, lec.title),
                   h('span', { className: 'blm-badge' + (['ready', 'ready_degraded'].includes(lec.status) ? ' ok' : '') }, lec.status),
+                  lec.quality_summary && (lec.quality_summary.content_ok === false || lec.quality_summary.density_ok === false)
+                    ? h('button', {
+                        className: 'blm-badge warn',
+                        style: { cursor: 'pointer' },
+                        title: '内容/密度待核对',
+                        onClick: () => openQuality(lec),
+                      }, lec.quality_summary.content_ok === false ? '内容待核对' : '密度偏低')
+                    : null,
+                  lec.quality_summary && lec.quality_summary.over_budget
+                    ? h('span', { className: 'blm-badge warn', title: '计划/实际页数差；不自动压页' }, '超预算')
+                    : null,
                   ['failed', 'partial'].includes(String(lec.voice_status || ''))
                     ? h(
                         'span',
@@ -5290,6 +5386,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           : null,
         practiceOpen ? h(PracticePanel, { series, notify, onClose: () => setPracticeOpen(false) }) : null,
         exportOpen ? h(ExportDialog, { series, notify, onClose: () => setExportOpen(false) }) : null,
+        qualityState ? h(QualityPanel, { state: qualityState, onClose: () => setQualityState(null) }) : null,
       );
     }
 
@@ -5628,8 +5725,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
     function ChapterBuildPanel({
       built, advancedOpen, advancedSource, tocFrom, tocTo, suggested, tocPreview,
       busy, source, confidence, warnings, attempts, manualCount,
-      onToggleAdvanced, onSource, onFrom, onTo, onPreview, onBuild, onClose,
+      onToggleAdvanced, onSource, onFrom, onTo, onPreview, onBuild, onClose, onRefreshBookmark,
     }) {
+      const bookmarkFileRef = useRef(null);
       const sourceText = sourceLabel(source);
       const confidenceValue =
         confidence === null || confidence === undefined || confidence === '' ? NaN : Number(confidence);
@@ -5648,6 +5746,35 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             busy ? '正在分章…' : advancedOpen ? '按此方式分章' : '自动分章',
           ),
           h('button', { className: 'blm-btn', disabled: busy, onClick: onToggleAdvanced }, advancedOpen ? '收起高级' : '高级'),
+          onRefreshBookmark
+            ? h('button', {
+                className: 'blm-btn',
+                disabled: busy,
+                title: '只刷新书签树，不改章节/Part；可重抽 PDF outline',
+                onClick: () => onRefreshBookmark({ source: 'pdf' }),
+              }, '刷新书签')
+            : null,
+          onRefreshBookmark
+            ? h(React.Fragment, null,
+                h('button', {
+                  className: 'blm-btn',
+                  disabled: busy,
+                  title: '导入外部书签 XML（如 PDF 阅读器导出）',
+                  onClick: () => bookmarkFileRef.current && bookmarkFileRef.current.click(),
+                }, '导入 XML'),
+                h('input', {
+                  type: 'file',
+                  accept: '.xml,text/xml,application/xml',
+                  ref: bookmarkFileRef,
+                  style: { display: 'none' },
+                  onChange: (event) => {
+                    const file = event.target.files && event.target.files[0];
+                    event.target.value = '';
+                    if (file) onRefreshBookmark({ source: 'xml', file });
+                  },
+                }),
+              )
+            : null,
           advancedOpen
             ? h(
                 React.Fragment,
@@ -5755,6 +5882,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const [loading, setLoading] = useState(true);
       const [busy, setBusy] = useState(false);
       const [buildOpen, setBuildOpen] = useState(false);
+      const [bookmarkBusy, setBookmarkBusy] = useState(false);
       const [advancedOpen, setAdvancedOpen] = useState(false);
       const [advancedSource, setAdvancedSource] = useState('printed_toc');
       const [tocFrom, setTocFrom] = useState('');
@@ -5939,6 +6067,30 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         } finally {
           endLong(controller);
           setBusy(false);
+        }
+      };
+
+      const refreshBookmark = async ({ source = 'pdf', file = null } = {}) => {
+        setBookmarkBusy(true);
+        try {
+          const body = { bookId, source };
+          if (source === 'xml') {
+            if (!file) throw new Error('请选择书签 XML 文件');
+            body.xml = await file.text();
+          }
+          const out = await api('/book/outline/refresh', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || '书签刷新失败');
+          const count = Number(out.rootCount) || 0;
+          notify(out.changed ? '书签已刷新：' + count + ' 个根章/节' : '书签无变化');
+          await load();
+        } catch (err) {
+          notify(err.message || String(err));
+        } finally {
+          setBookmarkBusy(false);
         }
       };
 
@@ -6314,6 +6466,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               onTo: setTocTo,
               onPreview: previewToc,
               onBuild: build,
+              onRefreshBookmark: bookmarkBusy ? null : refreshBookmark,
               onClose: data.chaptersBuilt ? () => setBuildOpen(false) : null,
             })
           : null,
@@ -6383,6 +6536,14 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 h('button', { className: 'blm-btn', onClick: () => setEditing((v) => !v) }, editing ? '取消编辑' : '校准章节'),
                 !buildOpen && !editing
                   ? h('button', { className: 'blm-btn', disabled: busy, onClick: openBuild }, '重新分章')
+                  : null,
+                !buildOpen && !editing && data.book && data.book.chapterSource === 'bookmark'
+                  ? h('button', {
+                      className: 'blm-btn',
+                      disabled: busy || bookmarkBusy,
+                      title: '只刷新书签树，不改章节/Part；XML 请在分章面板导入',
+                      onClick: () => refreshBookmark({ source: 'pdf' }),
+                    }, bookmarkBusy ? '刷新中…' : '刷新书签')
                   : null,
                 editing ? h('button', { className: 'blm-btn primary', disabled: busy, onClick: save }, '保存') : null,
               ),
@@ -6469,6 +6630,11 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                         h('strong', null, lec.title || '第 ' + lec.n + ' 讲'),
                         h('div', { className: 'blm-meta' }, '章 ' + (lec.chapters || []).join('、') + ' · ' + lec.pages + ' 页 · ' + lec.chars + ' 字'),
                         lec.goal ? h('div', { className: 'blm-dim' }, lec.goal) : null,
+                        (lec.sections || []).length
+                          ? h('div', { className: 'blm-plan-line', style: { fontSize: 11 } },
+                              '节页分配：' + (lec.sections || []).map((section) =>
+                                section.title + '（' + section.pages + ' 页' + ((section.must_keep || []).length ? '；' + (section.must_keep || []).join('/') : '') + '）').join('；'))
+                          : null,
                       ),
                     )),
                     (plan.seams || []).length ? h('div', { className: 'blm-plan-line' }, '接缝：' + plan.seams.map((s) => s.sentence).join(' / ')) : h('div', { className: 'blm-dim' }, '规则讲纲未生成接缝（unstitched）。'),

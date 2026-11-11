@@ -10,7 +10,21 @@
 - 新增 `doc/requirements/规范需求3.0.md`：以 2.x SRS v1.29 为基线，有机融合“信息密度/结构修复”。新增 leaf 节树、预算内自主分页、页级 `section`/`page_role`、短 `must_keep`、硬/软冒充、`content_ok`/`density_ok` 审计、书签刷新（`POST /book/outline/refresh`）、缓存键、质量面板、节级预览、allocator prompt 契约；AC 覆盖到 AC-191。
 - 新增 `doc/requirements/信息密度偏移验证/`：验证 1 / 2 / 2.1 / 2.2 / 2.3 / 2.3b / 4-lite 的报告、指标与产物归档。
 - 更新 `doc/requirements/README.md` 3.0 索引，标注 2.0 为历史基线、3.0 为单文档融合。
-- 3.0 目标包版本仍为待发布 `3.0.0`，数据 schema 仍为 `2`；本次只提交文档，不发布包、不升版本。
+- 3.0 目标包版本仍为待发布 `3.0.0`，数据 schema 仍为 `2`；本次不发布包、不升版本。
+
+### 新增
+
+- **书签刷新（FR-14.2/21.8）**：新增 `POST /book/outline/refresh`，支持重抽 PDF outline 或上传外部 XML；只刷新 `bookmarkTree`/`bookmarkRootDepth`，不改 `chapters.json`/Part；返回 `rootCount`/`changed`；新增 `E_BOOKMARK_SOURCE/PARSE/EMPTY/IO`。
+- **书签刷新 UI（§7.8）**：分章构建页增加「刷新书签」「导入 XML」；详情页书签来源增加「刷新书签」快捷入口；变更预览后写盘。
+- **质量与密度可见（§7.4/§7.11）**：`GET /series` 的 `lectures[].quality_summary`（含 planned/actual/over_budget）与系列卡徽标；质量面板展示 must_keep/冒充/占位/重复/密度短页/修复记录。
+- **节页预览（§7.2）**：讲纲预览显示 leaf 节页数、must_keep 与预算提示。
+- **allocator 契约（§6.10）**：`plan-sections-v1.md` 去掉本书特化（1.2.3/1.3/1.6），改为按输入 leaf 覆盖子概念；`host/plan.js` 回退 `must_keep` 加 `must_keep_fallback`。
+
+### 变更
+
+- `host/generate.js`：生成完成后把 `quality_summary` 写回 `series.lectures[]`；重跑/失败时清空旧质量摘要。
+- `host/api.js`：`GET /series`（单系列/列表）按 `lecture.json.quality` 回填 `quality_summary`；`v2-p0` 覆盖书签刷新/缓存键。
+- `package.json`：`test:v2` 纳入 `test/v2-p0.test.mjs`。
 
 ## [2.6.0] - 2026-11-11
 

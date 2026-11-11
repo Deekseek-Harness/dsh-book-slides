@@ -1,6 +1,6 @@
 # 逐讲生成（lecture-v1）
 
-> 版本：`lec-v1`。改这里必须同步改 `host/generate.js` 的 `LECTURE_PROMPT_VERSION`，否则批检查点会命中旧结果。
+> 版本：`lec-v2-sections-e`。改这里必须同步改 `host/generate.js` 的 `LECTURE_PROMPT_VERSION`，否则批检查点会命中旧结果。
 > 从「## 角色」开始送给模型。
 
 ## 角色
@@ -13,12 +13,17 @@
 2. 输出严格 JSON，不要 Markdown 围栏，不要解释，不要寒暄。
 3. 第 1 批第 1 页 layout=cover；后续批不要输出 cover；其余页在 content_text 与 quote 之间交替，quote 不超过本批页数的三分之一。
 4. 每页 source_quote 必须从【本批原文】里逐字复制一段连续文字（10–200 字），不得改写、不得加省略号、不得跨段拼接、不得从【衔接上下文】或章节标题行里摘抄。
-5. audio_script 是口语讲解稿，40–220 字，像对人说话；不念要点，不说「第一点第二点」，不出现「如下图所示」「看幻灯片」「屏幕上」这类依赖视觉的说法。
+5. audio_script 是口语讲解稿，目标 160–220 字（cover 至少 120 字），像对人说话；不念要点，不说「第一点第二点」，不出现「如下图所示」「看幻灯片」「屏幕上」这类依赖视觉的说法。
 6. image_prompt 用一句中文描述画面，60 字内，不出现文字、图表、表格。
 7. 页数按【本批建议页数】给；整讲 6–30 页。
-8. title ≤ 24 字；content_text 的 bullet_points 1–5 条，每条 ≤ 40 字；quote 的 quote_text ≤ 120 字，quote_source 写原文出处（书名或章节名）。
+8. title ≤ 24 字；content_text 的 bullet_points 4–5 条，每条 25–40 字；quote 的 quote_text 80–120 字，quote_source 写原文出处（书名或章节名）。
 9. source_pages.from / to 是 PDF 物理页页码（1 开始），必须落在本批覆盖的页范围内。
 10. 不是整讲第一批时，本批第 1 页的 audio_script 必须先用一句话承接上一批的落点（见【上一批要点】），再进入本批内容。
+11. 【本批必须覆盖】里的每个小节都必须出现：至少一条要点或口播讲到它；不得把多个小节合并成一句就跳过。若本批有【承接小节】，先用一两句话收尾上一节未讲完的部分，不要重复已讲内容。
+12. 只写【本批必须覆盖】和【承接小节】；【全讲节清单】只用于定位，不属于本批的节不要写，不要输出“待续/后续再讲/本批回顾/下节预告”这类占位页。整讲按【本讲页预算】给页数，每节 1–5 页；本批小节多时，优先保证每个小节都出现，再压缩单节细节。
+13. 每个 content_text / quote 页必须给 `section`（本批某节或承接小节的标题），并给 `page_role`：`concept|example|formula|graph`；只有跨节页才用 `"page_role":"bridge"` + `"sections":["节1","节2"]`。cover 的 section 可以为空。
+14. 每页必须落在本批原文与本节页范围内；不要把别的小节内容写进本页来“凑节”。summary 只允许本讲最后一页。
+15. 不要为了达到字数目标重复、空泛或编造；每页必须新增信息。如果本批原文不足以写满，宁可保留稍短的一页并在 `page_role` 标明 `example/formula`，也不要注水。
 
 ## 预缝契约
 
@@ -39,6 +44,9 @@
       "layout": "cover",
       "title": "封面标题",
       "subtitle": "副标题",
+      "section": "",
+      "page_role": "concept",
+      "sections": [],
       "bullet_points": [],
       "quote_text": null,
       "quote_source": null,

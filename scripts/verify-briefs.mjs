@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readBriefs, validateBrief } from '../host/briefs.js';
+import { bookmarkSectionsOf, readBriefs } from '../host/briefs.js';
 import { chapterTextOf } from '../host/parts.js';
 
 function parseArgs(argv) {
@@ -63,6 +63,7 @@ const chaptersRaw = readJsonFile(path.join(dir, 'chapters.json'), null);
 const pages = readJsonFile(path.join(dir, 'pages.json'), null);
 const briefFile = readJsonFile(path.join(dir, 'briefs.json'), null);
 const partsRaw = readJsonFile(path.join(dir, 'parts.json'), null);
+const book = readJsonFile(path.join(dir, 'book.json'), null);
 
 if (!Array.isArray(chaptersRaw)) {
   console.error('chapters.json 不可读：' + path.join(dir, 'chapters.json'));
@@ -82,10 +83,22 @@ const chapters = chaptersRaw.map((c) => {
     to: Number(c.to),
     chars: Number(c.chars) || text.length,
     text,
+    bookmarkSections: bookmarkSectionsOf(book, { n: Number(c.n), title: String(c.title || '') }),
   };
 });
 const byN = new Map(chapters.map((c) => [c.n, c]));
 const hashOf = (list) => list.map((c) => c.n + ':' + c.chars + ':' + c.title).join('|');
+const norm = (value) => String(value || '').replace(/\s+/g, '').replace(/[.．、]/g, '.').toLowerCase();
+
+/** 一条 section 在正文里的位置；-1 表示只能靠书签标题命中。 */
+function sectionLookup(section, chapter) {
+  const direct = String(chapter.text || '').indexOf(section);
+  if (direct >= 0) return { ok: true, index: direct, via: 'text' };
+  const loose = String(chapter.text || '').replace(/\s+/g, '').indexOf(String(section || '').replace(/\s+/g, ''));
+  if (loose >= 0) return { ok: true, index: -1, via: 'text-loose' };
+  const hit = (chapter.bookmarkSections || []).some((title) => norm(title) === norm(section));
+  return { ok: hit, index: -1, via: hit ? 'bookmark' : '' };
+}
 
 const rows = [];
 const missing = [];
@@ -96,15 +109,12 @@ for (const brief of briefFile.briefs) {
     continue;
   }
   const sections = Array.isArray(brief.sections) ? brief.sections : [];
-  if (!validateBrief(brief, chapter)) {
-    for (const section of sections) {
-      if (chapter.text.includes(section)) continue;
-      const loose = chapter.text.replace(/\s+/g, '').indexOf(String(section).replace(/\s+/g, ''));
-      missing.push({ n: chapter.n, section, reason: loose >= 0 ? '仅空白差异' : '原文中没有' });
-    }
-  }
   for (const section of sections) {
-    rows.push({ n: chapter.n, section, ok: chapter.text.includes(section), index: chapter.text.indexOf(section) });
+    const hit = sectionLookup(section, chapter);
+    if (!hit.ok) {
+      missing.push({ n: chapter.n, section, reason: '原文与书签中都没有' });
+    }
+    rows.push({ n: chapter.n, section, ok: hit.ok, index: hit.index, via: hit.via });
   }
 }
 

@@ -24,9 +24,10 @@ import {
   restoreBook,
   storageStats,
   trashBook,
+  writeBookmark,
   writeCover,
 } from './books.js';
-import { ChapterError, buildBookChapters, saveBookChapters } from './chapters.js';
+import { BookmarkError, ChapterError, buildBookChapters, refreshBookmarkTree, saveBookChapters } from './chapters.js';
 import {
   PartError,
   chapterTexts,
@@ -44,6 +45,7 @@ import {
   listSeries,
   persistSeries,
   savePlan,
+  seriesDir,
 } from './series.js';
 import { buildPlan } from './plan.js';
 import { readBriefs } from './briefs.js';
@@ -381,6 +383,80 @@ async function handleBuildChapters(req, res, ctx) {
   } catch (err) {
     if (err instanceof ChapterError) sendError(res, err.code, err.message, err.hint);
     else sendError(res, 'E_CHAPTER_FAILED', '分章失败', String((err && err.message) || err).slice(0, 200));
+  }
+}
+
+async function handleBookOutlineRefresh(req, res) {
+  ensureRoot();
+  if (String(req.method || 'GET').toUpperCase() !== 'POST') {
+    sendError(res, 'E_METHOD', '不支持的方法', '用 POST 刷新书签。');
+    return;
+  }
+  let body = {};
+  let xml = '';
+  const contentType = String((req.headers && req.headers['content-type']) || '');
+  try {
+    if (/^multipart\/form-data/i.test(contentType)) {
+      const buffer = await readBody(req, 16 * 1024 * 1024);
+      const form = await new Response(buffer, { headers: { 'content-type': contentType } }).formData();
+      body.bookId = String(form.get('bookId') || '');
+      body.source = String(form.get('source') || 'xml');
+      body.outlineDepth = form.get('outlineDepth');
+      const file = form.get('outline') || form.get('xml');
+      if (file && typeof file !== 'string' && typeof file.arrayBuffer === 'function') {
+        xml = Buffer.from(await file.arrayBuffer()).toString('utf8');
+      } else if (file && typeof file === 'string') {
+        xml = file;
+      }
+    } else {
+      body = await readJsonBody(req, 16 * 1024 * 1024);
+      xml = String(body.xml || '');
+    }
+  } catch (err) {
+    sendError(res, 'E_BOOKMARK_PARSE', '读取书签失败', String((err && err.message) || err).slice(0, 160));
+    return;
+  }
+  if (!isValidId(String(body.bookId || ''))) {
+    sendError(res, 'E_BAD_ID', '书 ID 非法', '');
+    return;
+  }
+  const loaded = loadBook(String(body.bookId || ''));
+  if (!loaded) {
+    sendError(res, 'E_NOT_FOUND', '找不到这本书', '');
+    return;
+  }
+  const pages = readJson(path.join(loaded.dir, 'pages.json'), []);
+  if (!Array.isArray(pages) || !pages.length) {
+    sendError(res, 'E_NO_PAGES', '这本书没有逐页文本', '重新导入后再试。');
+    return;
+  }
+  const outlineDepthValue = Number(body.outlineDepth);
+  const outlineDepth =
+    Number.isInteger(outlineDepthValue) && outlineDepthValue >= 0 ? outlineDepthValue : null;
+  const source = String(body.source || 'pdf').toLowerCase();
+  try {
+    const before = JSON.stringify({
+      tree: loaded.book.bookmarkTree || null,
+      rootDepth: loaded.book.bookmarkRootDepth == null ? null : loaded.book.bookmarkRootDepth,
+    });
+    const result = await refreshBookmarkTree(loaded, pages, { source, xml, outlineDepth });
+    const after = JSON.stringify({ tree: result.tree, rootDepth: result.rootDepth });
+    const changed = before !== after;
+    const book = writeBookmark(loaded.book.id, result.tree, result.rootDepth, source);
+    sendJson(res, 200, {
+      ok: true,
+      source: result.source,
+      bookmarkTree: result.tree,
+      bookmarkRootDepth: result.rootDepth,
+      rootCount: result.rootCount,
+      outline: result.outline,
+      changed,
+      warnings: [],
+      book,
+    });
+  } catch (err) {
+    if (err instanceof BookmarkError) sendError(res, err.code, err.message, err.hint);
+    else sendError(res, 'E_BOOKMARK_IO', '书签刷新失败', String((err && err.message) || err).slice(0, 200));
   }
 }
 
@@ -751,6 +827,29 @@ async function handleSeriesCreate(req, res) {
   }
 }
 
+function withQualitySummaries(series, dir) {
+  const list = Array.isArray(series && series.lectures) ? series.lectures : [];
+  return Object.assign({}, series, {
+    lectures: list.map((lecture) => {
+      if (lecture && lecture.quality_summary) return lecture;
+      const doc = loadLecture(dir, lecture.n);
+      const quality = (doc && doc.lecture && doc.lecture.quality)
+        || (doc && doc.slidesDoc && doc.slidesDoc.quality)
+        || null;
+      if (!quality) return lecture;
+      return Object.assign({}, lecture, {
+        quality_summary: {
+          content_ok: quality.content_ok === true,
+          density_ok: quality.density_ok === true,
+          over_budget: quality.over_budget === true,
+          planned_pages: Number(quality.planned_pages) || 0,
+          actual_pages: Number(quality.actual_pages) || 0,
+        },
+      });
+    }),
+  });
+}
+
 function handleSeriesGet(req, res, url) {
   ensureRoot();
   const seriesId = String(url.searchParams.get('seriesId') || '');
@@ -760,7 +859,7 @@ function handleSeriesGet(req, res, url) {
       sendError(res, 'E_NOT_FOUND', '找不到这个系列', '');
       return;
     }
-    sendJson(res, 200, { ok: true, series: found.series });
+    sendJson(res, 200, { ok: true, series: withQualitySummaries(found.series, found.dir) });
     return;
   }
   const bookId = String(url.searchParams.get('bookId') || '');
@@ -768,7 +867,10 @@ function handleSeriesGet(req, res, url) {
     sendError(res, 'E_BAD_ID', '书 ID 非法', '');
     return;
   }
-  sendJson(res, 200, { ok: true, series: listSeries(bookId) });
+  sendJson(res, 200, {
+    ok: true,
+    series: listSeries(bookId).map((series) => withQualitySummaries(series, seriesDir(bookId, series.id))),
+  });
 }
 
 async function handleSeriesPlan(req, res, options) {
@@ -2383,6 +2485,10 @@ async function routeM1Inner(req, res, url, options = {}) {
   }
   if (pathname === PREFIX + '/books') {
     handleBooks(req, res);
+    return true;
+  }
+  if (pathname === PREFIX + '/book/outline/refresh') {
+    await handleBookOutlineRefresh(req, res);
     return true;
   }
   if (pathname === PREFIX + '/book') {

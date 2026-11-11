@@ -51,7 +51,7 @@ import {
   validateSlides,
 } from '../lib/slides.js';
 
-export const LECTURE_PROMPT_VERSION = 'lec-v1';
+export const LECTURE_PROMPT_VERSION = 'lec-v2-sections-e';
 const PROMPT = new URL('../prompts/lecture-v1.md', import.meta.url);
 const LLM_MAX_TOKENS = 16000;
 const LLM_RETRY_MAX_TOKENS = 32000;
@@ -208,10 +208,98 @@ function splitLongTextLike(text, limit) {
   }));
 }
 
-function targetPages(lecture, totalChars, batchChars, isFirst) {
+/** 节标题归一：只用于匹配/去重。 */
+function normalizeSectionKey(text) {
+  return String(text || '')
+    .replace(/\s+/g, '')
+    .replace(/[.．、]/g, '.')
+    .toLowerCase();
+}
+
+/**
+ * 这一批文本落在原书哪些页。
+ * 拆批时 batch.text 是 chapter.text 的连续子串；用它反推页范围，
+ * 这样【本批覆盖】不再错误地写成整章 23–42。
+ */
+function pageRangeOfBatchText(chapter, text, pages) {
+  const fallback = { from: Number(chapter.from) || 1, to: Number(chapter.to) || Number(chapter.from) || 1 };
+  const source = String((chapter && chapter.text) || '');
+  const piece = String(text || '');
+  if (!source || !piece) return fallback;
+  const at = source.indexOf(piece);
+  if (at < 0) return fallback;
+  const bookPages = (Array.isArray(pages) ? pages : [])
+    .filter((page) => Number(page.page) >= fallback.from && Number(page.page) <= fallback.to)
+    .sort((a, b) => Number(a.page) - Number(b.page));
+  if (!bookPages.length) return fallback;
+  let cursor = 0;
+  const ranges = bookPages.map((page) => {
+    const start = cursor;
+    const end = cursor + String(page.text || '').length;
+    cursor = end + 1; // chapter.text 用 \n 连接页
+    return { page: Number(page.page), start, end };
+  });
+  const endAt = at + Math.max(0, piece.length - 1);
+  const first = ranges.find((range) => at >= range.start && at <= range.end) || ranges[0];
+  const last = ranges.find((range) => endAt >= range.start && endAt <= range.end) || ranges[ranges.length - 1];
+  return { from: first.page, to: Math.max(first.page, last.page) };
+}
+
+/**
+ * 给每批标上“本批覆盖小节 / 承接小节 / 实际页范围”。
+ * 这是验证 2 的关键：生成 prompt 不再只看到一句 goal 和整章，
+ * 而是看到本批必须覆盖的节清单。
+ */
+function annotateBatchSections(batches, lecture, chapterMap, pages) {
+  const sections = Array.isArray(lecture && lecture.sections) ? lecture.sections : [];
+  if (!sections.length) return batches;
+  for (const batch of batches) {
+    let minPage = Infinity;
+    let maxPage = 0;
+    for (const chapterRef of batch.chapters || []) {
+      const chapter = chapterMap.get(Number(chapterRef.n));
+      if (!chapter) continue;
+      const range = pageRangeOfBatchText(chapter, batch.text, pages);
+      minPage = Math.min(minPage, range.from);
+      maxPage = Math.max(maxPage, range.to);
+    }
+    if (Number.isFinite(minPage)) {
+      batch.minPage = minPage;
+      batch.maxPage = maxPage || minPage;
+    }
+    const inRange = sections.filter(
+      (section) => Number(section.page) >= batch.minPage && Number(section.page) <= batch.maxPage,
+    );
+    const textNorm = normalizeSectionKey(batch.text);
+    const byText = sections.filter((section) => textNorm.includes(normalizeSectionKey(section.title)));
+    const merged = inRange.slice();
+    for (const section of byText) {
+      if (!merged.some((item) => item.title === section.title)) merged.push(section);
+    }
+    batch.sections = merged;
+    if (batch.index > 0) {
+      const before = sections
+        .filter((section) => Number(section.page) < batch.minPage)
+        .sort((a, b) => Number(b.page) - Number(a.page))[0];
+      if (before) batch.carrySection = before.title;
+    }
+  }
+  return batches;
+}
+
+function targetPages(lecture, totalChars, batchChars, isFirst, batchSections) {
   const total = clamp(Math.round(Number(lecture.pages) || Math.round(totalChars / 2000)), MIN_SLIDES, MAX_SLIDES);
-  const share = clamp(Math.round((total * (Number(batchChars) || 0)) / Math.max(1, Number(totalChars) || 1)), isFirst ? 2 : 1, 12);
-  return { total, share };
+  const sections = Array.isArray(lecture && lecture.sections) ? lecture.sections : [];
+  const current = Array.isArray(batchSections) ? batchSections : [];
+  let share;
+  const currentPages = current.reduce((sum, section) => sum + (Number(section.pages) || 1), 0);
+  if (sections.length && currentPages) {
+    // 节页数由讲纲分配；本批页数 = 本批小节页数之和 + 首批封面。
+    share = currentPages + (isFirst ? 1 : 0);
+  } else {
+    share = Math.round((total * (Number(batchChars) || 0)) / Math.max(1, Number(totalChars) || 1));
+  }
+  return { total, share: clamp(share, isFirst ? 2 : 1, 12) };
 }
 
 /* ------------------------------ 提示词 ------------------------------ */
@@ -229,9 +317,11 @@ function termsLine(terms) {
 export function buildLectureMessages({ book, series, lecture, batch, totalBatches, target, covered }) {
   const isFirst = batch.index === 0;
   const chapterNos = batch.chapters.map((chapter) => '第 ' + chapter.n + ' 章').join('、');
-  const chapterRange = batch.chapters.length
-    ? '第 ' + batch.chapters[0].from + '–' + batch.chapters[batch.chapters.length - 1].to + ' 页'
-    : '';
+  const chapterRange = Number(batch.minPage) > 0 && Number(batch.maxPage) >= Number(batch.minPage)
+    ? '第 ' + batch.minPage + '–' + batch.maxPage + ' 页'
+    : (batch.chapters.length
+      ? '第 ' + batch.chapters[0].from + '–' + batch.chapters[batch.chapters.length - 1].to + ' 页'
+      : '');
   const seamPrev = (series.seams || []).find((s) => Number(s.to) === Number(lecture.n));
   const seamNext = (series.seams || []).find((s) => Number(s.from) === Number(lecture.n));
   const previous = (series.lectures || [])
@@ -250,9 +340,32 @@ export function buildLectureMessages({ book, series, lecture, batch, totalBatche
   if (termsLine(series.terms)) lines.push('【术语】' + termsLine(series.terms));
   if (seamPrev && seamPrev.sentence) lines.push('【封面首句】必须逐字以这句开头：' + seamPrev.sentence);
   if (seamNext && seamNext.sentence) lines.push('【末页末句】必须逐字以这句结尾：' + seamNext.sentence);
+  const sectionLines = [];
+  if (Array.isArray(lecture.sections) && lecture.sections.length) {
+    const describeSection = (section) => {
+      const keep = Array.isArray(section.must_keep) && section.must_keep.length
+        ? '；must_keep: ' + section.must_keep.join('、')
+        : '';
+      return section.title + '（' + (Number(section.pages) || 1) + ' 页' + keep + '）';
+    };
+    sectionLines.push('【本讲页预算】' + target.total + ' 页（每节 1–5 页，按节页分配）');
+    sectionLines.push('【全讲节清单（仅用于定位，不属于本批的不要写）】' + lecture.sections.map(describeSection).join('；'));
+    if (Array.isArray(batch.sections) && batch.sections.length) {
+      sectionLines.push('【本批必须覆盖】' + batch.sections.map(describeSection).join('；'));
+    }
+    if (batch.carrySection) {
+      sectionLines.push('【承接小节】' + batch.carrySection + '（上一批可能没讲完，先用一两句话收尾，不要重复已讲内容）');
+    }
+    if (Array.isArray(batch.previousSections) && batch.previousSections.length) {
+      sectionLines.push('【已覆盖小节】' + batch.previousSections.join('；') + ' —— 不要重复讲。');
+    }
+    sectionLines.push('【本批只写】只写【本批必须覆盖】和【承接小节】；【全讲节清单】里其它小节不要写，不要输出“待续/后续再讲/本批回顾/下节预告”这类占位页。');
+    sectionLines.push('【页级字段】每个 content_text/quote 页必须给 "section": "本批某节标题"（或承接小节标题），并给 "page_role": "concept|example|formula|graph"；跨节页才用 "page_role":"bridge" + "sections":["节1","节2"]。');
+  }
   lines.push(
     '【本批覆盖】' + chapterNos + '（' + chapterRange + '）' + (batch.part ? ' · 本章第 ' + batch.part.index + '/' + batch.part.total + ' 段' : ''),
     '【本批建议页数】' + target.share + ' 页（整讲约 ' + target.total + ' 页，' + MIN_SLIDES + '–' + MAX_SLIDES + ' 页）',
+    ...sectionLines,
     '【本批原文】',
     batch.chapters.map((chapter) => '【第 ' + chapter.n + ' 章 ' + String(chapter.title || '').trim() + '】').join('\n'),
     batch.text,
@@ -306,7 +419,7 @@ function describeEmpty(reply) {
 }
 
 async function generateBatch(batch, job, context) {
-  const target = targetPages(context.lecture, context.totalChars, batch.chars, batch.index === 0);
+  const target = targetPages(context.lecture, context.totalChars, batch.chars, batch.index === 0, batch.sections);
   const messages = buildLectureMessages({
     book: context.book,
     series: context.series,
@@ -345,6 +458,8 @@ async function validateBatch(batch, slides, job, context) {
     maxPage: batch.maxPage,
     allowCover: batch.index === 0,
     requireCover: batch.index === 0,
+    allowedSections: (context.lecture.sections || []).map((section) => section.title),
+    requireSection: (context.lecture.sections || []).length > 0,
   };
   const errors = validateSlides(slides, check);
   const hard = errors.filter((error) => error.hard);
@@ -459,6 +574,288 @@ async function applySeamContract(job, context, slides) {
   return { slides: list, repairs, details };
 }
 
+/* ------------------------------ 讲后质量审计 ------------------------------ */
+
+function sectionPageRange(lecture, section, maxPage) {
+  const sections = (lecture.sections || []).slice().sort((a, b) => Number(a.page) - Number(b.page));
+  const index = sections.findIndex((item) => normalizeSectionKey(item.title) === normalizeSectionKey(section.title));
+  const from = Number(section.page) || 1;
+  const next = index >= 0 ? sections[index + 1] : null;
+  // 节可以从书签页中途开始，允许覆盖到下一节的书签页（inclusive），
+  // 避免 1.1.2/1.1.3 这种共享页被误判为冒充；真正的跨节复用仍在范围外。
+  const to = next ? Math.max(from, Number(next.page) || from) : Math.max(from, Number(maxPage) || from);
+  return { from, to };
+}
+
+/** 已知的 must_keep 同义/别名规则；用于区分“页面换了说法”与“真的没讲”。 */
+const MUST_KEEP_ALIASES = [
+  { term: '根号非负', all: ['根号', '非负'] },
+  { term: '唯一交点', any: ['只交一次', '至多一次', '唯一交点', '至多相交一次'] },
+  { term: '一一对应', any: ['一一对应', '只对应一个', '唯一输出', '最多交一次', '对应正负两个'] },
+  { term: '解出变量', any: ['解出 x', '解出 y', '解出变量'] },
+  { term: '函数复合', any: ['复合'] },
+  { term: '图像变换', any: ['变换', '平移'] },
+  { term: '对称性', any: ['对称'] },
+  { term: '交点', any: ['交点', '相交', '交一次'] },
+  { term: '原函数', any: ['原函数', '原始函数'] },
+  { term: '恒等', any: ['恒等', '等于 x', '回到原来的输入', '等于原来的输入'] },
+  { term: '纵轴', any: ['纵轴', 'y 轴', 'y轴'] },
+];
+
+function mustKeepAliasCovered(term, text) {
+  const value = normalizeSectionKey(text);
+  const rule = MUST_KEEP_ALIASES.find((item) => normalizeSectionKey(item.term) === normalizeSectionKey(term));
+  if (!rule) return false;
+  const all = (rule.all || []).every((item) => value.includes(normalizeSectionKey(item)));
+  const any = (rule.any || []).some((item) => value.includes(normalizeSectionKey(item)));
+  return rule.all ? all : any;
+}
+
+function shingleSet(text, size = 6) {
+  const value = normalizeSectionKey(text);
+  const out = new Set();
+  for (let i = 0; i + size <= value.length; i += 1) out.add(value.slice(i, i + size));
+  return out;
+}
+
+function overlapRate(a, b) {
+  if (!a.size || !b.size) return 0;
+  let hit = 0;
+  for (const item of a) if (b.has(item)) hit += 1;
+  return hit / Math.min(a.size, b.size);
+}
+
+/**
+ * 讲后软审计：不阻断生成，但把“丢节/凑页/占位/冒充/超预算/讲内重复”落进 slides.json。
+ * 验证 2.1 用它验收；后续可以按这些字段触发页级修复。
+ */
+export function auditSections(slides, lecture, maxPage) {
+  const sections = Array.isArray(lecture.sections) ? lecture.sections : [];
+  const bySection = new Map(sections.map((section) => [normalizeSectionKey(section.title), section]));
+  const textBySection = new Map();
+  const missingSections = [];
+  const missingMustKeep = [];
+  const mustKeepAliases = [];
+  const mustKeepRealMissing = [];
+  const placeholders = [];
+  const impersonations = [];
+  const summaryPages = [];
+  const bridgePages = [];
+  const normalizedPages = [];
+  const placeholderRe = /待续|后续再讲|本批回顾|下节预告|略过|本页不展开/;
+
+  slides.forEach((slide, index) => {
+    const text = [
+      slide.title,
+      ...(slide.bullet_points || []),
+      slide.quote_text || '',
+      slide.audio_script || '',
+    ].join('\n');
+    normalizedPages.push(shingleSet(text));
+    if (placeholderRe.test(text)) placeholders.push({ page: index + 1, title: slide.title });
+    if (slide.page_role === 'summary' && index !== slides.length - 1) {
+      summaryPages.push({ page: index + 1, title: slide.title });
+    }
+    if (slide.page_role === 'bridge') bridgePages.push({ page: index + 1, title: slide.title, sections: slide.sections || [] });
+    if (slide.layout === 'cover') return;
+    const section = bySection.get(normalizeSectionKey(slide.section));
+    if (!section) {
+      impersonations.push({ page: index + 1, title: slide.title, reason: 'section 不在本讲 leaf 清单', section: slide.section || '', hard: true });
+      return;
+    }
+    const range = sectionPageRange(lecture, section, maxPage);
+    const page = Number(slide.source_anchor && slide.source_anchor.page) || Number(slide.source_pages && slide.source_pages.from) || 0;
+    if (page && (page < range.from || page > range.to)) {
+      const distance = page < range.from ? range.from - page : page - range.to;
+      impersonations.push({ page: index + 1, title: slide.title, section: section.title, source_page: page, range, distance, hard: distance > 1 });
+    }
+    textBySection.set(section.title, (textBySection.get(section.title) || '') + '\n' + text);
+  });
+
+  for (const section of sections) {
+    const text = textBySection.get(section.title) || '';
+    if (!text.trim()) missingSections.push(section.title);
+    for (const keep of section.must_keep || []) {
+      if (text && normalizeSectionKey(text).includes(normalizeSectionKey(keep))) continue;
+      const item = { section: section.title, must_keep: keep };
+      missingMustKeep.push(item);
+      if (text && mustKeepAliasCovered(keep, text)) mustKeepAliases.push(item);
+      else mustKeepRealMissing.push(item);
+    }
+  }
+
+  let duplicatePages = 0;
+  for (let i = 0; i < normalizedPages.length; i += 1) {
+    for (let j = i + 1; j < normalizedPages.length; j += 1) {
+      if (overlapRate(normalizedPages[i], normalizedPages[j]) > 0.5) duplicatePages += 1;
+    }
+  }
+
+  // 4-lite 软密度指标：只报告，不参与 content_ok。
+  const contentSlides = slides.filter((slide) => slide.layout !== 'cover');
+  const audioShortPages = [];
+  const bulletShortPages = [];
+  const quoteShortPages = [];
+  const thinPages = [];
+  let contentChars = 0;
+  let audioChars = 0;
+  slides.forEach((slide, index) => {
+    const bullets = (slide.bullet_points || []).join('');
+    const pageChars = String(slide.title || '').length + bullets.length
+      + String(slide.quote_text || '').length + String(slide.quote_source || '').length
+      + String(slide.audio_script || '').length;
+    contentChars += pageChars;
+    audioChars += String(slide.audio_script || '').length;
+    if (slide.layout === 'cover') return;
+    if (String(slide.audio_script || '').length < 160) audioShortPages.push(index + 1);
+    if (slide.layout === 'content_text') {
+      const list = slide.bullet_points || [];
+      if (list.length < 4 || list.some((bullet) => String(bullet).length < 25)) bulletShortPages.push(index + 1);
+    }
+    if (slide.layout === 'quote' && String(slide.quote_text || '').length < 80) quoteShortPages.push(index + 1);
+    if (pageChars < 220) thinPages.push(index + 1);
+  });
+  const density = {
+    content_chars: contentChars,
+    content_pages: contentSlides.length,
+    avg_content_chars: Math.round(contentChars / Math.max(1, contentSlides.length)),
+    avg_audio_chars: Math.round(audioChars / Math.max(1, contentSlides.length)),
+    audio_short_pages: audioShortPages,
+    bullet_short_pages: bulletShortPages,
+    quote_short_pages: quoteShortPages,
+    thin_pages: thinPages,
+    density_ok: audioShortPages.length === 0
+      && bulletShortPages.length === 0
+      && quoteShortPages.length === 0
+      && thinPages.length === 0,
+  };
+
+  const plannedPages = Number(lecture.pages) || 0;
+  const hardImpersonations = impersonations.filter((item) => item.hard !== false);
+  // 页数超预算只报告、不参与 content_ok（用户明确：19→24 不做强制修复）。
+  const contentOk = missingSections.length === 0
+    && mustKeepRealMissing.length === 0
+    && placeholders.length === 0
+    && hardImpersonations.length === 0
+    && summaryPages.length === 0
+    && duplicatePages === 0;
+  const quality = {
+    planned_pages: plannedPages,
+    actual_pages: slides.length,
+    page_count_ok: plannedPages > 0 ? Math.abs(slides.length - plannedPages) <= 2 : true,
+    over_budget: plannedPages > 0 && slides.length > plannedPages + 2,
+    content_ok: contentOk,
+    missing_sections: missingSections,
+    missing_must_keep: missingMustKeep,
+    must_keep_aliases: mustKeepAliases,
+    must_keep_real_missing: mustKeepRealMissing,
+    placeholders,
+    impersonations,
+    hard_impersonations: hardImpersonations,
+    summary_pages: summaryPages,
+    bridge_pages: bridgePages,
+    duplicate_pairs: duplicatePages,
+    density,
+    density_ok: density.density_ok,
+    ok: contentOk,
+  };
+  return quality;
+}
+
+/**
+ * 质量修复（确定性，不调模型）：
+ * - 只处理“硬冒充/占位/错位 summary”；
+ * - 仅当同一 section 还有其它有效页时才删除该页，避免把一节删空；
+ * - 不按计划页数删正常页（用户明确：19→24 不做强制修复）。
+ */
+function repairQualityPages(slides, lecture, maxPage) {
+  const initial = auditSections(slides, lecture, maxPage);
+  const drop = new Set();
+  const badPages = [
+    ...(initial.hard_impersonations || []),
+    ...(initial.placeholders || []),
+    ...(initial.summary_pages || []),
+  ];
+  const flagged = new Set(badPages.map((item) => Number(item.page)));
+  for (const issue of badPages) {
+    const index = Number(issue.page) - 1;
+    if (index <= 0 || index >= slides.length - 1) continue;
+    const sectionKey = normalizeSectionKey(issue.section || (slides[index] && slides[index].section));
+    let otherValid = 0;
+    slides.forEach((slide, i) => {
+      if (i === index || i === 0 || i === slides.length - 1) return;
+      if (normalizeSectionKey(slide.section) !== sectionKey) return;
+      if (flagged.has(i + 1)) return;
+      otherValid += 1;
+    });
+    if (otherValid > 0) drop.add(index);
+  }
+  if (!drop.size) return { slides, dropped: [] };
+  const kept = slides
+    .filter((_, index) => !drop.has(index))
+    .map((slide, index) => Object.assign({}, slide, { slide_index: index + 1 }));
+  return { slides: kept, dropped: Array.from(drop).sort((a, b) => a - b).map((index) => index + 1) };
+}
+
+/**
+ * 定点补 must_keep（确定性）：只改该 section 的一页，不增页、不改 section。
+ * 优先把原文里包含该 must_keep 的短句加到 bullet；bullet 满/句子长时加到 audio。
+ */
+export function repairMissingMustKeep(slides, lecture, chapterMap, pages, maxPage) {
+  const before = auditSections(slides, lecture, maxPage);
+  const real = before.must_keep_real_missing || [];
+  if (!real.length) return { slides, repaired: [] };
+  const working = slides.map((slide) => Object.assign({}, slide, {
+    bullet_points: [...(slide.bullet_points || [])],
+    sections: [...(slide.sections || [])],
+  }));
+  const repaired = [];
+  for (const item of real) {
+    const section = (lecture.sections || []).find(
+      (entry) => normalizeSectionKey(entry.title) === normalizeSectionKey(item.section),
+    );
+    if (!section) continue;
+    const target = working.find(
+      (slide) => slide.layout === 'content_text'
+        && normalizeSectionKey(slide.section) === normalizeSectionKey(item.section),
+    );
+    if (!target) continue;
+    const range = sectionPageRange(lecture, section, maxPage);
+    const source = (Array.isArray(pages) ? pages : [])
+      .filter((page) => Number(page.page) >= range.from && Number(page.page) <= range.to)
+      .map((page) => String(page.text || ''))
+      .join('\n');
+    let sentence = '';
+    for (const part of source.split(/[。！？\n]/)) {
+      const value = part.trim();
+      // 跳过“1.2.4 反函数的反函数”这类标题行，优先取正文句。
+      if (/^\d+(?:\.\d+)+\s/.test(value)) continue;
+      if (value && value.includes(item.must_keep) && value.length <= 60) {
+        sentence = value;
+        break;
+      }
+    }
+    if (!sentence) sentence = item.must_keep;
+    if (target.bullet_points.length < 5 && sentence.length <= 40) {
+      target.bullet_points.push(sentence);
+    } else {
+      const extra = (target.audio_script || '').endsWith('。') ? sentence + '。' : '。' + sentence + '。';
+      if (String(target.audio_script || '').length + extra.length <= 220) {
+        target.audio_script = String(target.audio_script || '') + extra;
+      } else if (target.bullet_points.length < 5) {
+        target.bullet_points.push(sentence.slice(0, 40));
+      } else {
+        continue;
+      }
+    }
+    repaired.push({ section: item.section, must_keep: item.must_keep, page: target.slide_index, sentence });
+  }
+  return {
+    slides: working.map((slide, index) => Object.assign({}, slide, { slide_index: index + 1 })),
+    repaired,
+  };
+}
+
 /* ------------------------------ 讲级生成 ------------------------------ */
 
 function checkpointFile(dir, n, index) {
@@ -494,6 +891,7 @@ function lectureKeyOf(series, lecture, model) {
       goal: lecture.goal,
       in: lecture.in,
       out: lecture.out,
+      sections: (lecture.sections || []).map((section) => [section.title, section.pages, section.must_keep || []]),
     }),
     String((model && model.provider) || ''),
     String((model && model.model) || ''),
@@ -554,11 +952,12 @@ async function generateLecture(job, context, planLecture) {
     stages: stage,
   };
   writeLectureMeta(dir, n, meta);
-  patchSeriesLecture(series, n, { status: 'queued', code: null, error: null });
+  patchSeriesLecture(series, n, { status: 'queued', code: null, error: null, quality_summary: null });
   persistSeries(series);
 
   try {
     const batches = planLectureBatches(planLecture, chapterMap);
+    annotateBatchSections(batches, planLecture, chapterMap, pages);
     const totalChars = batches.reduce((sum, batch) => sum + batch.chars, 0);
     const lectureText = batches.map((batch) => batch.text).join('\n\n');
     const usedChapters = (planLecture.chapters || [])
@@ -588,18 +987,34 @@ async function generateLecture(job, context, planLecture) {
     job.total = pageTarget;
     job.message = '第 ' + n + ' 讲 · 正在改写原文';
 
+    // 批检查点必须绑定“这一讲的讲纲契约”：只靠原文 + prompt 版本的话，
+    // 改了 goal/throughline/terms 后旧批仍会命中，新讲纲永远进不了已生成的页。
+    const contract = JSON.stringify({
+      goal: planLecture.goal || '',
+      in: planLecture.in || '',
+      out: planLecture.out || '',
+      throughline: series.throughline || '',
+      terms: series.terms || [],
+      sections: (planLecture.sections || []).map((section) => [section.title, section.pages, section.must_keep || []]),
+    });
+
     const results = [];
+    const previousSections = [];
     for (let index = 0; index < batches.length; index += 1) {
       assertActive(job);
       job.current = Math.min(pageTarget, Math.round(((index + 1) / batches.length) * pageTarget));
       job.total = pageTarget;
+      batches[index].previousSections = previousSections.slice();
       const hash = sha256(
-        [LECTURE_PROMPT_VERSION, context.model.provider, context.model.model, n, batches[index].text].join('|'),
+        [LECTURE_PROMPT_VERSION, context.model.provider, context.model.model, n, contract, batches[index].text].join('|'),
       );
       const cached = readCheckpoint(dir, n, index, hash);
       if (cached) {
         const normalized = cached.map((slide, at) => normalizeSlide(slide, at));
         results.push(normalized);
+        for (const section of batches[index].sections || []) {
+          if (!previousSections.includes(section.title)) previousSections.push(section.title);
+        }
         rememberPreviousBatch(batches, index, normalized);
         job.message = '第 ' + n + ' 讲 · 复用已完成第 ' + (index + 1) + '/' + batches.length + ' 批';
         continue;
@@ -608,6 +1023,9 @@ async function generateLecture(job, context, planLecture) {
       const checked = await validateBatch(batches[index], generated, job, shared);
       writeCheckpoint(dir, n, index, hash, checked);
       results.push(checked);
+      for (const section of batches[index].sections || []) {
+        if (!previousSections.includes(section.title)) previousSections.push(section.title);
+      }
       rememberPreviousBatch(batches, index, checked);
       job.message = '第 ' + n + ' 讲 · 已改写第 ' + (index + 1) + '/' + batches.length + ' 批';
     }
@@ -667,11 +1085,21 @@ async function generateLecture(job, context, planLecture) {
       }
     }
 
-    /* 预缝：只修边界页 */
+    /* 质量修复：只删“同节还有有效页”的硬冒充/占位页，不按计划页数删正常页 */
     job.stage = 'anchor';
+    job.message = '第 ' + n + ' 讲 · 正在修复冒充/占位页';
+    const repaired = repairQualityPages(anchored.slides, planLecture, maxPage);
+    const mustKeepRepair = repairMissingMustKeep(repaired.slides, planLecture, chapterMap, pages, maxPage);
+
+    /* 预缝：只修边界页 */
     job.message = '第 ' + n + ' 讲 · 正在写接缝句';
-    const seams = await applySeamContract(job, shared, anchored.slides);
+    const seams = await applySeamContract(job, shared, mustKeepRepair.slides);
     slides = seams.slides;
+    const quality = auditSections(slides, planLecture, maxPage);
+    quality.repair = {
+      dropped_pages: repaired.dropped,
+      repaired_must_keep: mustKeepRepair.repaired,
+    };
 
     assertActive(job);
     const finishedAt = nowIso();
@@ -701,6 +1129,7 @@ async function generateLecture(job, context, planLecture) {
       provider: model.provider,
       prompt_version: LECTURE_PROMPT_VERSION,
       anchor_hit_rate: anchored.hitRate,
+      quality,
       slides: withAudio,
     };
     meta = Object.assign({}, meta, {
@@ -708,6 +1137,7 @@ async function generateLecture(job, context, planLecture) {
       chars: Number(planLecture.chars) || totalChars,
       status: 'ready',
       anchor_hit_rate: anchored.hitRate,
+      quality,
       seam_repairs: seams.repairs,
       seam_repair_details: seams.details,
       finished_at: finishedAt,
@@ -719,6 +1149,13 @@ async function generateLecture(job, context, planLecture) {
       pages: slides.length,
       chars: meta.chars,
       lecture_id: meta.lecture_id,
+      quality_summary: {
+        content_ok: quality.content_ok === true,
+        density_ok: quality.density_ok === true,
+        over_budget: quality.over_budget === true,
+        planned_pages: Number(quality.planned_pages) || 0,
+        actual_pages: Number(quality.actual_pages) || 0,
+      },
       code: null,
       error: null,
     });
@@ -732,10 +1169,12 @@ async function generateLecture(job, context, planLecture) {
     const status = cancelled ? 'cancelled' : 'failed';
     const code = cancelled ? 'E_CANCELLED' : (err && err.code) || 'E_GENERATE';
     const message = cancelled ? '已取消' : String((err && err.message) || err);
+    const detail = cancelled ? '' : String((err && err.hint) || '');
     const failed = Object.assign({}, meta, {
       status,
       code,
       error: message,
+      error_detail: detail,
       message,
       finished_at: nowIso(),
       stages: stage,
@@ -747,7 +1186,7 @@ async function generateLecture(job, context, planLecture) {
     } catch {
       /* ignore */
     }
-    patchSeriesLecture(series, n, { status, code, error: message });
+    patchSeriesLecture(series, n, { status, code, error: message, error_detail: detail, quality_summary: null });
     persistSeries(series);
     throw err;
   }

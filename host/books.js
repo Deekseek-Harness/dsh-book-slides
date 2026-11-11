@@ -311,6 +311,19 @@ export function writeChapters(bookId, chapters, source, confidence, warnings, bo
   return chapters;
 }
 
+/** 只刷新书签树/根层，不改 chapters.json 与 chapterSource。 */
+export function writeBookmark(bookId, tree, rootDepth, source = '') {
+  const loaded = loadBook(bookId);
+  if (!loaded) return null;
+  const book = loaded.book;
+  book.bookmarkTree = Array.isArray(tree) ? tree : null;
+  book.bookmarkRootDepth = Number.isInteger(rootDepth) ? rootDepth : null;
+  book.bookmarkUpdatedAt = new Date().toISOString();
+  if (source) book.bookmarkSource = String(source);
+  writeJson(path.join(loaded.dir, 'book.json'), book);
+  return book;
+}
+
 export function writeCover(bookId, svg, meta) {
   const loaded = loadBook(bookId);
   if (!loaded) return null;

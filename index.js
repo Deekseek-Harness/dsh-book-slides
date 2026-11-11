@@ -64,6 +64,7 @@ export const ROUTE_LECTURE = ROUTE_PREFIX + '/lecture';
 export const ROUTE_BRIEFS = ROUTE_PREFIX + '/briefs';
 export const ROUTE_BOOKS = ROUTE_PREFIX + '/books';
 export const ROUTE_BOOK = ROUTE_PREFIX + '/book';
+export const ROUTE_BOOK_OUTLINE_REFRESH = ROUTE_PREFIX + '/book/outline/refresh';
 export const ROUTE_IMPORT = ROUTE_PREFIX + '/import';
 export const ROUTE_RENAME = ROUTE_PREFIX + '/rename';
 export const ROUTE_FILE = ROUTE_PREFIX + '/file';
@@ -374,6 +375,7 @@ export function apply(ctx) {
     route(ROUTE_BRIEFS, routeV2);
 
     route(ROUTE_BOOK, routeV2);
+    route(ROUTE_BOOK_OUTLINE_REFRESH, routeV2);
 
     route(ROUTE_IMPORT, routeV2);
 
