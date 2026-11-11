@@ -223,6 +223,8 @@ function normalizeSectionKey(text) {
   return String(text || '')
     .replace(/\s+/g, '')
     .replace(/[−–—－]/g, '-')
+    .replace(/[;；]/g, ',')
+    .replace(/[，]/g, ',')
     .replace(/[.．、]/g, '.')
     .toLowerCase();
 }
@@ -657,6 +659,8 @@ export function auditSections(slides, lecture, maxPage, aliases = null) {
     }
     if (slide.page_role === 'bridge') bridgePages.push({ page: index + 1, title: slide.title, sections: slide.sections || [] });
     if (slide.layout === 'cover') return;
+    // 无书签/无 leaf 的整章回退：没有“清单”可对照，不能把所有页都判成硬冒充。
+    if (!sections.length) return;
     const section = bySection.get(normalizeSectionKey(slide.section));
     if (!section) {
       impersonations.push({ page: index + 1, title: slide.title, reason: 'section 不在本讲 leaf 清单', section: slide.section || '', hard: true });

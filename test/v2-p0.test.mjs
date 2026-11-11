@@ -180,6 +180,49 @@ test('3.1：同一页多个 must_keep 不会被后一次补讲覆盖', async () 
   assert.equal(out.repaired.length, 2);
 });
 
+test('3.1：无 leaf 的整章回退不把所有页判成硬冒充', () => {
+  const lecture = { sections: [] };
+  const slides = [{
+    slide_index: 1,
+    layout: 'content_text',
+    title: '整章回退',
+    bullet_points: ['正文一', '正文二', '正文三', '正文四'],
+    audio_script: '口播。',
+    section: '第 1 章 全文',
+  }];
+  const q = auditSections(slides, lecture, 20);
+  assert.deepEqual(q.hard_impersonations, []);
+  assert.deepEqual(q.missing_sections, []);
+  assert.equal(q.content_ok, true);
+});
+
+test('3.1：节标题分号/逗号差异不造成误报', () => {
+  const lecture = {
+    sections: [{
+      title: '2.2.2　[0; 2π] 以外的三角函数',
+      page: 6,
+      pages: 1,
+      must_keep: ['周期性', '同终边角', '化简', '加减周期'],
+    }],
+  };
+  const slides = [{
+    slide_index: 1,
+    layout: 'content_text',
+    title: '转到圈外的角',
+    bullet_points: [
+      '反复加减 2π 的倍数就能拉回来。',
+      '转一整圈再转 90 度，和直接转 90 度落在同一条射线上。',
+      '负六分之五π加上二π就退回已会算的范围。',
+      '这就是周期性。',
+    ],
+    audio_script: '等价角；化简；加减周期。',
+    section: '2.2.2 [0, 2π] 以外的三角函数',
+  }];
+  const q = auditSections(slides, lecture, 20);
+  assert.deepEqual(q.hard_impersonations, []);
+  assert.deepEqual(q.must_keep_real_missing, []);
+});
+
 test.after(() => {
   fs.rmSync(ROOT, { recursive: true, force: true });
 });
