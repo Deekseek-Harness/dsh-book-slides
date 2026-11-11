@@ -4578,6 +4578,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 'div',
                 { style: { marginTop: 8 } },
                 line('页数', '计划 ' + (q.planned_pages || 0) + ' / 实际 ' + (q.actual_pages || 0) + (q.over_budget ? '（超预算，仅 warning）' : '')),
+                q.plan_pages_stale
+                  ? h('div', { className: 'blm-note warn' }, '计划页数可能已被旧版实际页数覆盖；请在系列卡点「计划页数需重规划」重建讲纲。')
+                  : null,
                 line('内容', q.content_ok ? '通过' : '待核对'),
                 line('密度', q.density_ok ? '达标' : '偏低（软目标）'),
                 q.content_ok === false && (q.must_keep_real_missing || []).length
@@ -4635,6 +4638,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const qualityWarnings = lectures.filter((lec) => lec.quality_summary
         && (lec.quality_summary.content_ok === false || lec.quality_summary.density_ok === false));
       const overBudgetCount = lectures.filter((lec) => lec.quality_summary && lec.quality_summary.over_budget).length;
+      const pagesStale = lectures.filter((lec) => lec.plan_pages_stale || (lec.quality_summary && lec.quality_summary.plan_pages_stale));
       const snapshotVersion = seriesSnapshotVersion(series, part);
       const voicePending = playable.filter((lec) => String(lec.voice_status || 'none') !== 'ready');
       const voiceAllReady = playable.length > 0 && voicePending.length === 0;
@@ -4706,12 +4710,39 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         setQualityState({ n: lec.n, loading: true, error: '', quality: null });
         try {
           const out = await api('/lecture?seriesId=' + encodeURIComponent(series.id) + '&n=' + encodeURIComponent(lec.n));
-          const quality = (out && out.slides && out.slides.quality)
-            || (out && out.lecture && out.lecture.quality)
-            || {};
+          const quality = Object.assign(
+            {},
+            (out && out.slides && out.slides.quality) || (out && out.lecture && out.lecture.quality) || {},
+            {
+              plan_pages_stale: lec.plan_pages_stale === true
+                || (lec.quality_summary && lec.quality_summary.plan_pages_stale === true),
+            },
+          );
           setQualityState({ n: lec.n, loading: false, error: '', quality });
         } catch (err) {
           setQualityState({ n: lec.n, loading: false, error: String((err && err.message) || err), quality: null });
+        }
+      };
+      const replan = async () => {
+        const ok = await confirmAction(
+          '重规划会重建讲纲与计划页数；已生成的讲义保留，但需要重新生成才会采用新讲纲。',
+          { title: '重规划', okText: '重规划' },
+        );
+        if (!ok) return;
+        setBusy(true);
+        try {
+          const out = await api('/series/plan', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, force: true }),
+          });
+          if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || '重规划失败');
+          notify('已重规划，请重新生成讲义');
+          await onReload();
+        } catch (err) {
+          notify(err.message || String(err));
+        } finally {
+          setBusy(false);
         }
       };
       const runImages = async () => {
@@ -5240,6 +5271,14 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           overBudgetCount
             ? h('span', { className: 'blm-badge warn', title: '计划/实际页数差，不自动压页' }, '超预算 ' + overBudgetCount + ' 讲')
             : null,
+          pagesStale.length
+            ? h('button', {
+                className: 'blm-badge warn',
+                style: { cursor: 'pointer' },
+                title: '旧系列的计划页数可能已被实际页数覆盖；重规划可恢复',
+                onClick: replan,
+              }, '计划页数需重规划 ' + pagesStale.length + ' 讲')
+            : null,
           snapshotVersion
             ? h('span', {
                 className: 'blm-badge warn',
@@ -5312,6 +5351,14 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                     : null,
                   lec.quality_summary && lec.quality_summary.over_budget
                     ? h('span', { className: 'blm-badge warn', title: '计划/实际页数差；不自动压页' }, '超预算')
+                    : null,
+                  lec.plan_pages_stale || (lec.quality_summary && lec.quality_summary.plan_pages_stale)
+                    ? h('button', {
+                        className: 'blm-badge warn',
+                        style: { cursor: 'pointer' },
+                        title: '计划页数可能已被实际页数覆盖；点击重规划',
+                        onClick: replan,
+                      }, '计划待重规划')
                     : null,
                   ['failed', 'partial'].includes(String(lec.voice_status || ''))
                     ? h(

@@ -833,26 +833,37 @@ function withQualitySummaries(series, dir) {
     lectures: list.map((lecture) => {
       const summary = lecture && lecture.quality_summary ? lecture.quality_summary : null;
       if (summary) {
-        const planned = Number(lecture.planned_pages) || Number(summary.planned_pages) || Number(lecture.pages) || 0;
+        const pages = Number(lecture.pages) || 0;
+        const planned = Number(lecture.planned_pages) || Number(summary.planned_pages) || pages;
         const actual = Number(lecture.actual_pages) || Number(summary.actual_pages) || 0;
-        return Object.assign({}, lecture, { planned_pages: planned, actual_pages: actual, quality_summary: summary });
+        const stale = pages > 0 && planned > 0 && actual > 0 && pages !== planned;
+        return Object.assign({}, lecture, {
+          planned_pages: planned,
+          actual_pages: actual,
+          plan_pages_stale: stale,
+          quality_summary: Object.assign({}, summary, { planned_pages: planned, actual_pages: actual, plan_pages_stale: stale }),
+        });
       }
       const doc = loadLecture(dir, lecture.n);
       const quality = (doc && doc.lecture && doc.lecture.quality)
         || (doc && doc.slidesDoc && doc.slidesDoc.quality)
         || null;
       if (!quality) return lecture;
-      const planned = Number(quality.planned_pages) || Number(lecture.pages) || 0;
-      const actual = Number(quality.actual_pages) || Number(lecture.pages) || 0;
+      const pages = Number(lecture.pages) || 0;
+      const planned = Number(quality.planned_pages) || pages;
+      const actual = Number(quality.actual_pages) || pages;
+      const stale = pages > 0 && planned > 0 && actual > 0 && pages !== planned;
       return Object.assign({}, lecture, {
         planned_pages: planned,
         actual_pages: actual,
+        plan_pages_stale: stale,
         quality_summary: {
           content_ok: quality.content_ok === true,
           density_ok: quality.density_ok === true,
           over_budget: quality.over_budget === true,
           planned_pages: planned,
           actual_pages: actual,
+          plan_pages_stale: stale,
         },
       });
     }),
