@@ -127,6 +127,59 @@ test('3.1：无模型时 must_keep 补讲回退原文短句', async () => {
   assert.deepEqual(after.must_keep_real_missing, []);
 });
 
+test('3.1：Unicode 减号/全角空格不影响节匹配，quote_source 参与 must_keep 审计', () => {
+  const lecture = {
+    sections: [
+      { title: '3.4　在∞和-∞处的极限', page: 6, pages: 1, must_keep: ['水平渐近线'] },
+      { title: '3.7　极限的基本类型小结', page: 10, pages: 1, must_keep: ['小结'] },
+    ],
+  };
+  const slides = [
+    {
+      slide_index: 1,
+      layout: 'content_text',
+      title: '走向无穷',
+      bullet_points: ['这两种极限各对应一条水平渐近线。'],
+      audio_script: '口播。',
+      section: '3.4 在∞和−∞处的极限',
+      source_pages: { from: 6, to: 6 },
+    },
+    {
+      slide_index: 2,
+      layout: 'quote',
+      title: '把各种基本类型收进一幅图',
+      quote_text: '原文。',
+      quote_source: '第 3 章 3.7 极限的基本类型小结',
+      audio_script: '口播。',
+      section: '3.7　极限的基本类型小结',
+      source_pages: { from: 10, to: 10 },
+    },
+  ];
+  const q = auditSections(slides, lecture, 20);
+  assert.deepEqual(q.hard_impersonations, []);
+  assert.deepEqual(q.must_keep_real_missing, []);
+});
+
+test('3.1：同一页多个 must_keep 不会被后一次补讲覆盖', async () => {
+  const lecture = {
+    sections: [{ title: '1.1', page: 1, pages: 1, must_keep: ['甲', '乙'] }],
+  };
+  const slides = [{
+    slide_index: 1,
+    layout: 'content_text',
+    title: '测试页',
+    bullet_points: ['原要点'],
+    audio_script: '原口播。',
+    section: '1.1',
+    source_pages: { from: 1, to: 1 },
+  }];
+  const out = await repairMissingMustKeep(slides, lecture, new Map(), [{ page: 1, text: '甲和乙都在原文。' }], 1);
+  const joined = (out.slides[0].bullet_points || []).join('\n') + '\n' + out.slides[0].audio_script;
+  assert.match(joined, /甲/);
+  assert.match(joined, /乙/);
+  assert.equal(out.repaired.length, 2);
+});
+
 test.after(() => {
   fs.rmSync(ROOT, { recursive: true, force: true });
 });

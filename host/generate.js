@@ -222,6 +222,7 @@ function splitLongTextLike(text, limit) {
 function normalizeSectionKey(text) {
   return String(text || '')
     .replace(/\s+/g, '')
+    .replace(/[−–—－]/g, '-')
     .replace(/[.．、]/g, '.')
     .toLowerCase();
 }
@@ -643,8 +644,10 @@ export function auditSections(slides, lecture, maxPage, aliases = null) {
   slides.forEach((slide, index) => {
     const text = [
       slide.title,
+      slide.subtitle || '',
       ...(slide.bullet_points || []),
       slide.quote_text || '',
+      slide.quote_source || '',
       slide.audio_script || '',
     ].join('\n');
     normalizedPages.push(shingleSet(text));
@@ -793,9 +796,10 @@ function repairQualityPages(slides, lecture, maxPage) {
   return { slides: kept, dropped: Array.from(drop).sort((a, b) => a - b).map((index) => index + 1) };
 }
 
-async function rewriteMustKeepPage(job, context, target, section, source, mustKeep) {
+async function rewriteMustKeepPage(job, context, target, section, source, mustKeeps) {
   const system = mustKeepRepairPrompt();
   if (!system) throw new Error('缺少 must_keep 修复提示词');
+  const keeps = Array.isArray(mustKeeps) ? mustKeeps.filter(Boolean) : [mustKeeps].filter(Boolean);
   const user = JSON.stringify({
     page: {
       title: target.title,
@@ -805,7 +809,7 @@ async function rewriteMustKeepPage(job, context, target, section, source, mustKe
       section: target.section,
       source_pages: target.source_pages,
     },
-    must_keep: [mustKeep],
+    must_keep: keeps,
     section_title: section.title,
     source: String(source || '').slice(0, 4000),
   });
@@ -818,7 +822,8 @@ async function rewriteMustKeepPage(job, context, target, section, source, mustKe
   const audio = String(data.audio_script || '').trim();
   if (!audio || audio.length > AUDIO_MAX) throw new Error('补讲口播为空或超长');
   const joined = bullets.join('\n') + '\n' + audio;
-  if (!joined.includes(mustKeep)) throw new Error('补讲没有覆盖 must_keep：' + mustKeep);
+  const missing = keeps.filter((keep) => !joined.includes(keep));
+  if (missing.length) throw new Error('补讲没有覆盖 must_keep：' + missing.join('、'));
   return { bullet_points: bullets, audio_script: audio };
 }
 
@@ -834,7 +839,8 @@ export async function repairMissingMustKeep(slides, lecture, chapterMap, pages, 
     bullet_points: [...(slide.bullet_points || [])],
     sections: [...(slide.sections || [])],
   }));
-  const repaired = [];
+  // 同一页可能缺多个 must_keep：按页分组一次处理，避免后一次模型改写覆盖前一次补讲。
+  const groups = new Map();
   for (const item of real) {
     const section = (lecture.sections || []).find(
       (entry) => normalizeSectionKey(entry.title) === normalizeSectionKey(item.section),
@@ -845,11 +851,22 @@ export async function repairMissingMustKeep(slides, lecture, chapterMap, pages, 
         && normalizeSectionKey(slide.section) === normalizeSectionKey(item.section),
     );
     if (!target) continue;
-    const range = sectionPageRange(lecture, section, maxPage);
-    const source = (Array.isArray(pages) ? pages : [])
-      .filter((page) => Number(page.page) >= range.from && Number(page.page) <= range.to)
-      .map((page) => String(page.text || ''))
-      .join('\n');
+    const key = target.slide_index + '|' + normalizeSectionKey(section.title);
+    if (!groups.has(key)) {
+      const range = sectionPageRange(lecture, section, maxPage);
+      const source = (Array.isArray(pages) ? pages : [])
+        .filter((page) => Number(page.page) >= range.from && Number(page.page) <= range.to)
+        .map((page) => String(page.text || ''))
+        .join('\n');
+      groups.set(key, { section, target, source, items: [] });
+    }
+    groups.get(key).items.push(item);
+  }
+
+  const repaired = [];
+  for (const group of groups.values()) {
+    const { section, target, source } = group;
+    const keeps = group.items.map((item) => item.must_keep);
     if (options.job && options.context && options.context.ctx) {
       try {
         const rewritten = await rewriteMustKeepPage(
@@ -858,45 +875,49 @@ export async function repairMissingMustKeep(slides, lecture, chapterMap, pages, 
           target,
           section,
           source,
-          item.must_keep,
+          keeps,
         );
         target.bullet_points = rewritten.bullet_points;
         target.audio_script = rewritten.audio_script;
-        repaired.push({
-          section: item.section,
-          must_keep: item.must_keep,
-          page: target.slide_index,
-          mode: 'model',
-        });
+        for (const item of group.items) {
+          repaired.push({
+            section: item.section,
+            must_keep: item.must_keep,
+            page: target.slide_index,
+            mode: 'model',
+          });
+        }
         continue;
       } catch {
         /* 模型改写失败时走确定性原文补讲 */
       }
     }
-    let sentence = '';
-    for (const part of source.split(/[。！？\n]/)) {
-      const value = part.trim();
-      // 跳过“1.2.4 反函数的反函数”这类标题行，优先取正文句。
-      if (/^\d+(?:\.\d+)+\s/.test(value)) continue;
-      if (value && value.includes(item.must_keep) && value.length <= 60) {
-        sentence = value;
-        break;
+    for (const item of group.items) {
+      let sentence = '';
+      for (const part of source.split(/[。！？\n]/)) {
+        const value = part.trim();
+        // 跳过“1.2.4 反函数的反函数”这类标题行，优先取正文句。
+        if (/^\d+(?:\.\d+)+\s/.test(value)) continue;
+        if (value && value.includes(item.must_keep) && value.length <= 60) {
+          sentence = value;
+          break;
+        }
       }
-    }
-    if (!sentence) sentence = item.must_keep;
-    if (target.bullet_points.length < 5 && sentence.length <= 40) {
-      target.bullet_points.push(sentence);
-    } else {
-      const extra = (target.audio_script || '').endsWith('。') ? sentence + '。' : '。' + sentence + '。';
-      if (String(target.audio_script || '').length + extra.length <= 220) {
-        target.audio_script = String(target.audio_script || '') + extra;
-      } else if (target.bullet_points.length < 5) {
-        target.bullet_points.push(sentence.slice(0, 40));
+      if (!sentence) sentence = item.must_keep;
+      if (target.bullet_points.length < 5 && sentence.length <= 40) {
+        target.bullet_points.push(sentence);
       } else {
-        continue;
+        const extra = (target.audio_script || '').endsWith('。') ? sentence + '。' : '。' + sentence + '。';
+        if (String(target.audio_script || '').length + extra.length <= 220) {
+          target.audio_script = String(target.audio_script || '') + extra;
+        } else if (target.bullet_points.length < 5) {
+          target.bullet_points.push(sentence.slice(0, 40));
+        } else {
+          continue;
+        }
       }
+      repaired.push({ section: item.section, must_keep: item.must_keep, page: target.slide_index, sentence });
     }
-    repaired.push({ section: item.section, must_keep: item.must_keep, page: target.slide_index, sentence });
   }
   return {
     slides: working.map((slide, index) => Object.assign({}, slide, { slide_index: index + 1 })),

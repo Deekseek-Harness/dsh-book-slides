@@ -43,6 +43,7 @@ import {
   deleteSeries,
   findSeries,
   listSeries,
+  patchSeriesLecture,
   persistSeries,
   savePlan,
   seriesDir,
@@ -64,6 +65,7 @@ import {
 } from './usage.js';
 import { estimateUsage } from './usage-estimate.js';
 import {
+  auditSections,
   cancelSeriesJob,
   getSeriesJob,
   isSeriesJobActive,
@@ -72,7 +74,7 @@ import {
   startSeriesJob,
 } from './generate.js';
 import { buildStitchReport, repairStitch, writeStitchReport } from './stitch.js';
-import { loadLecture } from './lectures.js';
+import { loadLecture, writeLectureOutputs } from './lectures.js';
 import { readPreference, writePreference } from './prefs.js';
 import { progressSummary, readProgress, saveProgress } from './progress.js';
 import { readView, saveView } from './view.js';
@@ -881,6 +883,51 @@ function withQualitySummaries(series, dir) {
     // total_pages 以实际页数为准；旧系列可能停在计划值，不能用它压过 actual。
     total_pages: actualTotal || Number(series.total_pages) || 0,
   });
+}
+
+async function handleLectureQualityRecheck(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 64 * 1024);
+  const found = findSeries(String(body.seriesId || ''));
+  if (!found) {
+    sendError(res, 'E_NOT_FOUND', '找不到这个系列', '');
+    return;
+  }
+  const n = Number(body.n);
+  const planLecture = (found.series.lectures || []).find((item) => Number(item.n) === n);
+  if (!planLecture) {
+    sendError(res, 'E_NOT_FOUND', '找不到这一讲', '');
+    return;
+  }
+  const doc = loadLecture(found.dir, n);
+  if (!doc || !doc.slidesDoc || !Array.isArray(doc.slidesDoc.slides)) {
+    sendError(res, 'E_LECTURE_EMPTY', '这一讲还没有生成内容', '先生成讲义再做质量核对。');
+    return;
+  }
+  const loaded = loadBook(found.series.book_id);
+  const chapters = (loaded && loaded.chapters ? loaded.chapters : []).filter((chapter) =>
+    (found.series.chapters || []).includes(Number(chapter.n)),
+  );
+  const maxPage = chapters.length
+    ? Math.max(...chapters.map((chapter) => Number(chapter.to) || 1))
+    : doc.slidesDoc.slides.length;
+  const quality = auditSections(doc.slidesDoc.slides, planLecture, maxPage);
+  quality.repair = (doc.slidesDoc.quality && doc.slidesDoc.quality.repair) || {};
+  quality.rechecked_at = new Date().toISOString();
+  doc.slidesDoc.quality = quality;
+  doc.lecture.quality = quality;
+  writeLectureOutputs(found.dir, n, doc.lecture, doc.slidesDoc);
+  patchSeriesLecture(found.series, n, {
+    quality_summary: {
+      content_ok: quality.content_ok === true,
+      density_ok: quality.density_ok === true,
+      over_budget: quality.over_budget === true,
+      planned_pages: Number(quality.planned_pages) || 0,
+      actual_pages: Number(quality.actual_pages) || 0,
+    },
+  });
+  persistSeries(found.series);
+  sendJson(res, 200, { ok: true, quality, series: found.series });
 }
 
 function handleSeriesGet(req, res, url) {
@@ -2272,6 +2319,14 @@ async function routeM1Inner(req, res, url, options = {}) {
   }
   if (pathname === PREFIX + '/series/stitch/repair') {
     await handleSeriesStitchRepair(req, res, options);
+    return true;
+  }
+  if (pathname === PREFIX + '/lecture/quality/recheck') {
+    if (req.method === 'POST') {
+      await handleLectureQualityRecheck(req, res);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '用 POST 重新审计。');
     return true;
   }
   if (pathname === PREFIX + '/lecture') {

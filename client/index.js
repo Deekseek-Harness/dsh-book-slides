@@ -4550,7 +4550,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
     }
 
 
-    function QualityPanel({ state, onClose }) {
+    function QualityPanel({ state, onClose, onRecheck, onRegenerate }) {
       if (!state) return null;
       const q = state.quality || {};
       const density = q.density || {};
@@ -4570,6 +4570,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             { className: 'blm-row' },
             h('strong', null, '质量与密度 · 第 ' + state.n + ' 讲'),
             h('div', { style: { flex: 1 } }),
+            onRecheck ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onRecheck }, '重新审计') : null,
+            onRegenerate ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onRegenerate }, '重新生成本讲') : null,
             h('button', { className: 'blm-btn', onClick: onClose }, '关闭'),
           ),
           state.loading ? h('div', { className: 'blm-dim', style: { marginTop: 10 } }, '加载中…') : null,
@@ -4582,10 +4584,10 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 q.plan_pages_stale
                   ? h('div', { className: 'blm-note warn' }, '计划页数可能已被旧版实际页数覆盖；请在系列卡点「计划页数需重规划」重建讲纲。')
                   : null,
-                line('内容', q.content_ok ? '通过' : '待核对'),
+                line('内容', q.content_ok ? '自动审计通过' : '自动审计未通过'),
                 line('密度', q.density_ok ? '达标' : '偏低（软目标）'),
                 q.content_ok === false && (q.must_keep_real_missing || []).length
-                  ? line('真实缺失', list(q.must_keep_real_missing, (item) => (item.section || '') + ' · ' + item.must_keep))
+                  ? line('自动未覆盖', list(q.must_keep_real_missing, (item) => (item.section || '') + ' · ' + item.must_keep))
                   : null,
                 (q.must_keep_aliases || []).length
                   ? line('别名覆盖', list(q.must_keep_aliases, (item) => (item.section || '') + ' · ' + item.must_keep))
@@ -4608,7 +4610,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 (q.repair && ((q.repair.dropped_pages || []).length || (q.repair.repaired_must_keep || []).length))
                   ? line('修复记录', '删页 ' + ((q.repair.dropped_pages || []).join('、') || '无') + '；补讲 ' + ((q.repair.repaired_must_keep || []).map((item) => item.must_keep).join('、') || '无'))
                   : null,
-                h('div', { className: 'blm-dim', style: { marginTop: 8, fontSize: 11 } }, '质量/密度只作审查提示，不阻断播放；不会自动压回计划页数。'),
+                h('div', { className: 'blm-note', style: { marginTop: 8 } },
+                  '“自动未覆盖”是机器审计，不是人工结论：同义说法请加到设置→must_keep 别名，确实没讲请重新生成本讲；重新审计通过后 content_ok 才会变 true。'),
+                h('div', { className: 'blm-dim', style: { marginTop: 6, fontSize: 11 } }, '质量/密度只作审查提示，不阻断播放；不会自动压回计划页数。'),
               )
             : null,
         ),
@@ -4749,6 +4753,24 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           notify(err.message || String(err));
         } finally {
           setBusy(false);
+        }
+      };
+      const recheckQuality = async () => {
+        if (!qualityState || !qualityState.n) return;
+        const n = qualityState.n;
+        setQualityState(Object.assign({}, qualityState, { loading: true, error: '' }));
+        try {
+          const out = await api('/lecture/quality/recheck', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ seriesId: series.id, n }),
+          });
+          if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || '重新审计失败');
+          setQualityState({ n, loading: false, error: '', quality: out.quality || {}, sections: qualityState.sections || [] });
+          notify(out.quality && out.quality.content_ok ? '重新审计通过' : '重新审计完成，仍有待处理项');
+          await onReload();
+        } catch (err) {
+          setQualityState(Object.assign({}, qualityState, { loading: false, error: err.message || String(err) }));
         }
       };
       const runImages = async () => {
@@ -5273,7 +5295,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 style: { cursor: 'pointer' },
                 title: '点击查看质量与密度明细',
                 onClick: () => openQuality(qualityWarnings[0]),
-              }, '质量待核对 ' + qualityWarnings.length + ' 讲')
+              }, '内容告警 ' + qualityWarnings.length + ' 讲')
             : null,
           overBudgetCount
             ? h('span', { className: 'blm-badge warn', title: '计划/实际页数差，不自动压页' }, '超预算 ' + overBudgetCount + ' 讲')
@@ -5352,9 +5374,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                     ? h('button', {
                         className: 'blm-badge warn',
                         style: { cursor: 'pointer' },
-                        title: '内容/密度待核对',
+                        title: '内容/密度告警；点击查看自动审计明细',
                         onClick: () => openQuality(lec),
-                      }, lec.quality_summary.content_ok === false ? '内容待核对' : '密度偏低')
+                      }, lec.quality_summary.content_ok === false ? '内容告警' : '密度偏低')
                     : null,
                   lec.quality_summary && lec.quality_summary.over_budget
                     ? h('span', { className: 'blm-badge warn', title: '计划/实际页数差；不自动压页' }, '超预算')
@@ -5442,7 +5464,18 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           : null,
         practiceOpen ? h(PracticePanel, { series, notify, onClose: () => setPracticeOpen(false) }) : null,
         exportOpen ? h(ExportDialog, { series, notify, onClose: () => setExportOpen(false) }) : null,
-        qualityState ? h(QualityPanel, { state: qualityState, onClose: () => setQualityState(null) }) : null,
+        qualityState
+          ? h(QualityPanel, {
+              state: qualityState,
+              onClose: () => setQualityState(null),
+              onRecheck: recheckQuality,
+              onRegenerate: () => {
+                const n = qualityState.n;
+                setQualityState(null);
+                retry(n);
+              },
+            })
+          : null,
       );
     }
 

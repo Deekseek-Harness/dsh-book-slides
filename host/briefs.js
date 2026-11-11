@@ -39,6 +39,7 @@ function promptText() {
 function normalizeSection(text) {
   return String(text || '')
     .replace(/\s+/g, '')
+    .replace(/[−–—－]/g, '-')
     .replace(/[.．、]/g, '.')
     .toLowerCase();
 }

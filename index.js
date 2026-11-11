@@ -61,6 +61,7 @@ export const ROUTE_SERIES_CANCEL = ROUTE_PREFIX + '/series/cancel';
 export const ROUTE_SERIES_STITCH = ROUTE_PREFIX + '/series/stitch';
 export const ROUTE_SERIES_STITCH_REPAIR = ROUTE_PREFIX + '/series/stitch/repair';
 export const ROUTE_LECTURE = ROUTE_PREFIX + '/lecture';
+export const ROUTE_LECTURE_QUALITY_RECHECK = ROUTE_PREFIX + '/lecture/quality/recheck';
 export const ROUTE_BRIEFS = ROUTE_PREFIX + '/briefs';
 export const ROUTE_BOOKS = ROUTE_PREFIX + '/books';
 export const ROUTE_BOOK = ROUTE_PREFIX + '/book';
@@ -373,6 +374,7 @@ export function apply(ctx) {
     route(ROUTE_SERIES_STITCH, routeV2);
     route(ROUTE_SERIES_STITCH_REPAIR, routeV2);
     route(ROUTE_LECTURE, routeV2);
+    route(ROUTE_LECTURE_QUALITY_RECHECK, routeV2);
     route(ROUTE_BRIEFS, routeV2);
 
     route(ROUTE_BOOK, routeV2);
