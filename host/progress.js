@@ -31,11 +31,14 @@ function lectureList(series) {
 
 function pagesOf(series, n) {
   const hit = lectureList(series).find((item) => Number(item.n) === Number(n));
-  return hit ? Number(hit.pages) || 0 : 0;
+  return hit ? Number(hit.actual_pages) || Number(hit.pages) || 0 : 0;
 }
 
 export function totalPagesOf(series) {
-  return lectureList(series).reduce((sum, item) => sum + (Number(item.pages) || 0), 0);
+  return lectureList(series).reduce(
+    (sum, item) => sum + (Number(item.actual_pages) || Number(item.pages) || 0),
+    0,
+  );
 }
 
 /** 已听页数 = 各讲 heard 之和；没有 heard 时退回 0。 */
@@ -43,7 +46,7 @@ export function heardPagesOf(series, progress) {
   const heard = (progress && progress.heard) || {};
   let sum = 0;
   for (const item of lectureList(series)) {
-    const pages = Number(item.pages) || 0;
+    const pages = Number(item.actual_pages) || Number(item.pages) || 0;
     const value = Math.max(0, Math.min(pages, Number(heard[item.n]) || 0));
     sum += value;
   }

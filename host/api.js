@@ -831,19 +831,28 @@ function withQualitySummaries(series, dir) {
   const list = Array.isArray(series && series.lectures) ? series.lectures : [];
   return Object.assign({}, series, {
     lectures: list.map((lecture) => {
-      if (lecture && lecture.quality_summary) return lecture;
+      const summary = lecture && lecture.quality_summary ? lecture.quality_summary : null;
+      if (summary) {
+        const planned = Number(lecture.planned_pages) || Number(summary.planned_pages) || Number(lecture.pages) || 0;
+        const actual = Number(lecture.actual_pages) || Number(summary.actual_pages) || 0;
+        return Object.assign({}, lecture, { planned_pages: planned, actual_pages: actual, quality_summary: summary });
+      }
       const doc = loadLecture(dir, lecture.n);
       const quality = (doc && doc.lecture && doc.lecture.quality)
         || (doc && doc.slidesDoc && doc.slidesDoc.quality)
         || null;
       if (!quality) return lecture;
+      const planned = Number(quality.planned_pages) || Number(lecture.pages) || 0;
+      const actual = Number(quality.actual_pages) || Number(lecture.pages) || 0;
       return Object.assign({}, lecture, {
+        planned_pages: planned,
+        actual_pages: actual,
         quality_summary: {
           content_ok: quality.content_ok === true,
           density_ok: quality.density_ok === true,
           over_budget: quality.over_budget === true,
-          planned_pages: Number(quality.planned_pages) || 0,
-          actual_pages: Number(quality.actual_pages) || 0,
+          planned_pages: planned,
+          actual_pages: actual,
         },
       });
     }),

@@ -730,7 +730,7 @@ export function auditSections(slides, lecture, maxPage) {
       && thinPages.length === 0,
   };
 
-  const plannedPages = Number(lecture.pages) || 0;
+  const plannedPages = Number(lecture.planned_pages) || Number(lecture.pages) || 0;
   const hardImpersonations = impersonations.filter((item) => item.hard !== false);
   // 页数超预算只报告、不参与 content_ok（用户明确：19→24 不做强制修复）。
   const contentOk = missingSections.length === 0
@@ -886,7 +886,7 @@ function lectureKeyOf(series, lecture, model) {
     JSON.stringify({
       chapters: lecture.chapters,
       slice: lecture.slice || null,
-      pages: lecture.pages,
+      pages: Number(lecture.planned_pages) || Number(lecture.pages),
       title: lecture.title,
       goal: lecture.goal,
       in: lecture.in,
@@ -931,6 +931,7 @@ async function generateLecture(job, context, planLecture) {
   const { series, dir, chapterMap, pages, model } = context;
   const n = Number(planLecture.n);
   const key = lectureKeyOf(series, planLecture, model);
+  const plannedPages = Number(planLecture.planned_pages) || Number(planLecture.pages) || MIN_SLIDES;
   const startedAt = nowIso();
   const stage = { structuring: false, validate: false, anchor: false };
   let meta = {
@@ -940,7 +941,9 @@ async function generateLecture(job, context, planLecture) {
     lecture_id: series.id + '-' + n,
     title: String(planLecture.title || '第 ' + n + ' 讲'),
     chapters: (planLecture.chapters || []).map(Number),
-    pages: Number(planLecture.pages) || MIN_SLIDES,
+    pages: plannedPages,
+    planned_pages: plannedPages,
+    actual_pages: null,
     chars: Number(planLecture.chars) || 0,
     status: 'queued',
     key,
@@ -952,7 +955,15 @@ async function generateLecture(job, context, planLecture) {
     stages: stage,
   };
   writeLectureMeta(dir, n, meta);
-  patchSeriesLecture(series, n, { status: 'queued', code: null, error: null, quality_summary: null });
+  patchSeriesLecture(series, n, {
+    status: 'queued',
+    code: null,
+    error: null,
+    pages: plannedPages,
+    planned_pages: plannedPages,
+    actual_pages: null,
+    quality_summary: null,
+  });
   persistSeries(series);
 
   try {
@@ -965,7 +976,7 @@ async function generateLecture(job, context, planLecture) {
       .filter(Boolean);
     const minPage = usedChapters.length ? Math.min(...usedChapters.map((chapter) => Number(chapter.from) || 1)) : 1;
     const maxPage = usedChapters.length ? Math.max(...usedChapters.map((chapter) => Number(chapter.to) || pages.length)) : pages.length;
-    const pageTarget = clamp(Number(planLecture.pages) || MIN_SLIDES, MIN_SLIDES, MAX_SLIDES);
+    const pageTarget = clamp(plannedPages, MIN_SLIDES, MAX_SLIDES);
 
     const shared = Object.assign({}, context, {
       lecture: planLecture,
@@ -1125,6 +1136,8 @@ async function generateLecture(job, context, planLecture) {
       seam_prev: seamPrev,
       seam_next: seamNext,
       generated_at: finishedAt,
+      planned_pages: plannedPages,
+      actual_pages: slides.length,
       model: model.model,
       provider: model.provider,
       prompt_version: LECTURE_PROMPT_VERSION,
@@ -1134,6 +1147,8 @@ async function generateLecture(job, context, planLecture) {
     };
     meta = Object.assign({}, meta, {
       pages: slides.length,
+      planned_pages: plannedPages,
+      actual_pages: slides.length,
       chars: Number(planLecture.chars) || totalChars,
       status: 'ready',
       anchor_hit_rate: anchored.hitRate,
@@ -1146,7 +1161,9 @@ async function generateLecture(job, context, planLecture) {
     writeLectureOutputs(dir, n, meta, slidesDoc);
     patchSeriesLecture(series, n, {
       status: 'ready',
-      pages: slides.length,
+      pages: plannedPages,
+      planned_pages: plannedPages,
+      actual_pages: slides.length,
       chars: meta.chars,
       lecture_id: meta.lecture_id,
       quality_summary: {
@@ -1186,7 +1203,16 @@ async function generateLecture(job, context, planLecture) {
     } catch {
       /* ignore */
     }
-    patchSeriesLecture(series, n, { status, code, error: message, error_detail: detail, quality_summary: null });
+    patchSeriesLecture(series, n, {
+      status,
+      code,
+      error: message,
+      error_detail: detail,
+      pages: plannedPages,
+      planned_pages: plannedPages,
+      actual_pages: null,
+      quality_summary: null,
+    });
     persistSeries(series);
     throw err;
   }
@@ -1320,7 +1346,14 @@ async function runSeriesJob(job, context) {
     const ready = (series.lectures || []).filter(isReady).length;
     const total = (series.lectures || []).length;
     series.status = ready === total ? 'ready' : ready > 0 ? 'partial' : 'failed';
-    series.total_pages = (series.lectures || []).reduce((sum, item) => sum + (Number(item.pages) || 0), 0);
+    series.total_pages = (series.lectures || []).reduce(
+      (sum, item) => sum + (Number(item.actual_pages) || Number(item.pages) || 0),
+      0,
+    );
+    series.planned_total_pages = (series.lectures || []).reduce(
+      (sum, item) => sum + (Number(item.planned_pages) || Number(item.pages) || 0),
+      0,
+    );
     series.est_minutes = series.total_pages;
     series.failures = failures;
     series.finished_at = nowIso();
@@ -1405,7 +1438,14 @@ export function startSeriesJob({ found, nums = null, force = false, ctx = null }
       writeStitchReport(found, report, { persist: false });
       series.stitch = report.state;
       series.status = 'ready';
-      series.total_pages = (series.lectures || []).reduce((sum, item) => sum + (Number(item.pages) || 0), 0);
+      series.total_pages = (series.lectures || []).reduce(
+        (sum, item) => sum + (Number(item.actual_pages) || Number(item.pages) || 0),
+        0,
+      );
+      series.planned_total_pages = (series.lectures || []).reduce(
+        (sum, item) => sum + (Number(item.planned_pages) || Number(item.pages) || 0),
+        0,
+      );
       series.est_minutes = series.total_pages;
       series.finished_at = series.finished_at || nowIso();
       series.failures = [];

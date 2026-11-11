@@ -2222,7 +2222,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             { className: 'blm-drawer-body' },
             lectures.map((item) => {
               const ready = READY_LECTURE.includes(String(item.status));
-              const pages = Number(item.pages) || 0;
+              const pages = Number(item.actual_pages) || Number(item.pages) || 0;
               const done = Math.max(0, Math.min(pages, Number(heard[item.n]) || 0));
               return h(
                 'button',
@@ -4641,7 +4641,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const voiceStarted = ['ready', 'partial', 'failed'].includes(String(series.voice_status || ''));
       const voiceState = voiceAllReady ? 'ready' : voiceStarted ? 'partial' : 'none';
       const voiceFailedLectures = playable.filter((lec) => ['failed', 'partial'].includes(String(lec.voice_status || '')));
-      const voicePages = playable.reduce((sum, lec) => sum + (Number(lec.pages) || 0), 0) || Number(series.total_pages) || 0;
+      const voicePages = playable.reduce((sum, lec) => sum + (Number(lec.actual_pages) || Number(lec.pages) || 0), 0) || Number(series.total_pages) || 0;
       const voiceLabel = voiceState === 'ready' ? '重新配音' : voiceState === 'partial' ? '补配音' : '生成配音';
       const voiceText = (() => {
         const status = String(series.voice_status || 'none');
@@ -5291,9 +5291,11 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
               { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
               lectures.map((lec) => {
                 const jobLec = isActive && job && Number(job.lecture) === Number(lec.n);
+                const actualPages = Number(lec.actual_pages) || Number(lec.pages) || 0;
+                const plannedPages = Number(lec.planned_pages) || Number(lec.pages) || 0;
                 const text = jobLec
                   ? '第 ' + (job.current || 0) + '/' + (job.total || 0) + ' 页'
-                  : (lec.pages || 0) + ' 页 · ' + (lec.chars || 0) + ' 字';
+                  : actualPages + ' 页' + (plannedPages && plannedPages !== actualPages ? '（计划 ' + plannedPages + '）' : '') + ' · ' + (lec.chars || 0) + ' 字';
                 return h(
                   'div',
                   { className: 'blm-series-lec', key: lec.n },

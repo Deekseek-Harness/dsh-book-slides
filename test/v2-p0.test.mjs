@@ -14,6 +14,7 @@ delete process.env.DSH_HOME;
 const { createBook, loadBook, writeBookmark, writeChapters } = await import('../host/books.js');
 const { refreshBookmarkTree } = await import('../host/chapters.js');
 const { lectureKeyOf } = await import('../host/generate.js');
+const { totalPagesOf } = await import('../host/progress.js');
 
 function makeBook() {
   const rawPages = [];
@@ -74,6 +75,23 @@ test('P0：sections/must_keep 变化会换 lectureKey', () => {
   }), { provider: 'p', model: 'm' });
   assert.notEqual(key1, key2);
   assert.notEqual(key1, key3);
+  // 实际页数变化不应换讲纲键（计划页数才是契约）。
+  const key4 = lectureKeyOf(series, Object.assign({}, base, {
+    pages: 12,
+    planned_pages: 10,
+    actual_pages: 12,
+  }), { provider: 'p', model: 'm' });
+  assert.equal(key1, key4);
+});
+
+test('P0：进度/系列总页数按实际页数，计划页数不覆盖实际', () => {
+  const series = {
+    lectures: [
+      { n: 1, pages: 10, planned_pages: 10, actual_pages: 12 },
+      { n: 2, pages: 20, planned_pages: 20, actual_pages: 18 },
+    ],
+  };
+  assert.equal(totalPagesOf(series), 30);
 });
 
 test.after(() => {

@@ -24,7 +24,8 @@
 
 - `host/generate.js`：生成完成后把 `quality_summary` 写回 `series.lectures[]`；重跑/失败时清空旧质量摘要。
 - `host/api.js`：`GET /series`（单系列/列表）按 `lecture.json.quality` 回填 `quality_summary`；`v2-p0` 覆盖书签刷新/缓存键。
-- `package.json`：`test:v2` 纳入 `test/v2-p0.test.mjs`。
+- **planned/actual 分离（FR-13.4）**：`series.lectures[].pages` 保留计划值，新增 `actual_pages`；`lecture.json.pages` 保持实际值，新增 `planned_pages`/`actual_pages`；`series.total_pages` 按实际、`planned_total_pages` 按计划；进度/目录/导出/配音页数用实际，讲缓存键用计划。
+- `package.json`：`test:v2` 纳入 `test/v2-p0.test.mjs`（书签刷新、缓存键、planned/actual）。
 
 ## [2.6.0] - 2026-11-11
 

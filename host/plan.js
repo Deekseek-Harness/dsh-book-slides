@@ -255,6 +255,7 @@ function attachSectionPlan(plan, chapters, book) {
       6,
       30,
     );
+    lecture.planned_pages = lecture.pages;
   }
   if (plan) {
     plan.totalPages = (plan.lectures || []).reduce((sum, lecture) => sum + (Number(lecture.pages) || 0), 0);
@@ -638,6 +639,7 @@ async function allocateSectionPages({ ctx, book, plan, briefs }) {
           const checked = validateSectionAllocation(readJsonBlock(reply.text), sections, min, max);
           allocated = checked.sections;
           lecture.pages = checked.total_pages;
+          lecture.planned_pages = checked.total_pages;
           lecture.section_source = 'model';
           break;
         } catch (err) {
@@ -649,6 +651,7 @@ async function allocateSectionPages({ ctx, book, plan, briefs }) {
       const fallback = fallbackSectionPages(sections, target);
       lecture.sections = fallback;
       lecture.pages = clamp(1 + fallback.reduce((sum, section) => sum + section.pages, 0), 6, 30);
+      lecture.planned_pages = lecture.pages;
       lecture.section_source = 'rule';
     } else {
       lecture.sections = allocated;

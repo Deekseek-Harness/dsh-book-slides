@@ -102,7 +102,10 @@ function planFields(plan) {
     total_pages: Number(plan.totalPages) || 0,
     est_minutes: Number(plan.estMinutes) || 0,
     lectures: (Array.isArray(plan.lectures) ? plan.lectures : []).map((item) =>
-      Object.assign({ status: 'draft' }, item),
+      Object.assign({ status: 'draft' }, item, {
+        planned_pages: Number(item.planned_pages) || Number(item.pages) || 0,
+        actual_pages: item.actual_pages != null ? Number(item.actual_pages) : null,
+      }),
     ),
     seams: plan.seams || [],
     terms: plan.terms || [],
