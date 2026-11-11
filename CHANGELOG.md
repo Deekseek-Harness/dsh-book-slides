@@ -3,6 +3,15 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
+## [Unreleased]
+
+### 文档
+
+- 新增 `doc/requirements/规范需求3.0.md`：以 2.x SRS v1.29 为基线，有机融合“信息密度/结构修复”。新增 leaf 节树、预算内自主分页、页级 `section`/`page_role`、短 `must_keep`、硬/软冒充、`content_ok`/`density_ok` 审计、书签刷新（`POST /book/outline/refresh`）、缓存键、质量面板、节级预览、allocator prompt 契约；AC 覆盖到 AC-191。
+- 新增 `doc/requirements/信息密度偏移验证/`：验证 1 / 2 / 2.1 / 2.2 / 2.3 / 2.3b / 4-lite 的报告、指标与产物归档。
+- 更新 `doc/requirements/README.md` 3.0 索引，标注 2.0 为历史基线、3.0 为单文档融合。
+- 3.0 目标包版本仍为待发布 `3.0.0`，数据 schema 仍为 `2`；本次只提交文档，不发布包、不升版本。
+
 ## [2.6.0] - 2026-11-11
 
 **用量历史时间筛选与「其他」分组折叠**。功能增量；接口契约、数据文件与 schema 均无变更；无迁移。

@@ -1,0 +1,78 @@
+{
+  "source": {
+    "chars": 21069,
+    "raw_chars": 21585,
+    "pages": 20,
+    "leaf_sections": 11
+  },
+  "plan": {
+    "section_source": "model",
+    "planned_pages": 19,
+    "cover": 1,
+    "budget": { "min": 17, "max": 22, "target": 19 },
+    "sections": [
+      { "title": "1.1.1　区间表示法", "pages": 1, "must_keep": ["闭区间 [a,b]", "开区间 (a,b)", "半开区间", "无界区间"] },
+      { "title": "1.1.2　求定义域", "pages": 2, "must_keep": ["分母不能为零", "偶次根号下非负", "对数真数为正", "多项式定义域为全体实数", "分段函数定义域"] },
+      { "title": "1.1.3　利用图像求值域", "pages": 1, "must_keep": ["向 y 轴投影", "值域与定义域的区别", "图像的最高点与最低点"] },
+      { "title": "1.1.4　垂线检验", "pages": 1, "must_keep": ["垂线检验", "一个 x 只对应一个 y", "圆不满足垂线检验"] },
+      { "title": "1.2.1　水平线检验", "pages": 1, "must_keep": ["水平线检验", "反函数存在的条件", "一一对应"] },
+      { "title": "1.2.2　求反函数", "pages": 2, "must_keep": ["交换 x 与 y", "解出 y", "反函数记法 f⁻¹", "定义域与值域互换"] },
+      { "title": "1.2.3　限制定义域", "pages": 1, "must_keep": ["限制定义域使水平线检验通过", "反函数的反函数", "开平方取正根"] },
+      { "title": "1.3　函数的复合", "pages": 2, "must_keep": ["复合函数 f(g(x))", "复合顺序不可交换", "复合函数的定义域", "平移"] },
+      { "title": "1.4　奇函数和偶函数", "pages": 2, "must_keep": ["偶函数 f(-x)=f(x)", "奇函数 f(-x)=-f(-x)", "关于 y 轴对称", "关于原点对称", "x² 与 x³ 的图象"] },
+      { "title": "1.5　线性函数的图像", "pages": 2, "must_keep": ["斜率", "点斜式", "斜截式", "平移", "水平线与垂直线"] },
+      { "title": "1.6　常见函数及其图像", "pages": 3, "must_keep": ["多项式与二次函数（抛物线）", "有理函数", "指数函数", "对数函数", "绝对值函数"] }
+    ]
+  },
+  "actual": {
+    "slides": 24,
+    "new_content_chars": 3951,
+    "max_content_chars": 10316,
+    "utilization_pct": 38.3,
+    "rho_full_net": 4.34,
+    "rho_full_raw": 5.46,
+    "rho_stitch": 7.5,
+    "source_pages_covered": 18,
+    "source_pages_missing": 2,
+    "cover": 1,
+    "section_pages": {
+      "cover": 1,
+      "1.1.1 区间表示法": 1,
+      "1.1.2 求定义域": 2,
+      "1.1.3 利用图像求值域": 1,
+      "1.1.4 垂线检验": 1,
+      "1.2.1 水平线检验": 1,
+      "1.2.2 求反函数": 4,
+      "1.2.3 限制定义域": 2,
+      "1.3 函数的复合": 2,
+      "1.4 奇函数和偶函数": 2,
+      "1.5 线性函数的图像": 4,
+      "1.6 常见函数及其图像": 3
+    }
+  },
+  "quality_audit_v1": {
+    "planned_pages": 19,
+    "actual_pages": 24,
+    "page_count_ok": false,
+    "over_budget": true,
+    "missing_sections": [],
+    "missing_must_keep_count": 16,
+    "placeholders": [],
+    "summary_pages": [],
+    "bridge_pages": [],
+    "duplicate_pairs": 0,
+    "impersonations_flagged": 7,
+    "impersonations_note": "1.1.2/1.1.3 的 3 条是共享页边界的误报（审计 v1 用 next.page-1）；修复为 inclusive next.page 后剩余 4 条：1.5 两页真实复用 1.3 的平移内容（source p33），1.2.2/1.2.3 两页使用 1.2 导语 p29。",
+    "must_keep_note": "strict substring 漏报 16 条；其中「奇函数 f(-x)=-f(-x)」是 allocator 笔误，「多项式定义域为全体实数」「分段函数定义域」不在本章原文；其余多为长句/公式，生成页用了同义表达。must_keep 需要短关键词化 + 宽松匹配。"
+  },
+  "keywords": {
+    "区间": 12,
+    "求定义域": 3,
+    "分母": 5,
+    "有理": 4,
+    "指数": 5,
+    "对数": 6,
+    "平移": 8,
+    "反函数的反函数": 3
+  }
+}

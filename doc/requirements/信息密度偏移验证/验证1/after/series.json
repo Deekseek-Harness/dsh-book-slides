@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "id": "g91nwrt7el",
+  "book_id": "ak5ywpl4x5q4",
+  "part_id": "gioosetlwv",
+  "part_version": 1,
+  "title": "第1章　函数、图像和直线",
+  "chapters": [
+    11
+  ],
+  "chars": 21069,
+  "status": "ready",
+  "stitch": "verified",
+  "plan_version": 5,
+  "idempotency_key": "d4b8b37bdb60abeccfc80ff928a43f0f0b9ae660981d8e9209ff96ca3a2b7905",
+  "created_at": "2026-11-10T17:42:32.458Z",
+  "updated_at": "2026-11-10T19:26:58.538Z",
+  "throughline": "从函数定义域与图像出发，串联反函数、复合、奇偶性、线性函数及常见函数图像。",
+  "plan_source": "model",
+  "stitched": true,
+  "total_chars": 21069,
+  "total_pages": 11,
+  "est_minutes": 11,
+  "lectures": [
+    {
+      "status": "ready",
+      "n": 1,
+      "chapters": [
+        11
+      ],
+      "title": "第 1 讲　函数、图像与直线：从定义域到常见函数图像",
+      "goal": "系统复习函数的概念、定义域与值域、图像检验，并掌握反函数、函数复合、奇偶性、线性函数与常见函数图像。",
+      "in": "已具备实数、区间与平面直角坐标系的基础。",
+      "out": "能求函数定义域与值域，用检验法判断函数与反函数，求反函数并处理限制定义域，进行函数复合，识别奇偶性与线性函数，并描绘常见函数图像。",
+      "chars": 21069,
+      "pages": 11,
+      "code": null,
+      "error": null,
+      "lecture_id": "g91nwrt7el-1"
+    }
+  ],
+  "seams": [],
+  "terms": [
+    {
+      "name": "定义域",
+      "forbid": [
+        "定义范围",
+        "domain"
+      ]
+    },
+    {
+      "name": "上域",
+      "forbid": [
+        "陪域",
+        "目标域"
+      ]
+    },
+    {
+      "name": "值域",
+      "forbid": [
+        "取值范围",
+        "range"
+      ]
+    },
+    {
+      "name": "垂线检验",
+      "forbid": [
+        "垂直线检验",
+        "竖线检验"
+      ]
+    },
+    {
+      "name": "反函数",
+      "forbid": [
+        "逆函数",
+        "倒数函数"
+      ]
+    },
+    {
+      "name": "水平线检验",
+      "forbid": [
+        "水平线测试",
+        "横线检验"
+      ]
+    },
+    {
+      "name": "限制定义域",
+      "forbid": [
+        "限制域",
+        "缩小定义域"
+      ]
+    },
+    {
+      "name": "函数的复合",
+      "forbid": [
+        "函数组合",
+        "复合运算"
+      ]
+    },
+    {
+      "name": "奇函数",
+      "forbid": [
+        "奇性函数"
+      ]
+    },
+    {
+      "name": "偶函数",
+      "forbid": [
+        "偶性函数"
+      ]
+    },
+    {
+      "name": "线性函数",
+      "forbid": [
+        "一次函数"
+      ]
+    },
+    {
+      "name": "点斜式",
+      "forbid": [
+        "点斜方程"
+      ]
+    },
+    {
+      "name": "两点式",
+      "forbid": [
+        "两点方程"
+      ]
+    }
+  ],
+  "cut_notes": [
+    "本章内容量适中，压缩为一讲；三角函数图像按原书安排留待下一章。"
+  ],
+  "started_at": "2026-11-10T17:42:45.838Z",
+  "model": "deepseek-flash",
+  "prompt_version": "lec-v1",
+  "failures": [],
+  "images": {
+    "provider": "comfyui",
+    "total": 7,
+    "done": 7,
+    "failed": 0,
+    "status": "done",
+    "code": null,
+    "error": null,
+    "updatedAt": "2026-11-10T17:52:32.742Z"
+  },
+  "finished_at": "2026-11-10T19:20:39.196Z"
+}

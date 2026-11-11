@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "series_id": "g91nwrt7el",
+  "n": 1,
+  "lecture_id": "g91nwrt7el-1",
+  "title": "第 1 讲 函数、图像和直线",
+  "chapters": [
+    11
+  ],
+  "pages": 23,
+  "chars": 21069,
+  "status": "ready",
+  "key": "d52b9e69476ca56a7a820d86e52cddb30e47fc21e1e5510ab90836742a83e10e",
+  "model": "deepseek-flash",
+  "provider": "deepseek-official",
+  "prompt_version": "lec-v2-sections-b",
+  "started_at": "2026-11-10T19:45:14.893Z",
+  "finished_at": "2026-11-10T19:48:06.648Z",
+  "stages": {
+    "structuring": true,
+    "validate": true,
+    "anchor": true
+  },
+  "anchor_hit_rate": 0.9565217391304348,
+  "seam_repairs": 0,
+  "seam_repair_details": []
+}

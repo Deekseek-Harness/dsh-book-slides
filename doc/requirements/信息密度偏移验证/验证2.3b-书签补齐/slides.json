@@ -1,0 +1,849 @@
+{
+  "schema_version": 1,
+  "product_version": "2.0",
+  "series_id": "g91nwrt7el",
+  "book_id": "ak5ywpl4x5q4",
+  "lecture": 1,
+  "title": "第1讲 函数、图像和直线：从定义域到常见函数图像",
+  "chapters": [
+    11
+  ],
+  "throughline": "本章以函数、图像和直线为轴，复习定义域与值域、反函数、复合、奇偶性、线性函数及常见函数图像，为后续学习奠定函数与图像语言基础。",
+  "seam_prev": null,
+  "seam_next": null,
+  "generated_at": "2026-11-10T21:25:52.131Z",
+  "model": "deepseek-flash",
+  "provider": "deepseek-official",
+  "prompt_version": "lec-v2-sections-d",
+  "anchor_hit_rate": 0.9583333333333334,
+  "quality": {
+    "planned_pages": 19,
+    "actual_pages": 22,
+    "page_count_ok": false,
+    "over_budget": true,
+    "content_ok": true,
+    "missing_sections": [],
+    "missing_must_keep": [
+      {
+        "section": "1.1.4　垂线检验",
+        "must_keep": "交点"
+      },
+      {
+        "section": "1.2.4　反函数的反函数",
+        "must_keep": "恒等"
+      },
+      {
+        "section": "1.2.4　反函数的反函数",
+        "must_keep": "原函数"
+      },
+      {
+        "section": "1.3　函数的复合",
+        "must_keep": "函数复合"
+      },
+      {
+        "section": "1.4　奇函数和偶函数",
+        "must_keep": "纵轴"
+      }
+    ],
+    "must_keep_aliases": [
+      {
+        "section": "1.1.4　垂线检验",
+        "must_keep": "交点"
+      },
+      {
+        "section": "1.2.4　反函数的反函数",
+        "must_keep": "恒等"
+      },
+      {
+        "section": "1.2.4　反函数的反函数",
+        "must_keep": "原函数"
+      },
+      {
+        "section": "1.3　函数的复合",
+        "must_keep": "函数复合"
+      },
+      {
+        "section": "1.4　奇函数和偶函数",
+        "must_keep": "纵轴"
+      }
+    ],
+    "must_keep_real_missing": [],
+    "placeholders": [],
+    "impersonations": [
+      {
+        "page": 10,
+        "title": "限制定义域",
+        "section": "1.2.3　限制定义域",
+        "source_page": 29,
+        "range": {
+          "from": 30,
+          "to": 31
+        },
+        "distance": 1,
+        "hard": false
+      }
+    ],
+    "hard_impersonations": [],
+    "summary_pages": [],
+    "bridge_pages": [],
+    "duplicate_pairs": 0,
+    "ok": true,
+    "repair": {
+      "dropped_pages": [
+        18,
+        19
+      ],
+      "repaired_must_keep": [
+        {
+          "section": "1.2.1　水平线检验",
+          "must_keep": "交点",
+          "page": 7,
+          "sentence": "像仅有一次相交, 且交点为点 (x, y). 那个 x 就是我们想要的. 如果水平线和曲线"
+        },
+        {
+          "section": "1.3　函数的复合",
+          "must_keep": "定义域",
+          "page": 15,
+          "sentence": "这里的问题在于, −2 没有在 g 的限制定义域当中. 而且, 从技术角度而言, 你甚至"
+        }
+      ]
+    }
+  },
+  "slides": [
+    {
+      "slide_index": 1,
+      "layout": "cover",
+      "title": "函数、图像和直线",
+      "subtitle": "从定义域到常见函数图像",
+      "section": "",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条平滑曲线穿过坐标轴，背景是淡淡的网格与晨光",
+      "audio_script": "这一讲我们把函数、图像和直线串起来。先弄清输入、输出和定义域，再学会用图像和检验方法判断函数与反函数。",
+      "source_quote": "函数是将一个对象转化为另一个对象的规则. 起始对象称为输入",
+      "source_pages": {
+        "from": 23,
+        "to": 23
+      },
+      "source_anchor": {
+        "page": 23,
+        "para_index": 13
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 2,
+      "layout": "content_text",
+      "title": "区间表示法",
+      "subtitle": "",
+      "section": "1.1.1 区间表示法",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [
+        "闭区间 [a, b] 包含两个端点",
+        "开区间 (a, b) 不包含端点",
+        "半开区间只在一端闭合",
+        "无穷区间用 ∞ 或 −∞ 表示"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "数轴上标出四个彩色区间，端点有实心与空心圆",
+      "audio_script": "先看区间的写法。方括号表示端点算在内，圆括号表示不算；一边方一边圆就是半开区间。往无穷延伸时，就用无穷符号来收尾。",
+      "source_quote": "我们约定, [a, b] 是指从 a 到 b 端点间的所有实数, 包括 a 和 b.",
+      "source_pages": {
+        "from": 25,
+        "to": 25
+      },
+      "source_anchor": {
+        "page": 25,
+        "para_index": 6
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 3,
+      "layout": "quote",
+      "title": "求定义域时先排雷",
+      "subtitle": "",
+      "section": "1.1.2 求定义域",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": "以下是三种最常见的情况. (1) 分数的分母不能是零. (2) 不能取一个负数的平方根 (或四次根, 六次根, 等等). (3) 不能取一个负数或零的对数.",
+      "quote_source": "第1章 函数、图像和直线",
+      "image_prompt": "黑板上列出三个警示符号，旁边是分数、根号和对数",
+      "audio_script": "求定义域先找会让式子出问题的地方：分母不能为零，偶次根号下不能为负，对数的真数必须为正。把这几条限制叠在一起，定义域就缩小了。",
+      "source_quote": "以下是三种最常见的情况. (1) 分数的分母不能是零. (2) 不能取一个负数的平方根 (或四次根, 六次根, 等等). (3) 不能取一个负数或零的对数.",
+      "source_pages": {
+        "from": 26,
+        "to": 26
+      },
+      "source_anchor": {
+        "page": 26,
+        "para_index": 3
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 4,
+      "layout": "content_text",
+      "title": "把限制条件叠起来",
+      "subtitle": "",
+      "section": "1.1.2 求定义域",
+      "page_role": "example",
+      "sections": [],
+      "bullet_points": [
+        "根号 26 − 2x 要求 x ≤ 13",
+        "对数 x + 8 要求 x > −8",
+        "分母 (x − 2)(x + 19) 不能为零",
+        "合并后得到 (−8, 13] 去掉 2",
+        "零次幂的底数也不能为零"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一支笔在数轴上圈出区间，旁边标出被挖掉的点",
+      "audio_script": "看一个综合例子：根号限制出 x 不大于 13，对数要求 x 大于 −8，分母又要求 x 不能等于 2 或 −19。取交集后，再把 2 挖掉，定义域就清楚了。",
+      "source_quote": "取 (26 − 2x) 的平方根, 所以这个量必须是非负的. 也就是说, 26 − 2x > 0.",
+      "source_pages": {
+        "from": 25,
+        "to": 26
+      },
+      "source_anchor": {
+        "page": 26,
+        "para_index": 22
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 5,
+      "layout": "content_text",
+      "title": "用图像求值域",
+      "subtitle": "",
+      "section": "1.1.3 利用图像求值域",
+      "page_role": "graph",
+      "sections": [],
+      "bullet_points": [
+        "值域是所有实际输出组成的集合",
+        "把图像往纵轴方向投影",
+        "纵轴上的影子并集就是值域",
+        "左右影子重叠时取覆盖范围"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "曲线向纵轴投下两束光，纵轴上出现明暗影子",
+      "audio_script": "值域是实际输出。把图像朝纵轴方向投影，看纵轴上留下哪些影子；左右两边的影子合起来，就是值域。",
+      "source_quote": "基本思想是, 画出函数图像, 然后想象从图像的左边和右边很远的地方朝向 y 轴水平地射入两束亮光. 曲线会在 y 轴上有两个影子, 一个在 y 轴的左侧, 另一个在 y 轴的右侧. 值域就是影子的并集",
+      "source_pages": {
+        "from": 26,
+        "to": 27
+      },
+      "source_anchor": {
+        "page": 27,
+        "para_index": 1
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 6,
+      "layout": "quote",
+      "title": "垂线检验",
+      "subtitle": "",
+      "section": "1.1.4 垂线检验",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": "在图像上没有两个点会落在相对于 x 轴的同一条垂线上.",
+      "quote_source": "第1章 函数、图像和直线",
+      "image_prompt": "一条竖线切过圆形图像，留下两个交点",
+      "audio_script": "检查一个图形是不是函数，就看垂线。任何一条垂线如果和图像相交超过一次，同一个 x 就对应多个输出，那就不是函数的图像。",
+      "source_quote": "在图像上没有两个点会落在相对于 x 轴的同一条垂线上.",
+      "source_pages": {
+        "from": 27,
+        "to": 28
+      },
+      "source_anchor": {
+        "page": 27,
+        "para_index": 20
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 7,
+      "layout": "content_text",
+      "title": "水平线检验",
+      "subtitle": "",
+      "section": "1.2.1 水平线检验",
+      "page_role": "graph",
+      "sections": [],
+      "bullet_points": [
+        "水平线检验判断反函数是否存在",
+        "每条水平线至多与图像交一次",
+        "这表示不同输入有不同输出",
+        "一一对应时反函数才存在"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "水平线扫过两条曲线，一条只交一次，另一条交两次",
+      "audio_script": "反函数要把输出倒推回唯一输入，所以看水平线。每条水平线最多和图像交一次，说明不同输入对应不同输出，函数才有一一对应的反函数。像仅有一次相交, 且交点为点 (x, y). 那个 x 就是我们想要的. 如果水平线和曲线。",
+      "source_quote": "如果每一条水平线和一个函数的图像相交至多一次, 那么这个函数就有一个反函数. 如果即使只有一条水平线和图像相交多于一次, 那么这个函数就没有反函数.",
+      "source_pages": {
+        "from": 28,
+        "to": 29
+      },
+      "source_anchor": {
+        "page": 29,
+        "para_index": 31
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "prefix",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 8,
+      "layout": "content_text",
+      "title": "求反函数：交换与解出",
+      "subtitle": "",
+      "section": "1.2.2 求反函数",
+      "page_role": "formula",
+      "sections": [],
+      "bullet_points": [
+        "先写 y = f(x)",
+        "把 x 与 y 交换",
+        "再解出 y 得到反函数",
+        "别忘检查反函数的定义域"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "纸上写着 y 与 x 互换，箭头绕成回路",
+      "audio_script": "求反函数其实就是倒着走：先写 y 等于 f(x)，交换变量，再解出新的 y。解完以后，还要看反函数的定义域是否对应原函数的值域。",
+      "source_quote": "现在来看第二个问题：如何求得函数 f 的反函数呢？其实只需写下 y = f (x), 然后试着解出 x.",
+      "source_pages": {
+        "from": 29,
+        "to": 30
+      },
+      "source_anchor": {
+        "page": 30,
+        "para_index": 7
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "prefix",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 9,
+      "layout": "quote",
+      "title": "立方函数的反函数",
+      "subtitle": "",
+      "section": "1.2.2 求反函数",
+      "page_role": "example",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": "在 f (x) = x 3 的例子中, 有 y = x 3 , 所以 x = 3 √ y.",
+      "quote_source": "第1章 函数、图像和直线",
+      "image_prompt": "立方曲线与它的反函数曲线关于一条斜线对称",
+      "audio_script": "以立方为例，y 等于 x 的三次方，解出 x 就是 y 的立方根。再把变量名换成 x，就得到反函数的表达式。",
+      "source_quote": "在 f (x) = x 3 的例子中, 有 y = x 3 , 所以 x = 3 √ y.",
+      "source_pages": {
+        "from": 30,
+        "to": 30
+      },
+      "source_anchor": null,
+      "anchor_status": "unanchored",
+      "anchor_kind": null,
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 10,
+      "layout": "content_text",
+      "title": "限制定义域",
+      "subtitle": "",
+      "section": "1.2.3 限制定义域",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [
+        "水平线检验失败时可限制定义域",
+        "限制后可能得到反函数",
+        "反函数的反函数回到原函数",
+        "限制范围要满足水平线检验"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条抛物线只保留右半支，水平线只交一次",
+      "audio_script": "如果水平线交了好几次，可以砍掉一部分定义域，让剩下的部分满足水平线检验，这样反函数就能存在。反函数的反函数，在定义域匹配时会回到原函数。",
+      "source_quote": "如果是那样, 获得反函数唯一的方法就是对定义域加以限制, 我们很快会讨论这一点.",
+      "source_pages": {
+        "from": 28,
+        "to": 30
+      },
+      "source_anchor": {
+        "page": 29,
+        "para_index": 28
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 11,
+      "layout": "content_text",
+      "title": "求反函数的基本思路",
+      "subtitle": "",
+      "section": "1.2.2 求反函数",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [
+        "水平线检验失败时，同一个 y 对应多个 x",
+        "求反函数先写下 y = f(x)",
+        "再试着从方程中解出 x",
+        "必要时交换变量，把结果写成 y 表示",
+        "解出的表达式要结合定义域说明"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条曲线与一面倾斜的镜子相对，映出对称的另一条曲线",
+      "audio_script": "上一批我们看到，水平线检验失败时，同一个 y 会对应多个 x，所以函数没有反函数；这一批先接着处理，怎样真正把反函数求出来。基本做法是先写下 y 等于 f(x)，然后从这个方程里解出 x；如果觉得变量别扭，再把字母交换过来。",
+      "source_quote": "如果你觉得变量 y 刺眼, 可以将它改写为 x",
+      "source_pages": {
+        "from": 30,
+        "to": 30
+      },
+      "source_anchor": {
+        "page": 30,
+        "para_index": 12
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 12,
+      "layout": "quote",
+      "title": "反函数是镜面反射",
+      "subtitle": "",
+      "section": "1.2.2 求反函数",
+      "page_role": "example",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": "反函数就是原始函数的镜面反射.",
+      "quote_source": "第1章 1.2.2 求反函数",
+      "image_prompt": "一面斜放的镜子映出一条曲线的倒影",
+      "audio_script": "把 y = x 这条直线想成一面双面镜，原函数的图像在镜子里反射，就得到反函数的图像。求方程时仍然从 y = f(x) 出发解出 x，再交换字母；但别忘了，定义域被限制以后，反函数也要跟着选择对应的那一支。",
+      "source_quote": "反函数就是原始函数的镜面反射.",
+      "source_pages": {
+        "from": 30,
+        "to": 30
+      },
+      "source_anchor": {
+        "page": 30,
+        "para_index": 19
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 13,
+      "layout": "content_text",
+      "title": "限制定义域，换来反函数",
+      "subtitle": "",
+      "section": "1.2.3 限制定义域",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [
+        "水平线检验失败时，只保留一个 x 值",
+        "删去多余曲线，使剩余部分通过检验",
+        "例如平方函数只保留右半边",
+        "定义域缩为 [0, ∞) 后就有反函数",
+        "也可以保留左半边，得到另一支反函数"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条抛物线只保留右半边，左半边被擦去",
+      "audio_script": "如果水平线检验失败，说明同一个 y 有多个 x，唯一办法是限制定义域，只保留其中一个 x 值，删去多余曲线，让保留下来的部分通过水平线检验。比如平方函数保留右半边，定义域缩成从零到正无穷，反函数取非负平方根；保留左半边则取负平方根。",
+      "source_quote": "实质上, 我们删去部分曲线, 使得保留下来的部分能够通过水平线检验.",
+      "source_pages": {
+        "from": 30,
+        "to": 31
+      },
+      "source_anchor": {
+        "page": 30,
+        "para_index": 33
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "prefix",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 14,
+      "layout": "quote",
+      "title": "反函数的反函数",
+      "subtitle": "",
+      "section": "1.2.4 反函数的反函数",
+      "page_role": "formula",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": "换句话说, 反函数的反函数就是原始函数.",
+      "quote_source": "第1章 1.2.4 反函数的反函数",
+      "image_prompt": "两个箭头首尾相接又回到起点，表示来回撤销",
+      "audio_script": "反函数像撤销按钮：先作用 f，再作用 f 的反函数，就回到原来的输入。所以对定义域里的 x，有 f 的反函数作用在 f(x) 上等于 x；反过来，对值域里的 y，f 作用在反函数上等于 y。但限制定义域时要当心，复合顺序可能只在限制后的定义域上等于 x。",
+      "source_quote": "换句话说, 反函数的反函数就是原始函数.",
+      "source_pages": {
+        "from": 31,
+        "to": 32
+      },
+      "source_anchor": {
+        "page": 31,
+        "para_index": 44
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 15,
+      "layout": "content_text",
+      "title": "复合：先内层，再外层",
+      "subtitle": "",
+      "section": "1.3 函数的复合",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [
+        "复合是把一个函数的输出喂给另一个",
+        "f = h ∘ g 表示先算 g 再算 h",
+        "书写顺序与计算顺序相反",
+        "替换 x 时给整个表达式加括号",
+        "复合不是把两个函数相乘"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "两个齿轮前后咬合，一个的输出送入另一个",
+      "audio_script": "复合函数不是把两个函数相乘，而是把一个函数的输出直接送到另一个函数。比如先平方再取余弦，就写成 h(g(x))，记作 h 与 g 的复合。读的时候 h 在前，算的时候却从 g 开始。替换 x 时最好给整个表达式加小括号，避免把平方漏掉。这里的问题在于, −2 没有在 g 的限制定义域当中. 而且, 从技术角度而言, 你甚至。",
+      "source_quote": "换言之, f 是 g 与 h 的复合函数.",
+      "source_pages": {
+        "from": 32,
+        "to": 33
+      },
+      "source_anchor": {
+        "page": 32,
+        "para_index": 38
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 16,
+      "layout": "content_text",
+      "title": "复合与图像平移",
+      "subtitle": "",
+      "section": "1.3 函数的复合",
+      "page_role": "example",
+      "sections": [],
+      "bullet_points": [
+        "把 f(x) 与 x − a 复合得到 f(x − a)",
+        "新图像是原图像向右平移 a 个单位",
+        "a 为负时改为向左平移",
+        "平方函数用 x − 1 替换 x 即可",
+        "复合顺序不同，结果通常不同"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条曲线整体向右滑动一格，留下淡淡的旧位置",
+      "audio_script": "复合还有一个常见效果是平移。把 f(x) 里的 x 换成 x 减 a，新函数 f(x−a) 的图像就是原图像向右平移 a 个单位；a 为负就向左。比如 y 等于 (x−1) 的平方，就是把 y 等于 x 的平方向右移一格。注意复合顺序不同，函数通常也不同。",
+      "source_quote": "y = h(x) 的函数图像向右平移了 a 个单位.",
+      "source_pages": {
+        "from": 33,
+        "to": 34
+      },
+      "source_anchor": {
+        "page": 33,
+        "para_index": 36
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 17,
+      "layout": "quote",
+      "title": "奇偶性看对称",
+      "subtitle": "",
+      "section": "1.4 奇函数和偶函数",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": "偶函数的图像关于 y 轴具有镜面对称性.",
+      "quote_source": "第1章 1.4 奇函数和偶函数",
+      "image_prompt": "曲线沿纵轴左右对称，另一条曲线绕原点旋转半圈",
+      "audio_script": "奇偶性看的是 f(−x) 和 f(x) 的关系。对所有 x 都有 f(−x) 等于 f(x)，就是偶函数，图像关于 y 轴镜面对称；如果 f(−x) 等于负的 f(x)，就是奇函数，图像关于原点有 180 度点对称。判断时把每个 x 换成负 x 再化简，别忘了加括号。",
+      "source_quote": "偶函数的图像关于 y 轴具有镜面对称性.",
+      "source_pages": {
+        "from": 34,
+        "to": 35
+      },
+      "source_anchor": {
+        "page": 34,
+        "para_index": 39
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 18,
+      "layout": "content_text",
+      "title": "线性函数与斜率",
+      "subtitle": "",
+      "section": "1.5 线性函数的图像",
+      "page_role": "concept",
+      "sections": [],
+      "bullet_points": [
+        "线性函数写成 f(x)=mx+b，图像是一条直线",
+        "斜率 m 决定上升或下降，正数上坡，负数下坡",
+        "m 的绝对值越大，直线越陡；m=0 时水平",
+        "y 轴截距是 b，直线经过 (0,b)",
+        "两点确定一条直线，可先找截距再画图"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条从左下向右上延伸的直线，像山路一样穿过坐标平面",
+      "audio_script": "上一批最后在反函数和奇偶性上收尾：求反函数要交代定义域，两个偶函数相乘仍是偶函数，奇函数乘偶函数则是奇函数。现在看线性函数，它写成 f(x)=mx+b，图像是一条直线。斜率 m 正数时从左到右上升，负数时下降，绝对值越大越陡，m=0 就水平。b 是 y 轴截距，所以直线经过 (0,b)。",
+      "source_quote": "形如 f(x) = mx + b 的函数叫作线性函数.",
+      "source_pages": {
+        "from": 36,
+        "to": 37
+      },
+      "source_anchor": {
+        "page": 36,
+        "para_index": 26
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 19,
+      "layout": "quote",
+      "title": "点斜式与两点式",
+      "subtitle": "",
+      "section": "1.5 线性函数的图像",
+      "page_role": "formula",
+      "sections": [],
+      "bullet_points": [],
+      "quote_text": "如果已知直线通过点 (x0, y0), 斜率为 m, 则它的方程为 y−y0 = m(x−x0).",
+      "quote_source": "第1章 函数、图像和直线",
+      "image_prompt": "纸上一条直线经过一个标记点和远处的另一个点，旁有尺子",
+      "audio_script": "知道一个点和斜率，就能直接写点斜式。若只给两个点，先用纵坐标差除以横坐标差算斜率，再任选一点套进点斜式，最后化简成 y=mx+b。截距和斜率都能从这个式子读出来。",
+      "source_quote": "如果已知直线通过点 (x0, y0), 斜率为 m, 则它的方程为 y−y0 = m(x−x0).",
+      "source_pages": {
+        "from": 37,
+        "to": 38
+      },
+      "source_anchor": {
+        "page": 37,
+        "para_index": 18
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 20,
+      "layout": "content_text",
+      "title": "多项式：次数与首项系数",
+      "subtitle": "",
+      "section": "1.6 常见函数及其图像",
+      "page_role": "graph",
+      "sections": [],
+      "bullet_points": [
+        "多项式由 x 的非负次幂乘系数再相加",
+        "最高且系数非零的幂指数叫多项式的次数",
+        "首项系数正负与次数奇偶决定两端走势",
+        "中间部分由其他项决定，需结合具体式子",
+        "二次函数可用配方整理成便于观察的形式"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "多条不同弯曲程度的曲线在坐标平面两端延伸，背景简洁",
+      "audio_script": "多项式是把 x 的非负次幂分别乘上系数再相加。最高且系数不为零的幂指数叫次数；首项系数是最高次项的系数。判断两端走势时，先比较首项系数正负和次数奇偶；中间部分再由其他项决定。二次函数还可以用配方整理。",
+      "source_quote": "最大的幂指数n(该项系数不能为零) 叫作多项式的次数.",
+      "source_pages": {
+        "from": 38,
+        "to": 39
+      },
+      "source_anchor": {
+        "page": 38,
+        "para_index": 16
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 21,
+      "layout": "content_text",
+      "title": "有理、指数与对数函数",
+      "subtitle": "",
+      "section": "1.6 常见函数及其图像",
+      "page_role": "graph",
+      "sections": [],
+      "bullet_points": [
+        "有理函数形如 p(x)/q(x)，p、q 都是多项式",
+        "1/x^n 是简单有理函数，图像随 n 变化",
+        "指数函数 b^x 的定义域是全体实数",
+        "指数函数值域大于零，图像以 x 轴为水平渐近线",
+        "对数函数是 b^x 的反函数，定义域为 (0,+∞)"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条快速上升的曲线和一条缓慢贴近水平轴的曲线并排出现",
+      "audio_script": "有理函数是 p(x) 除以 q(x)，其中 p、q 都是多项式；1/x^n 是简单例子。指数函数 b^x 的定义域是全体实数，值域大于零，图像以 x 轴为水平渐近线。它满足水平线检验，所以有反函数，也就是以 b 为底的对数函数，定义域是 (0,+∞)。",
+      "source_quote": "y 轴的截距为 1 并且值域为大于零的实数",
+      "source_pages": {
+        "from": 39,
+        "to": 41
+      },
+      "source_anchor": {
+        "page": 40,
+        "para_index": 27
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 22,
+      "layout": "content_text",
+      "title": "绝对值函数与图像翻转",
+      "subtitle": "",
+      "section": "1.6 常见函数及其图像",
+      "page_role": "graph",
+      "sections": [],
+      "bullet_points": [
+        "绝对值函数 |x| 要按 x≥0 与 x<0 分段定义",
+        "|x−y| 表示数轴上 x 和 y 两点间的距离",
+        "|x| 等于 √(x²)，但分段定义更清楚",
+        "画 |f(x)| 时，把 x 轴下方图像翻到上方"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条V形折线贴合坐标轴，折线下方部分被翻到上方",
+      "audio_script": "绝对值函数 |x| 最好按 x 大于等于零和小于零分段看，它表示数轴上 0 和 x 的距离。画 |f(x)| 时，把 x 轴下方的图像翻到上方，上方保持不变。这样，多项式、有理、指数、对数和绝对值这些常见函数的图像就都能认出来了。",
+      "source_quote": "它表示数轴上 0 和 x 的距离. 更一般而言, 你应该知道如下重要事实：",
+      "source_pages": {
+        "from": 41,
+        "to": 42
+      },
+      "source_anchor": {
+        "page": 41,
+        "para_index": 33
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    }
+  ]
+}

@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "product_version": "2.0",
+  "series_id": "g91nwrt7el",
+  "book_id": "ak5ywpl4x5q4",
+  "lecture": 1,
+  "title": "第 1 讲 函数、图像和直线：从定义域到垂线检验",
+  "chapters": [
+    11
+  ],
+  "throughline": "以函数为语言，厘清定义域、上域、值域与图像，并用垂线检验建立函数与图像之间的对应。",
+  "seam_prev": null,
+  "seam_next": null,
+  "generated_at": "2026-11-10T18:00:33.245Z",
+  "model": "deepseek-flash",
+  "provider": "deepseek-official",
+  "prompt_version": "lec-v1",
+  "anchor_hit_rate": 1,
+  "slides": [
+    {
+      "slide_index": 1,
+      "layout": "cover",
+      "title": "函数、图像和直线",
+      "subtitle": "从定义域到垂线检验",
+      "bullet_points": [],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "清晨书桌上摊开的坐标纸与铅笔，窗外光线落在函数曲线上",
+      "audio_script": "这一讲我们从函数这个最基础的语言开始，慢慢把定义域、上域、值域和图像之间的关系理清，最后用垂线检验判断一个图形是不是函数。别急着记结论，先跟着例子走一遍，很多细节自然就明白了。",
+      "source_quote": "不借助函数却想去做微积分, 这无疑会是你所能做的最无意义的事情之一.",
+      "source_pages": {
+        "from": 23,
+        "to": 23
+      },
+      "source_anchor": {
+        "page": 23,
+        "para_index": 1
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 2,
+      "layout": "content_text",
+      "title": "函数：输入、输出与值域",
+      "subtitle": "",
+      "bullet_points": [
+        "函数是把输入变成输出的规则",
+        "定义域是允许输入的集合",
+        "上域是可能输出的集合",
+        "值域是实际输出的集合",
+        "不同定义域可能改变同一个规则"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一台简洁的转化机器，左侧小球进入，右侧不同颜色小球出来",
+      "audio_script": "先看函数最朴素的意思：它像一台规则明确的机器，你给它一个输入，它回给你一个输出。输入能取哪些数，由定义域决定；输出可能落在哪个大集合里，叫上域；而真正被输出到的那些数，才组成值域。注意值域常常比上域小，别把两者混为一谈。",
+      "source_quote": "函数是将一个对象转化为另一个对象的规则.",
+      "source_pages": {
+        "from": 23,
+        "to": 24
+      },
+      "source_anchor": {
+        "page": 23,
+        "para_index": 13
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 3,
+      "layout": "quote",
+      "title": "值域只是上域的一部分",
+      "subtitle": "",
+      "bullet_points": [],
+      "quote_text": "值域实际上是上域的一个子集. 上域是可能输出的集合, 而值域则是实际输出的集合.",
+      "quote_source": "第1章 函数、图像和直线",
+      "image_prompt": "两个同心圆环，内环被高亮，外环留白",
+      "audio_script": "这里最容易混淆的是上域和值域。上域只是说输出有可能落在哪个集合里，是一张更大的网；值域则是函数实际打捞上来的东西。比方说平方函数，上域可以取全体实数，但平方的结果不会为负，所以值域只落在非负数里。记住这个包含关系，后面求值域会轻松很多。",
+      "source_quote": "值域实际上是上域的一个子集. 上域\n是可能输出的集合, 而值域则是实际输出的集合.",
+      "source_pages": {
+        "from": 24,
+        "to": 24
+      },
+      "source_anchor": {
+        "page": 24,
+        "para_index": 25
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 4,
+      "layout": "content_text",
+      "title": "区间、定义域与垂线检验",
+      "subtitle": "",
+      "bullet_points": [
+        "闭区间用方括号，开区间用圆括号",
+        "分母不能为零，偶次根号内非负",
+        "对数的真数必须为正",
+        "求定义域要取各限制的交集",
+        "垂线检验：任一垂线与图像至多交一次"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "坐标平面上多条竖直虚线穿过一条曲线，只有一条只交一次",
+      "audio_script": "区间记法只是把不等式写得更紧凑，方括号表示端点算在内，圆括号表示不算。求定义域时，把分母不为零、偶次根号内非负、对数内为正这些条件列出来，再取交集。判断一个图形是不是函数，就看有没有一条垂线和它相交超过一次；若每条垂线至多交一次，就是函数的图像，这就是垂线检验。",
+      "source_quote": "这里的关键思想是, 你不可能有两个点有相同的 x 坐标. 换句话说, 在图像上\n没有两个点会落在相对于 x 轴的同一条垂线上.",
+      "source_pages": {
+        "from": 27,
+        "to": 27
+      },
+      "source_anchor": {
+        "page": 27,
+        "para_index": 20
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 5,
+      "layout": "content_text",
+      "title": "限制定义域，换取反函数",
+      "subtitle": "",
+      "bullet_points": [
+        "水平线检验失败时，同一个 y 可能对应多个 x",
+        "办法是保留一个 x 值，放弃其余值",
+        "对 g(x)=x²，删去左半边，定义域缩为 [0,∞)",
+        "剩下的曲线满足水平线检验，因而有反函数"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条曲线被裁剪成只保留右半边，旁边留出空白区域",
+      "audio_script": "上一批我们看到水平线检验失败时反函数就不存在；这一批要做的，是主动限制定义域，只保留能让水平线检验通过的那部分曲线。比如对 g(x)=x^2，删去左半边，把定义域缩到 [0,∞)，剩下的曲线就满足水平线检验，于是可以谈反函数。",
+      "source_quote": "这条新的 (实线的) 曲线将定义域缩减为 [0, ∞), 并且满足水平线检验, 所以它",
+      "source_pages": {
+        "from": 30,
+        "to": 30
+      },
+      "source_anchor": {
+        "page": 30,
+        "para_index": 38
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 6,
+      "layout": "content_text",
+      "title": "垂线检验与反函数",
+      "subtitle": "",
+      "bullet_points": [
+        "把 y=x 当镜子，水平线反射后会变成垂线",
+        "反射图像不过垂线检验，就不是函数图像",
+        "反函数像撤销按钮，反函数的反函数是原函数",
+        "限制定义域后，f 的逆作用在 f(x) 上可能不等于 x"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一面竖直镜子映出弯曲曲线，曲线在镜中左右分开",
+      "audio_script": "反函数可以当成撤销按钮，反函数的反函数就回到原函数。但限制定义域后要小心：f 的逆作用在 f(x) 上不一定等于 x。另一个有用想法是把 y=x 当镜子，水平线反射后变成垂线；所以反射图像如果不过垂线检验，它就不是函数图像。",
+      "source_quote": "它不是函数的图像. 这说明了垂线检验和水平线检验之间的联系",
+      "source_pages": {
+        "from": 31,
+        "to": 31
+      },
+      "source_anchor": {
+        "page": 31,
+        "para_index": 21
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 7,
+      "layout": "content_text",
+      "title": "复合不是相乘",
+      "subtitle": "",
+      "bullet_points": [
+        "复合 f=h∘g 是先算 g，再把结果交给 h",
+        "求复合从最内层开始代换，必要时加小括号",
+        "函数的乘积与复合不同，复合还与顺序有关",
+        "f(x-a) 把图像向右平移 a 个单位，a 为负则向左"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "两个齿轮前后咬合，输入从一侧进入，结果从另一侧传出",
+      "audio_script": "复合函数不是把两个函数相乘，而是接力：先让内层函数处理输入，再把结果交给外层函数。写 f=h∘g 时，计算要从 g 开始；遇到代换尤其要记得加括号。平移也可以看成复合：f(x-a) 把图像向右移 a 个单位，a 为负时就向左移。",
+      "source_quote": "函数的复合并不是把它们相乘.",
+      "source_pages": {
+        "from": 33,
+        "to": 33
+      },
+      "source_anchor": {
+        "page": 33,
+        "para_index": 17
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 8,
+      "layout": "quote",
+      "title": "奇函数与偶函数",
+      "subtitle": "",
+      "bullet_points": [],
+      "quote_text": "偶函数的图像关于 y 轴具有镜面对称性",
+      "quote_source": "第 1 章 1.4 奇函数和偶函数",
+      "image_prompt": "一条曲线沿纵轴左右对称，另一条绕原点旋转半圈重合",
+      "audio_script": "最后看奇偶性：把 x 换成 -x 后，如果 f(-x)=f(x)，就是偶函数；如果 f(-x)=-f(x)，就是奇函数。偶函数图像关于 y 轴对称，奇函数图像关于原点有 180 度点对称。大多数函数既不是奇函数也不是偶函数，零函数则是唯一的既奇又偶函数。",
+      "source_quote": "偶函数的图像关于 y 轴具有镜面对称性.",
+      "source_pages": {
+        "from": 34,
+        "to": 34
+      },
+      "source_anchor": {
+        "page": 34,
+        "para_index": 39
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 9,
+      "layout": "content_text",
+      "title": "线性函数与点斜式",
+      "subtitle": "",
+      "bullet_points": [
+        "线性函数 f(x)=mx+b 的图像是直线",
+        "斜率 m 正负决定上坡或下坡",
+        "两点确定一条直线",
+        "点斜式：y−y0=m(x−x0)"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "一条从左下向右上延伸的直线穿过坐标平面，远处有山峰轮廓",
+      "audio_script": "上一批我们用水平线检验和反射说明了有些图像不是函数图像，这一批转到直线。形如 f(x)=mx+b 的函数叫线性函数，m 是斜率，正数上坡、负数下坡，零则水平。画直线只要两个点；已知一点和斜率，就用点斜式 y−y0=m(x−x0) 写方程。",
+      "source_quote": "形如 f(x) = mx + b 的函数叫作线性函数. 如此命名原因很简单, 因为它们的图像是直线. 直线的斜率是 m.",
+      "source_pages": {
+        "from": 36,
+        "to": 36
+      },
+      "source_anchor": {
+        "page": 36,
+        "para_index": 26
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 10,
+      "layout": "content_text",
+      "title": "多项式的次数与走势",
+      "subtitle": "",
+      "bullet_points": [
+        "多项式由 x 的非负次幂项相加而成",
+        "最高次幂的系数叫首项系数",
+        "首项系数正负与次数奇偶决定两端走势",
+        "二次函数可用判别式与配方法研究"
+      ],
+      "quote_text": null,
+      "quote_source": null,
+      "image_prompt": "平滑曲线在坐标平面两端分别上扬与下落的抽象示意",
+      "audio_script": "多项式是函数里很基本的一类，它把 x 的非负次幂乘上系数再相加。最高次幂的次数决定它的名字，最高次项的系数叫首项系数。判断图像两端往哪走，只要看首项系数正负和次数奇偶；二次函数还可借判别式与配方看清结构。",
+      "source_quote": "最大的幂指数n(该项系数不能为零) 叫作多项式的次数. 例如上述多项式的次数为 4, 因为不存在比 4 大的 x 的幂指数.",
+      "source_pages": {
+        "from": 38,
+        "to": 38
+      },
+      "source_anchor": {
+        "page": 38,
+        "para_index": 16
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    },
+    {
+      "slide_index": 11,
+      "layout": "quote",
+      "title": "绝对值：数轴上的距离",
+      "subtitle": "",
+      "bullet_points": [],
+      "quote_text": "|x − y| 是数轴上 x 和 y 两点间的距离.",
+      "quote_source": "第1章 函数、图像和直线",
+      "image_prompt": "一条数轴上标出两个点，中间用弧线表示距离",
+      "audio_script": "绝对值可以理解成距离。|x−y| 就是数轴上 x 和 y 两点间的距离，所以 |x−1|≤3 表示与 1 的距离不超过 3，解出来就是 [−2,4]。画绝对值图像时，把 x 轴下方部分翻到上方，上方保持不动。",
+      "source_quote": "|x − y| 是数轴上 x 和 y 两点间的距离.",
+      "source_pages": {
+        "from": 41,
+        "to": 41
+      },
+      "source_anchor": {
+        "page": 41,
+        "para_index": 35
+      },
+      "anchor_status": "anchored",
+      "anchor_kind": "exact",
+      "audio_file": null,
+      "audio_provider": "none",
+      "audio_ms": 0,
+      "image_file": null,
+      "image_status": "pending"
+    }
+  ]
+}

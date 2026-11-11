@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "series_id": "g91nwrt7el",
+  "generated_at": "2026-11-10T19:20:39.193Z",
+  "state": "unstitched",
+  "metrics": [
+    {
+      "id": "seam",
+      "label": "接缝一致",
+      "ok": true,
+      "value": "无需接缝",
+      "blocking": true
+    },
+    {
+      "id": "order",
+      "label": "页序与章序",
+      "ok": true,
+      "value": "100%",
+      "blocking": true
+    },
+    {
+      "id": "duplicate",
+      "label": "相邻讲重复率",
+      "ok": true,
+      "value": 0,
+      "blocking": true,
+      "threshold": 0.5,
+      "pairs": []
+    },
+    {
+      "id": "terms",
+      "label": "术语禁用词",
+      "ok": false,
+      "value": 1,
+      "blocking": true
+    },
+    {
+      "id": "density",
+      "label": "密度 ρ",
+      "ok": true,
+      "value": [
+        {
+          "n": 1,
+          "rho": 5.65,
+          "ok": true
+        }
+      ],
+      "blocking": false,
+      "warn": false,
+      "range": [
+        2.5,
+        8
+      ]
+    },
+    {
+      "id": "coverage",
+      "label": "覆盖",
+      "ok": true,
+      "value": "100%",
+      "blocking": true
+    }
+  ],
+  "failures": [
+    {
+      "type": "term",
+      "lecture": 1,
+      "page": 7,
+      "term": "限制定义域",
+      "forbid": "限制域",
+      "message": "第 1 讲第 7 页出现禁用写法「限制域」",
+      "action": "把「限制域」改成「限制定义域」"
+    }
+  ],
+  "actions": [
+    "把「限制域」改成「限制定义域」"
+  ],
+  "warnings": []
+}

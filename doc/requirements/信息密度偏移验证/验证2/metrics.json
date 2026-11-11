@@ -1,0 +1,85 @@
+{
+  "source": {
+    "chars": 21069,
+    "raw_chars": 21585,
+    "pages": 20,
+    "sections": 13
+  },
+  "attempt1": {
+    "label": "节级清单初版（全局节清单被当成每批必覆盖）",
+    "slides": 18,
+    "new_content_chars": 3542,
+    "max_content_chars": 7672,
+    "utilization_pct": 46.2,
+    "rho_full_net": 4.84,
+    "rho_full_raw": 6.09,
+    "rho_stitch": 6.45,
+    "source_pages_covered": 17,
+    "source_pages_missing": 3,
+    "anchor_hit_rate": 0.9444,
+    "settings": {
+      "prompt_version": "lec-v2-sections",
+      "pages": 14,
+      "section_coverage": "13/13 节出现",
+      "issues": [
+        "第 15 页出现占位页「线性函数的图像：待续」：全局节清单被模型理解成“本批也要提一句”",
+        "第 18 页 source_quote 未锚定（anchor_hit_rate 0.944）"
+      ]
+    },
+    "section_terms": {
+      "区间": 5,
+      "求定义域": 1,
+      "分母": 3,
+      "有理": 2,
+      "指数": 2,
+      "对数": 5,
+      "平移": 1,
+      "反函数的反函数": 1
+    }
+  },
+  "attempt2": {
+    "label": "节级清单收敛版（明确“只写本批必须覆盖/承接”，禁止待续页）",
+    "slides": 23,
+    "new_content_chars": 4499,
+    "max_content_chars": 9872,
+    "utilization_pct": 45.6,
+    "rho_full_net": 3.81,
+    "rho_full_raw": 4.80,
+    "rho_stitch": 6.65,
+    "source_pages_covered": 15,
+    "source_pages_missing": 5,
+    "anchor_hit_rate": 0.9565,
+    "settings": {
+      "prompt_version": "lec-v2-sections-b",
+      "pages": 18,
+      "actual_pages": 23,
+      "section_coverage": "13/13 书签节均出现；但正文子节 1.2.4 反函数的反函数、节内子点 1.3 平移 丢失",
+      "issues": [
+        "页数 23 超过本讲预算 18（模型只被“至少 1 页/节”约束，没有“每节最多 1 页”）",
+        "第 12 页是「本批回顾」页，属于填充页",
+        "第 20 页「线性函数 y=x 的图像」实际复用 1.2 的镜面反射内容，属于跨节填充",
+        "1.2.3 限制定义域出现 3 页，1.5 出现 3 页，重复率上升",
+        "1.2.4 与 1.3 平移仍丢：节清单不保证子概念/页内要点"
+      ]
+    },
+    "section_terms": {
+      "区间": 11,
+      "求定义域": 3,
+      "分母": 4,
+      "有理": 2,
+      "指数": 3,
+      "对数": 5,
+      "平移": 0,
+      "反函数的反函数": 0,
+      "回顾": 1
+    }
+  },
+  "comparison": {
+    "baseline_rho_net": 8.71,
+    "attempt1_rho_net": 4.84,
+    "attempt2_rho_net": 3.81,
+    "baseline_slides": 11,
+    "attempt1_slides": 18,
+    "attempt2_slides": 23
+  }
+}

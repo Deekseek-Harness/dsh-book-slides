@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "series_id": "g91nwrt7el",
+  "generated_at": "2026-11-10T20:21:28.701Z",
+  "state": "verified",
+  "metrics": [
+    {
+      "id": "seam",
+      "label": "接缝一致",
+      "ok": true,
+      "value": "无需接缝",
+      "blocking": true
+    },
+    {
+      "id": "order",
+      "label": "页序与章序",
+      "ok": true,
+      "value": "100%",
+      "blocking": true
+    },
+    {
+      "id": "duplicate",
+      "label": "相邻讲重复率",
+      "ok": true,
+      "value": 0,
+      "blocking": true,
+      "threshold": 0.5,
+      "pairs": []
+    },
+    {
+      "id": "terms",
+      "label": "术语禁用词",
+      "ok": true,
+      "value": 0,
+      "blocking": true
+    },
+    {
+      "id": "density",
+      "label": "密度 ρ",
+      "ok": true,
+      "value": [
+        {
+          "n": 1,
+          "rho": 7.5,
+          "ok": true
+        }
+      ],
+      "blocking": false,
+      "warn": false,
+      "range": [
+        2.5,
+        8
+      ]
+    },
+    {
+      "id": "coverage",
+      "label": "覆盖",
+      "ok": true,
+      "value": "100%",
+      "blocking": true
+    }
+  ],
+  "failures": [],
+  "actions": [],
+  "warnings": []
+}

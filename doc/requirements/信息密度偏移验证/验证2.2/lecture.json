@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "series_id": "g91nwrt7el",
+  "n": 1,
+  "lecture_id": "g91nwrt7el-1",
+  "title": "第 1 讲　函数、图像和直线：微积分前的函数总复习",
+  "chapters": [
+    11
+  ],
+  "pages": 23,
+  "chars": 21069,
+  "status": "ready",
+  "key": "07494bb2a8f7518fce2558b385ed3513fc573fac23d2df178a0300e3e9054f90",
+  "model": "deepseek-flash",
+  "provider": "deepseek-official",
+  "prompt_version": "lec-v2-sections-c",
+  "started_at": "2026-11-10T20:47:00.133Z",
+  "finished_at": "2026-11-10T20:49:59.282Z",
+  "stages": {
+    "structuring": true,
+    "validate": true,
+    "anchor": true
+  },
+  "anchor_hit_rate": 0.9583333333333334,
+  "quality": {
+    "planned_pages": 19,
+    "actual_pages": 23,
+    "page_count_ok": false,
+    "over_budget": true,
+    "content_ok": false,
+    "missing_sections": [],
+    "missing_must_keep": [
+      {
+        "section": "1.1.2　求定义域",
+        "must_keep": "根号非负"
+      },
+      {
+        "section": "1.1.4　垂线检验",
+        "must_keep": "唯一交点"
+      },
+      {
+        "section": "1.2.1　水平线检验",
+        "must_keep": "一一对应"
+      },
+      {
+        "section": "1.2.2　求反函数",
+        "must_keep": "解出变量"
+      },
+      {
+        "section": "1.2.3　限制定义域",
+        "must_keep": "反函数的反函数"
+      },
+      {
+        "section": "1.3　函数的复合",
+        "must_keep": "函数复合"
+      },
+      {
+        "section": "1.3　函数的复合",
+        "must_keep": "图像变换"
+      },
+      {
+        "section": "1.4　奇函数和偶函数",
+        "must_keep": "对称性"
+      }
+    ],
+    "placeholders": [],
+    "impersonations": [
+      {
+        "page": 8,
+        "title": "反函数：撤销一次变换",
+        "section": "1.2.2　求反函数",
+        "source_page": 29,
+        "range": {
+          "from": 30,
+          "to": 30
+        },
+        "distance": 1,
+        "hard": false
+      },
+      {
+        "page": 10,
+        "title": "限制定义域：让水平线检验通过",
+        "section": "1.2.3　限制定义域",
+        "source_page": 29,
+        "range": {
+          "from": 30,
+          "to": 32
+        },
+        "distance": 1,
+        "hard": false
+      }
+    ],
+    "hard_impersonations": [],
+    "summary_pages": [],
+    "bridge_pages": [],
+    "duplicate_pairs": 0,
+    "ok": false,
+    "repair": {
+      "dropped_pages": [
+        17
+      ]
+    }
+  },
+  "seam_repairs": 0,
+  "seam_repair_details": []
+}

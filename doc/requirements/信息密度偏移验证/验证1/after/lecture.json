@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "series_id": "g91nwrt7el",
+  "n": 1,
+  "lecture_id": "g91nwrt7el-1",
+  "title": "第 1 讲　函数、图像与直线：从定义域到常见函数图像",
+  "chapters": [
+    11
+  ],
+  "pages": 11,
+  "chars": 21069,
+  "status": "ready",
+  "key": "893ba60929aa16303c74dec9b81104f20616397253a704d702a0a782b9a38460",
+  "model": "deepseek-flash",
+  "provider": "deepseek-official",
+  "prompt_version": "lec-v1",
+  "started_at": "2026-11-10T19:19:15.548Z",
+  "finished_at": "2026-11-10T19:20:39.163Z",
+  "stages": {
+    "structuring": true,
+    "validate": true,
+    "anchor": true
+  },
+  "anchor_hit_rate": 1,
+  "seam_repairs": 0,
+  "seam_repair_details": [],
+  "updated_at": "2026-11-10T19:26:58.517Z"
+}

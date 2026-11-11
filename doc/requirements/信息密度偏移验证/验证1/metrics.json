@@ -1,0 +1,75 @@
+{
+  "source": {
+    "chars": 21069,
+    "raw_chars": 21585,
+    "pages": 20,
+    "book_pages": [23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42]
+  },
+  "baseline": {
+    "briefs_sections": 5,
+    "briefs_input_tokens": 4244,
+    "plan_input_tokens": 386,
+    "plan_terms": 4,
+    "slides": 11,
+    "new_content_chars": 1970,
+    "max_content_chars": 4624,
+    "utilization_pct": 42.6,
+    "audio_chars": 1238,
+    "bullet_chars": 507,
+    "quote_text_chars": 85,
+    "rho_full_net": 8.71,
+    "rho_full_raw": 10.96,
+    "rho_stitch": 5.74,
+    "source_pages_covered": 10,
+    "source_pages_missing": 10,
+    "missing_net_chars": 7995
+  },
+  "after": {
+    "briefs_sections": 13,
+    "briefs_input_tokens": 10463,
+    "plan_input_tokens": 501,
+    "plan_terms": 13,
+    "slides": 11,
+    "new_content_chars": 2319,
+    "max_content_chars": 4624,
+    "utilization_pct": 50.2,
+    "audio_chars": 1446,
+    "bullet_chars": 592,
+    "quote_text_chars": 120,
+    "rho_full_net": 7.40,
+    "rho_full_raw": 9.31,
+    "rho_stitch": 5.65,
+    "source_pages_covered": 10,
+    "source_pages_missing": 10,
+    "missing_net_chars": 8243
+  },
+  "delta": {
+    "new_content_chars": 349,
+    "utilization_pct": 7.6,
+    "rho_full_net": -1.31,
+    "rho_full_raw": -1.65,
+    "plan_terms": 9
+  },
+  "section_coverage": {
+    "1.1.1 区间表示法": { "baseline": true, "after": false, "note": "基线有闭/开区间要点；验证1 全篇 0 次“区间”" },
+    "1.1.2 求定义域": { "baseline": true, "after": false, "note": "基线有分母/偶次根/对数/交集四条；验证1 只有“定义域”概念，没有求法" },
+    "1.1.3 利用图像求值域": { "baseline": false, "after": false, "note": "两版都没有独立的图像投影法" },
+    "1.1.4 垂线检验": { "baseline": true, "after": true },
+    "1.2.1 水平线检验": { "baseline": true, "after": true },
+    "1.2.2 求反函数": { "baseline": false, "after": true, "note": "验证1 有“由 y=f(x) 解出 x”" },
+    "1.2.3 限制定义域": { "baseline": true, "after": true },
+    "1.2.4 反函数的反函数": { "baseline": true, "after": true },
+    "1.3 函数的复合": { "baseline": true, "after": true },
+    "1.3 平移 f(x-a)": { "baseline": true, "after": false, "note": "验证1 全篇 0 次“平移”" },
+    "1.4 奇函数和偶函数": { "baseline": true, "after": true, "note": "基线是 quote 页；验证1 是内容页 4 条要点" },
+    "1.5 线性函数的图像": { "baseline": true, "after": true, "note": "基线 1 页；验证1 2 页" },
+    "1.6 多项式/二次": { "baseline": true, "after": true },
+    "1.6 有理函数": { "baseline": false, "after": false, "note": "两版都 0 次“有理”" },
+    "1.6 指数/对数": { "baseline": false, "after": true, "note": "验证1 指数/对数各 3 次" },
+    "1.6 绝对值": { "baseline": true, "after": true }
+  },
+  "term_gate": {
+    "before_repair": "unstitched: 第 1 讲第 7 页出现禁用写法「限制域」",
+    "after_repair": "verified（确定性替换：限制域 → 限制定义域）"
+  }
+}
