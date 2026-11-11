@@ -829,8 +829,7 @@ async function handleSeriesCreate(req, res) {
 
 function withQualitySummaries(series, dir) {
   const list = Array.isArray(series && series.lectures) ? series.lectures : [];
-  return Object.assign({}, series, {
-    lectures: list.map((lecture) => {
+  const mapped = list.map((lecture) => {
       const summary = lecture && lecture.quality_summary ? lecture.quality_summary : null;
       if (summary) {
         const pages = Number(lecture.pages) || 0;
@@ -866,7 +865,20 @@ function withQualitySummaries(series, dir) {
           plan_pages_stale: stale,
         },
       });
-    }),
+  });
+  const plannedTotal = mapped.reduce(
+    (sum, lecture) => sum + (Number(lecture.planned_pages) || Number(lecture.pages) || 0),
+    0,
+  );
+  const actualTotal = mapped.reduce(
+    (sum, lecture) => sum + (Number(lecture.actual_pages) || Number(lecture.pages) || 0),
+    0,
+  );
+  return Object.assign({}, series, {
+    lectures: mapped,
+    planned_total_pages: Number(series.planned_total_pages) || plannedTotal,
+    // total_pages 以实际页数为准；旧系列可能停在计划值，不能用它压过 actual。
+    total_pages: actualTotal || Number(series.total_pages) || 0,
   });
 }
 

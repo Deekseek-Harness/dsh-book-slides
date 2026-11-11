@@ -4554,6 +4554,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       if (!state) return null;
       const q = state.quality || {};
       const density = q.density || {};
+      const fallbackSections = (state.sections || []).filter((section) => section && section.must_keep_fallback);
       const line = (label, value) => h('div', { className: 'blm-plan-line' }, h('strong', null, label + '：'), value);
       const list = (items, format) => (Array.isArray(items) && items.length
         ? h('div', { className: 'blm-plan-line' }, items.map(format).join('；'))
@@ -4588,6 +4589,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                   : null,
                 (q.must_keep_aliases || []).length
                   ? line('别名覆盖', list(q.must_keep_aliases, (item) => (item.section || '') + ' · ' + item.must_keep))
+                  : null,
+                fallbackSections.length
+                  ? line('must_keep 回退', list(fallbackSections, (section) => section.title + ' · ' + (section.must_keep || []).join('/')))
                   : null,
                 (q.hard_impersonations || []).length || (q.soft_impersonations || []).length
                   ? line('冒充', '硬 ' + (q.hard_impersonations || []).length + ' / 软 ' + (q.soft_impersonations || []).length)
@@ -4639,6 +4643,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         && (lec.quality_summary.content_ok === false || lec.quality_summary.density_ok === false));
       const overBudgetCount = lectures.filter((lec) => lec.quality_summary && lec.quality_summary.over_budget).length;
       const pagesStale = lectures.filter((lec) => lec.plan_pages_stale || (lec.quality_summary && lec.quality_summary.plan_pages_stale));
+      const plannedTotal = Number(series.planned_total_pages)
+        || lectures.reduce((sum, lec) => sum + (Number(lec.planned_pages) || Number(lec.pages) || 0), 0);
       const snapshotVersion = seriesSnapshotVersion(series, part);
       const voicePending = playable.filter((lec) => String(lec.voice_status || 'none') !== 'ready');
       const voiceAllReady = playable.length > 0 && voicePending.length === 0;
@@ -4707,7 +4713,7 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         revoice({ missingOnly: true });
       };
       const openQuality = async (lec) => {
-        setQualityState({ n: lec.n, loading: true, error: '', quality: null });
+        setQualityState({ n: lec.n, loading: true, error: '', quality: null, sections: lec.sections || [] });
         try {
           const out = await api('/lecture?seriesId=' + encodeURIComponent(series.id) + '&n=' + encodeURIComponent(lec.n));
           const quality = Object.assign(
@@ -4718,9 +4724,9 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 || (lec.quality_summary && lec.quality_summary.plan_pages_stale === true),
             },
           );
-          setQualityState({ n: lec.n, loading: false, error: '', quality });
+          setQualityState({ n: lec.n, loading: false, error: '', quality, sections: lec.sections || [] });
         } catch (err) {
-          setQualityState({ n: lec.n, loading: false, error: String((err && err.message) || err), quality: null });
+          setQualityState({ n: lec.n, loading: false, error: String((err && err.message) || err), quality: null, sections: lec.sections || [] });
         }
       };
       const replan = async () => {
@@ -5150,7 +5156,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
           { className: 'blm-series-head' },
           h('strong', null, series.title),
           h('span', { className: 'blm-badge' + (series.status === 'ready' ? ' ok' : '') }, series.status),
-          h('span', { className: 'blm-dim' }, lectures.length + ' 讲 · ' + (series.total_pages || 0) + ' 页'),
+          h('span', { className: 'blm-dim' }, lectures.length + ' 讲 · ' + (series.total_pages || 0) + ' 页'
+            + (plannedTotal && plannedTotal !== Number(series.total_pages) ? '（计划 ' + plannedTotal + '）' : '')),
           h('div', { style: { flex: 1 } }),
           h(
             'div',

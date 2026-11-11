@@ -10,6 +10,7 @@
 - 新增 `doc/requirements/规范需求3.0.md`：以 2.x SRS v1.29 为基线，有机融合“信息密度/结构修复”。新增 leaf 节树、预算内自主分页、页级 `section`/`page_role`、短 `must_keep`、硬/软冒充、`content_ok`/`density_ok` 审计、书签刷新（`POST /book/outline/refresh`）、缓存键、质量面板、节级预览、allocator prompt 契约；AC 覆盖到 AC-191。
 - 新增 `doc/requirements/信息密度偏移验证/`：验证 1 / 2 / 2.1 / 2.2 / 2.3 / 2.3b / 4-lite 的报告、指标与产物归档。
 - 更新 `doc/requirements/README.md` 3.0 索引，标注 2.0 为历史基线、3.0 为单文档融合。
+- 3.0 P2 体验/文档：§0.4–0.6 演示路径/2.x 已交付能力/功能边界；§6.3–6.5 的 3.0 JSON 示例（sections/quality/version/input_key）。
 - 3.0 目标包版本仍为待发布 `3.0.0`，数据 schema 仍为 `2`；本次不发布包、不升版本。
 
 ### 新增
@@ -26,6 +27,7 @@
 - `host/api.js`：`GET /series`（单系列/列表）按 `lecture.json.quality` 回填 `quality_summary`；`v2-p0` 覆盖书签刷新/缓存键。
 - **planned/actual 分离（FR-13.4）**：`series.lectures[].pages` 保留计划值，新增 `actual_pages`；`lecture.json.pages` 保持实际值，新增 `planned_pages`/`actual_pages`；`series.total_pages` 按实际、`planned_total_pages` 按计划；进度/目录/导出/配音页数用实际，讲缓存键用计划。
 - **旧数据提示（FR-13.4/§7.4）**：`GET /series` 对旧系列标 `plan_pages_stale`；系列卡/讲行显示「计划页数需重规划」，确认后走 `POST /series/plan {force:true}`，不自动重规划、不伪造原始计划值。
+- **P2 体验收尾（§7.4/§7.11）**：系列卡显示计划/实际总页数；质量面板显示 `must_keep_fallback` 节；`GET /series` 回填 `planned_total_pages`。
 - `package.json`：`test:v2` 纳入 `test/v2-p0.test.mjs`（书签刷新、缓存键、planned/actual）。
 
 ## [2.6.0] - 2026-11-11
