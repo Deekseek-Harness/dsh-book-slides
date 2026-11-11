@@ -3,7 +3,9 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 需求基线冻结在 [doc/requirements/规范需求.md](doc/requirements/规范需求.md)（v1.0），行为变化记在这里。
 
-## [Unreleased]
+## [2.7.0-alpha.1] - 2026-11-11
+
+**3.0 信息密度/结构修复 alpha**。包 `2.7.0-alpha.1`（tag `v2.7.0-alpha.1`）、产品 `2.5`、数据 schema `2`、SRS v3.0；alpha 期间 `product_version` 保持 `2.5`，3.0 正式版再升。
 
 ### 文档
 
@@ -11,7 +13,7 @@
 - 新增 `doc/requirements/信息密度偏移验证/`：验证 1 / 2 / 2.1 / 2.2 / 2.3 / 2.3b / 4-lite 的报告、指标与产物归档。
 - 更新 `doc/requirements/README.md` 3.0 索引，标注 2.0 为历史基线、3.0 为单文档融合。
 - 3.0 P2 体验/文档：§0.4–0.6 演示路径/2.x 已交付能力/功能边界；§6.3–6.5 的 3.0 JSON 示例（sections/quality/version/input_key）。
-- 3.0 目标包版本仍为待发布 `3.0.0`，数据 schema 仍为 `2`；本次不发布包、不升版本。
+- 3.0 目标正式版仍为 `3.0.0`；本次先以 `2.7.0-alpha.1` 发布 alpha，数据 schema 仍为 `2`。
 
 ### 新增
 
