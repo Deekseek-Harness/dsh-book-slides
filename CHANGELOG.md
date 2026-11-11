@@ -28,6 +28,9 @@
 - **planned/actual 分离（FR-13.4）**：`series.lectures[].pages` 保留计划值，新增 `actual_pages`；`lecture.json.pages` 保持实际值，新增 `planned_pages`/`actual_pages`；`series.total_pages` 按实际、`planned_total_pages` 按计划；进度/目录/导出/配音页数用实际，讲缓存键用计划。
 - **旧数据提示（FR-13.4/§7.4）**：`GET /series` 对旧系列标 `plan_pages_stale`；系列卡/讲行显示「计划页数需重规划」，确认后走 `POST /series/plan {force:true}`，不自动重规划、不伪造原始计划值。
 - **P2 体验收尾（§7.4/§7.11）**：系列卡显示计划/实际总页数；质量面板显示 `must_keep_fallback` 节；`GET /series` 回填 `planned_total_pages`。
+- **3.1 must_keep 别名配置（FR-17.2）**：内置 11 条 + 数据根 `must-keep-aliases.json`；`GET/POST /settings/must-keep-aliases`；设置页 JSON 编辑/恢复内置；非法 `E_ALIAS_INVALID`。
+- **3.1 模型化补讲（FR-17.2）**：有模型时先让模型只改写该页要点/口播并校验 must_keep；失败回退原文短句补讲。
+- **3.1 4-lite-b 提示**：`lec-v2-sections-f` 要求 4–5 条×25–40 个汉字，短词必须扩成完整句；仍以 `density_ok` 验收。
 - `package.json`：`test:v2` 纳入 `test/v2-p0.test.mjs`（书签刷新、缓存键、planned/actual）。
 
 ## [2.6.0] - 2026-11-11

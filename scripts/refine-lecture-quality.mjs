@@ -62,7 +62,7 @@ const plannedPages = Number(
 ) || 0;
 const auditLecture = Object.assign({}, lecture, { pages: plannedPages || lecture.pages });
 const before = auditSections(doc.slidesDoc.slides, auditLecture, maxPage);
-const refined = repairMissingMustKeep(doc.slidesDoc.slides, auditLecture, chapterMap, texts.pages, maxPage);
+const refined = await repairMissingMustKeep(doc.slidesDoc.slides, auditLecture, chapterMap, texts.pages, maxPage);
 const after = auditSections(refined.slides, auditLecture, maxPage);
 const priorRepair = (doc.slidesDoc.quality && doc.slidesDoc.quality.repair) || {};
 const quality = Object.assign({}, after, {

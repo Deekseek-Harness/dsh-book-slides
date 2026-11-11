@@ -13,8 +13,9 @@ delete process.env.DSH_HOME;
 
 const { createBook, loadBook, writeBookmark, writeChapters } = await import('../host/books.js');
 const { refreshBookmarkTree } = await import('../host/chapters.js');
-const { lectureKeyOf } = await import('../host/generate.js');
+const { auditSections, lectureKeyOf, repairMissingMustKeep } = await import('../host/generate.js');
 const { totalPagesOf } = await import('../host/progress.js');
+const { DEFAULT_ALIASES, readMustKeepAliases, resetMustKeepAliases, writeMustKeepAliases } = await import('../host/aliases.js');
 
 function makeBook() {
   const rawPages = [];
@@ -92,6 +93,38 @@ test('P0：进度/系列总页数按实际页数，计划页数不覆盖实际',
     ],
   };
   assert.equal(totalPagesOf(series), 30);
+});
+
+test('3.1：must_keep 别名表可覆盖/恢复，且与内置表合并', () => {
+  assert.ok(DEFAULT_ALIASES.length >= 10);
+  writeMustKeepAliases([{ term: '测试别名', any: ['甲', '乙'] }]);
+  const merged = readMustKeepAliases();
+  assert.ok(merged.some((rule) => rule.term === '测试别名'));
+  assert.ok(merged.some((rule) => rule.term === '根号非负'));
+  resetMustKeepAliases();
+  const reset = readMustKeepAliases();
+  assert.ok(!reset.some((rule) => rule.term === '测试别名'));
+  assert.equal(reset.length, DEFAULT_ALIASES.length);
+});
+
+test('3.1：无模型时 must_keep 补讲回退原文短句', async () => {
+  const lecture = {
+    sections: [{ title: '1.1', page: 1, pages: 1, must_keep: ['反函数的反函数'] }],
+  };
+  const slides = [{
+    slide_index: 1,
+    layout: 'content_text',
+    title: '反函数',
+    bullet_points: ['先交换变量'],
+    audio_script: '反函数像撤销按钮。',
+    section: '1.1',
+    source_pages: { from: 1, to: 1 },
+  }];
+  const pages = [{ page: 1, text: '反函数的反函数就是原始函数。' }];
+  const out = await repairMissingMustKeep(slides, lecture, new Map(), pages, 1);
+  assert.equal(out.repaired.length, 1);
+  const after = auditSections(out.slides, lecture, 1);
+  assert.deepEqual(after.must_keep_real_missing, []);
 });
 
 test.after(() => {

@@ -82,6 +82,7 @@ export const ROUTE_VOICE_REFVOICES_IMPORT = ROUTE_PREFIX + '/voice/refvoices/imp
 export const ROUTE_VOICE_COMFY_PROBE = ROUTE_PREFIX + '/voice/comfy/probe';
 export const ROUTE_PAGES = ROUTE_PREFIX + '/pages';
 export const ROUTE_PREFERENCE = ROUTE_PREFIX + '/preference';
+export const ROUTE_MUST_KEEP_ALIASES = ROUTE_PREFIX + '/settings/must-keep-aliases';
 export const ROUTE_TRASH_CLEAR = ROUTE_PREFIX + '/trash/clear';
 export const ROUTE_PDFJS_VENDOR = ROUTE_PREFIX + '/vendor/pdfjs';
 export const ROUTE_EXPORT = ROUTE_PREFIX + '/export';
@@ -431,6 +432,7 @@ export function apply(ctx) {
     route(ROUTE_PAGES, routeV2);
 
     route(ROUTE_PREFERENCE, routeV2);
+    route(ROUTE_MUST_KEEP_ALIASES, routeV2);
 
     route(ROUTE_TRASH_CLEAR, routeV2);
 

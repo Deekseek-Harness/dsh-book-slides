@@ -28,6 +28,7 @@ import {
 import { buildStitchReport, writeStitchReport, withSeamSentence } from './stitch.js';
 import { initialImageStatus } from './images.js';
 import { callModel, readJsonBlock, resolveModel } from './llm.js';
+import { readMustKeepAliases } from './aliases.js';
 import { billingForLlm, runUsageJob } from './usage.js';
 import { estimateLecture } from './usage-estimate.js';
 import {
@@ -51,8 +52,9 @@ import {
   validateSlides,
 } from '../lib/slides.js';
 
-export const LECTURE_PROMPT_VERSION = 'lec-v2-sections-e';
+export const LECTURE_PROMPT_VERSION = 'lec-v2-sections-f';
 const PROMPT = new URL('../prompts/lecture-v1.md', import.meta.url);
+const MUSTKEEP_PROMPT = new URL('../prompts/repair-mustkeep-v1.md', import.meta.url);
 const LLM_MAX_TOKENS = 16000;
 const LLM_RETRY_MAX_TOKENS = 32000;
 const ANCHOR_MAX_TOKENS = 8000;
@@ -85,6 +87,14 @@ function clamp(n, min, max) {
 
 function isAbort(err) {
   return !!(err && (err.name === 'AbortError' || err.name === 'TimeoutError' || /aborted|abort/i.test(String(err.message || ''))));
+}
+
+function mustKeepRepairPrompt() {
+  try {
+    return fs.readFileSync(MUSTKEEP_PROMPT, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function promptText() {
@@ -587,24 +597,9 @@ function sectionPageRange(lecture, section, maxPage) {
   return { from, to };
 }
 
-/** 已知的 must_keep 同义/别名规则；用于区分“页面换了说法”与“真的没讲”。 */
-const MUST_KEEP_ALIASES = [
-  { term: '根号非负', all: ['根号', '非负'] },
-  { term: '唯一交点', any: ['只交一次', '至多一次', '唯一交点', '至多相交一次'] },
-  { term: '一一对应', any: ['一一对应', '只对应一个', '唯一输出', '最多交一次', '对应正负两个'] },
-  { term: '解出变量', any: ['解出 x', '解出 y', '解出变量'] },
-  { term: '函数复合', any: ['复合'] },
-  { term: '图像变换', any: ['变换', '平移'] },
-  { term: '对称性', any: ['对称'] },
-  { term: '交点', any: ['交点', '相交', '交一次'] },
-  { term: '原函数', any: ['原函数', '原始函数'] },
-  { term: '恒等', any: ['恒等', '等于 x', '回到原来的输入', '等于原来的输入'] },
-  { term: '纵轴', any: ['纵轴', 'y 轴', 'y轴'] },
-];
-
-function mustKeepAliasCovered(term, text) {
+function mustKeepAliasCovered(term, text, aliases) {
   const value = normalizeSectionKey(text);
-  const rule = MUST_KEEP_ALIASES.find((item) => normalizeSectionKey(item.term) === normalizeSectionKey(term));
+  const rule = (aliases || []).find((item) => normalizeSectionKey(item.term) === normalizeSectionKey(term));
   if (!rule) return false;
   const all = (rule.all || []).every((item) => value.includes(normalizeSectionKey(item)));
   const any = (rule.any || []).some((item) => value.includes(normalizeSectionKey(item)));
@@ -629,7 +624,8 @@ function overlapRate(a, b) {
  * 讲后软审计：不阻断生成，但把“丢节/凑页/占位/冒充/超预算/讲内重复”落进 slides.json。
  * 验证 2.1 用它验收；后续可以按这些字段触发页级修复。
  */
-export function auditSections(slides, lecture, maxPage) {
+export function auditSections(slides, lecture, maxPage, aliases = null) {
+  const aliasList = Array.isArray(aliases) ? aliases : readMustKeepAliases();
   const sections = Array.isArray(lecture.sections) ? lecture.sections : [];
   const bySection = new Map(sections.map((section) => [normalizeSectionKey(section.title), section]));
   const textBySection = new Map();
@@ -679,7 +675,7 @@ export function auditSections(slides, lecture, maxPage) {
       if (text && normalizeSectionKey(text).includes(normalizeSectionKey(keep))) continue;
       const item = { section: section.title, must_keep: keep };
       missingMustKeep.push(item);
-      if (text && mustKeepAliasCovered(keep, text)) mustKeepAliases.push(item);
+      if (text && mustKeepAliasCovered(keep, text, aliasList)) mustKeepAliases.push(item);
       else mustKeepRealMissing.push(item);
     }
   }
@@ -797,11 +793,40 @@ function repairQualityPages(slides, lecture, maxPage) {
   return { slides: kept, dropped: Array.from(drop).sort((a, b) => a - b).map((index) => index + 1) };
 }
 
+async function rewriteMustKeepPage(job, context, target, section, source, mustKeep) {
+  const system = mustKeepRepairPrompt();
+  if (!system) throw new Error('缺少 must_keep 修复提示词');
+  const user = JSON.stringify({
+    page: {
+      title: target.title,
+      layout: target.layout,
+      bullet_points: target.bullet_points || [],
+      audio_script: target.audio_script || '',
+      section: target.section,
+      source_pages: target.source_pages,
+    },
+    must_keep: [mustKeep],
+    section_title: section.title,
+    source: String(source || '').slice(0, 4000),
+  });
+  const reply = await ask(job, context.ctx, system, user, { maxTokens: 3000, stage: 'repair' });
+  const data = readJsonBlock(reply.text);
+  const bullets = (Array.isArray(data.bullet_points) ? data.bullet_points : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const audio = String(data.audio_script || '').trim();
+  if (!audio || audio.length > AUDIO_MAX) throw new Error('补讲口播为空或超长');
+  const joined = bullets.join('\n') + '\n' + audio;
+  if (!joined.includes(mustKeep)) throw new Error('补讲没有覆盖 must_keep：' + mustKeep);
+  return { bullet_points: bullets, audio_script: audio };
+}
+
 /**
- * 定点补 must_keep（确定性）：只改该 section 的一页，不增页、不改 section。
- * 优先把原文里包含该 must_keep 的短句加到 bullet；bullet 满/句子长时加到 audio。
+ * 定点补 must_keep：只改该 section 的一页，不增页、不改 section。
+ * 3.1：有模型时先让模型改写该页；失败回退到“原文短句追加”的确定性补讲。
  */
-export function repairMissingMustKeep(slides, lecture, chapterMap, pages, maxPage) {
+export async function repairMissingMustKeep(slides, lecture, chapterMap, pages, maxPage, options = {}) {
   const before = auditSections(slides, lecture, maxPage);
   const real = before.must_keep_real_missing || [];
   if (!real.length) return { slides, repaired: [] };
@@ -825,6 +850,29 @@ export function repairMissingMustKeep(slides, lecture, chapterMap, pages, maxPag
       .filter((page) => Number(page.page) >= range.from && Number(page.page) <= range.to)
       .map((page) => String(page.text || ''))
       .join('\n');
+    if (options.job && options.context && options.context.ctx) {
+      try {
+        const rewritten = await rewriteMustKeepPage(
+          options.job,
+          options.context,
+          target,
+          section,
+          source,
+          item.must_keep,
+        );
+        target.bullet_points = rewritten.bullet_points;
+        target.audio_script = rewritten.audio_script;
+        repaired.push({
+          section: item.section,
+          must_keep: item.must_keep,
+          page: target.slide_index,
+          mode: 'model',
+        });
+        continue;
+      } catch {
+        /* 模型改写失败时走确定性原文补讲 */
+      }
+    }
     let sentence = '';
     for (const part of source.split(/[。！？\n]/)) {
       const value = part.trim();
@@ -1100,7 +1148,10 @@ async function generateLecture(job, context, planLecture) {
     job.stage = 'anchor';
     job.message = '第 ' + n + ' 讲 · 正在修复冒充/占位页';
     const repaired = repairQualityPages(anchored.slides, planLecture, maxPage);
-    const mustKeepRepair = repairMissingMustKeep(repaired.slides, planLecture, chapterMap, pages, maxPage);
+    const mustKeepRepair = await repairMissingMustKeep(repaired.slides, planLecture, chapterMap, pages, maxPage, {
+      job,
+      context: shared,
+    });
 
     /* 预缝：只修边界页 */
     job.message = '第 ' + n + ' 讲 · 正在写接缝句';

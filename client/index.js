@@ -7386,6 +7386,10 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const probeCacheRef = useRef(null);
       const probeAudioRef = useRef(null);
       const [diagnostics, setDiagnostics] = useState(seed.diagnostics || null);
+      const [aliasConfig, setAliasConfig] = useState(null);
+      const [aliasText, setAliasText] = useState('');
+      const [aliasBusy, setAliasBusy] = useState(false);
+      const [aliasMsg, setAliasMsg] = useState('');
       const [form, setForm] = useState(() => {
         const saved = seed.voice || null;
         return saved
@@ -7579,12 +7583,45 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         }
       };
 
+      const saveAliases = async (reset = false) => {
+        setAliasBusy(true);
+        setAliasMsg('');
+        try {
+          let body = { reset };
+          if (!reset) {
+            let aliases;
+            try {
+              aliases = JSON.parse(aliasText || '[]');
+            } catch {
+              throw new Error('别名表不是合法 JSON');
+            }
+            if (!Array.isArray(aliases)) throw new Error('别名表必须是数组');
+            body = { aliases };
+          }
+          const out = await api('/settings/must-keep-aliases', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || '保存失败');
+          setAliasConfig(out);
+          setAliasText(JSON.stringify(out.custom || [], null, 2));
+          setAliasMsg(reset ? '已恢复内置别名表' : '别名表已保存');
+          notify(reset ? '已恢复内置别名表' : '别名表已保存');
+        } catch (err) {
+          setAliasMsg(err.message || String(err));
+        } finally {
+          setAliasBusy(false);
+        }
+      };
+
       const loadSettings = useCallback(async () => {
-        const [settingsOut, voiceOut, diagOut, imageOut] = await Promise.all([
+        const [settingsOut, voiceOut, diagOut, imageOut, aliasOut] = await Promise.all([
           api('/settings'),
           api('/voice'),
           api('/diagnostics').catch(() => null),
           api('/image/config').catch(() => null),
+          api('/settings/must-keep-aliases').catch(() => null),
         ]);
         setSettings(settingsOut);
         setVoice(voiceOut.voice || null);
@@ -7595,6 +7632,10 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
         setTtsTable(voiceOut.voiceTable || null);
         setDiagnostics(diagOut);
         setImage(imageOut && imageOut.ok ? imageOut : null);
+        if (aliasOut && aliasOut.ok) {
+          setAliasConfig(aliasOut);
+          setAliasText(JSON.stringify(aliasOut.custom || [], null, 2));
+        }
         if (voiceOut.voice) {
           setForm({
             provider: voiceOut.voice.provider || 'browser',
@@ -9340,6 +9381,27 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                   ),
                 )
               : h('div', { className: 'blm-dim' }, '正在读…'),
+            h(
+              'div',
+              { style: { marginTop: 12, borderTop: '1px dashed var(--blm-line)', paddingTop: 10 } },
+              h('strong', null, 'must_keep 同义词/别名（3.1）'),
+              h('div', { className: 'blm-dim', style: { fontSize: 11, margin: '4px 0' } },
+                '内置 ' + ((aliasConfig && aliasConfig.defaults) || []).length + ' 条；自定义 '
+                  + ((aliasConfig && aliasConfig.custom) || []).length + ' 条。JSON 数组，每项 {term, any?/all?}。'),
+              h('textarea', {
+                className: 'blm-input',
+                style: { width: '100%', minHeight: 130, font: '11px/1.45 ui-monospace,Consolas,monospace', boxSizing: 'border-box' },
+                value: aliasText,
+                disabled: aliasBusy,
+                onChange: (event) => setAliasText(event.target.value),
+                spellCheck: false,
+              }),
+              h('div', { className: 'blm-row', style: { marginTop: 6 } },
+                h('button', { className: 'blm-btn primary', disabled: aliasBusy, onClick: () => saveAliases(false) }, aliasBusy ? '保存中…' : '保存别名表'),
+                h('button', { className: 'blm-btn', disabled: aliasBusy, onClick: () => saveAliases(true) }, '恢复内置'),
+                h('span', { className: 'blm-dim' }, aliasMsg || ((aliasConfig && aliasConfig.file) || '')),
+              ),
+            ),
             h('div', { className: 'blm-dim', style: { fontSize: 11, marginTop: 6 } }, '诊断只记录错误码与长度，不含原文或模型输出。'),
           ),
         ),

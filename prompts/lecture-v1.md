@@ -1,6 +1,6 @@
 # 逐讲生成（lecture-v1）
 
-> 版本：`lec-v2-sections-e`。改这里必须同步改 `host/generate.js` 的 `LECTURE_PROMPT_VERSION`，否则批检查点会命中旧结果。
+> 版本：`lec-v2-sections-f`。改这里必须同步改 `host/generate.js` 的 `LECTURE_PROMPT_VERSION`，否则批检查点会命中旧结果。
 > 从「## 角色」开始送给模型。
 
 ## 角色
@@ -16,7 +16,7 @@
 5. audio_script 是口语讲解稿，目标 160–220 字（cover 至少 120 字），像对人说话；不念要点，不说「第一点第二点」，不出现「如下图所示」「看幻灯片」「屏幕上」这类依赖视觉的说法。
 6. image_prompt 用一句中文描述画面，60 字内，不出现文字、图表、表格。
 7. 页数按【本批建议页数】给；整讲 6–30 页。
-8. title ≤ 24 字；content_text 的 bullet_points 4–5 条，每条 25–40 字；quote 的 quote_text 80–120 字，quote_source 写原文出处（书名或章节名）。
+8. title ≤ 24 字；content_text 的 bullet_points **4–5 条，每条 25–40 个汉字**；不要用一个词/短语充当要点，不足 4 条必须补成完整句；quote 的 quote_text 80–120 字，quote_source 写原文出处（书名或章节名）。
 9. source_pages.from / to 是 PDF 物理页页码（1 开始），必须落在本批覆盖的页范围内。
 10. 不是整讲第一批时，本批第 1 页的 audio_script 必须先用一句话承接上一批的落点（见【上一批要点】），再进入本批内容。
 11. 【本批必须覆盖】里的每个小节都必须出现：至少一条要点或口播讲到它；不得把多个小节合并成一句就跳过。若本批有【承接小节】，先用一两句话收尾上一节未讲完的部分，不要重复已讲内容。

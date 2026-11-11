@@ -49,6 +49,7 @@ import {
 } from './series.js';
 import { buildPlan } from './plan.js';
 import { readBriefs } from './briefs.js';
+import { readMustKeepAliasConfig, resetMustKeepAliases, writeMustKeepAliases } from './aliases.js';
 import { resolveModel } from './llm.js';
 import {
   billingForLlm,
@@ -1237,6 +1238,24 @@ async function handlePreferencePost(req, res) {
   sendJson(res, 200, { ok: true, preference });
 }
 
+function handleMustKeepAliasesGet(req, res) {
+  ensureRoot();
+  sendJson(res, 200, { ok: true, ...readMustKeepAliasConfig() });
+}
+
+async function handleMustKeepAliasesPost(req, res) {
+  ensureRoot();
+  const body = await readJsonBody(req, 256 * 1024);
+  try {
+    const out = body && body.reset === true
+      ? resetMustKeepAliases()
+      : writeMustKeepAliases(body && body.aliases ? body.aliases : body);
+    sendJson(res, 200, { ok: true, ...out });
+  } catch (err) {
+    sendError(res, 'E_ALIAS_INVALID', '别名表不合法', String((err && err.message) || err).slice(0, 200));
+  }
+}
+
 function handleSeriesProgressGet(req, res, url) {
   ensureRoot();
   const found = findSeriesOr404(res, url.searchParams.get('seriesId'));
@@ -2265,6 +2284,18 @@ async function routeM1Inner(req, res, url, options = {}) {
   }
   if (pathname === PREFIX + '/pages') {
     handlePages(req, res, url);
+    return true;
+  }
+  if (pathname === PREFIX + '/settings/must-keep-aliases') {
+    if (req.method === 'GET') {
+      handleMustKeepAliasesGet(req, res);
+      return true;
+    }
+    if (req.method === 'POST') {
+      await handleMustKeepAliasesPost(req, res);
+      return true;
+    }
+    sendError(res, 'E_METHOD', '不支持的方法', '用 GET 读取、POST 保存别名表。');
     return true;
   }
   if (pathname === PREFIX + '/preference') {
