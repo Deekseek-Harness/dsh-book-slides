@@ -121,15 +121,24 @@
 - `verdict=pass` 必须所有项 `judgment` 为 `covered/synonym/false_positive`；
 - 任何 `missing` 或 `unclear` 不得 `verdict=pass`。
 
-## 5. 只读边界
+## 5. token 预算与失败
+
+- 首次 `maxTokens=16000`；若 `stopReason` 为 `max-tokens` 且没有完整 JSON，自动重试一次 `32000`。
+- 两次都因 `max-tokens` 失败 → `E_REVIEW_TRUNCATED`；提示“缩短讲义/原文或换模型”，不再笼统报“没有返回合法 JSON”。
+- 有文本但无法解析，或 JSON 结构不合法 → `E_REVIEW_INVALID`，不写 `quality.review`。
+- 模型/网络失败 → `E_REVIEW_FAILED`。
+
+## 6. 只读边界
 
 - API 只写 `quality.review`，不改 `slides[]`、`lecture.sections`、`series` 计划；
 - UI 不提供“应用 AI 建议”按钮；只展示证据与建议动作；
-- `content_ok` 仍由重新审计决定；AI `verdict` 不直接改它；
+- `content_ok` 仍由「刷新机检」决定；AI `verdict` 不直接改它；
 - 失败/非法 JSON 不覆盖旧 `review`；
+- **刷新机检保留 `review`**：不删除；若机检摘要 `audit_digest` 变化，标 `stale=true` 和 `stale_reason`，UI 显示“旧快照，建议重新 AI 审阅”；
+- 只有重新 AI 审阅成功才覆盖旧 `review`；
 - 模型调用失败返回 `E_REVIEW_FAILED`；输出非法返回 `E_REVIEW_INVALID`。
 
-## 6. 接口与数据
+## 7. 接口与数据
 
 `POST /lecture/quality/review {seriesId, n}`
 
@@ -149,13 +158,16 @@
   "model": "deepseek-flash",
   "provider": "deepseek-official",
   "prompt_version": "quality-review-v1",
-  "reviewed_at": "2026-11-12T..."
+  "reviewed_at": "2026-11-12T...",
+  "audit_digest": "sha256…",
+  "stale": false,
+  "stale_reason": ""
 }
 ```
 
 数据 schema 仍为 2；`review` 为可选字段。
 
-## 7. 验收
+## 8. 验收
 
 | AC | 断言 |
 |---|---|
@@ -163,8 +175,9 @@
 | AC-193 | 合法 JSON 通过校验；非法 JSON 返回 `E_REVIEW_INVALID`，旧 review 不变 |
 | AC-194 | 审阅前后 `slides[]` 正文哈希不变；仅 `quality.review` 变化 |
 | AC-195 | UI 显示 verdict/items/evidence/action；无“应用/自动改 slides”入口 |
+| AC-196 | 刷新机检后 `quality.review` 仍在；机检摘要变化时 `stale=true`；slides 正文哈希不变 |
 
-## 8. 开放问题
+## 9. 开放问题
 
 - 是否按书隔离别名（当前全局配置）；
 - 是否对同一输入缓存 review；

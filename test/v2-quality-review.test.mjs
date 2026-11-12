@@ -6,6 +6,7 @@ import {
   buildQualityReviewPayload,
   QUALITY_REVIEW_VERSION,
   QualityReviewError,
+  reviewLectureQuality,
   validateQualityReview,
 } from '../host/quality-review.js';
 
@@ -102,6 +103,66 @@ test('3.2：非法输出与 missing+pass 不会直接通过', () => {
     items: [{ judgment: 'missing', page: 1, evidence: {}, confidence: 0.8, action: 'regenerate' }],
   });
   assert.equal(review.verdict, 'needs_human');
+});
+
+function fakeReviewCtx(mode) {
+  let calls = 0;
+  const ctx = {
+    get(name) {
+      if (name === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'fake', model: 'fake-review' }) };
+      if (name !== 'llm') return null;
+      return {
+        async prepareCall() {
+          return {
+            config: {},
+            async *stream() {
+              calls += 1;
+              if (mode === 'always-truncated' || calls === 1) {
+                yield { type: 'finish', reason: { kind: 'max-tokens' } };
+                return;
+              }
+              yield {
+                type: 'text-delta',
+                text: JSON.stringify({
+                  lecture: 1,
+                  verdict: 'needs_human',
+                  items: [{ id: 'mk:1', judgment: 'unclear', page: 1, evidence: {}, confidence: 0.4, action: 'human_review' }],
+                  summary: '需要人工确认',
+                }),
+              };
+              yield { type: 'finish', reason: { kind: 'stop' } };
+            },
+          };
+        },
+      };
+    },
+  };
+  return { ctx, calls: () => calls };
+}
+
+test('3.2：max-tokens 时自动重试 32000', async () => {
+  const fake = fakeReviewCtx('retry');
+  const review = await reviewLectureQuality({
+    ctx: fake.ctx,
+    book: { title: '测试书' },
+    lecture,
+    slides,
+    quality,
+    pages,
+    aliases: [],
+  });
+  assert.equal(fake.calls(), 2);
+  assert.equal(review.verdict, 'needs_human');
+  assert.ok(review.audit_digest);
+});
+
+test('3.2：两次都 max-tokens 时返回 E_REVIEW_TRUNCATED', async () => {
+  const fake = fakeReviewCtx('always-truncated');
+  await assert.rejects(
+    () => reviewLectureQuality({ ctx: fake.ctx, book: {}, lecture, slides, quality, pages, aliases: [] }),
+    (err) => err instanceof QualityReviewError && err.code === 'E_REVIEW_TRUNCATED',
+  );
+  assert.equal(fake.calls(), 2);
 });
 
 test('3.2：只读写入只改 quality.review，不改 slides 正文', () => {

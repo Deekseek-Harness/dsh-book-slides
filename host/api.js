@@ -51,7 +51,7 @@ import {
 import { buildPlan } from './plan.js';
 import { readBriefs } from './briefs.js';
 import { readMustKeepAliasConfig, readMustKeepAliases, resetMustKeepAliases, writeMustKeepAliases } from './aliases.js';
-import { applyQualityReview, QualityReviewError, reviewLectureQuality } from './quality-review.js';
+import { applyQualityReview, QualityReviewError, qualityDigest, reviewLectureQuality } from './quality-review.js';
 import { resolveModel } from './llm.js';
 import {
   billingForLlm,
@@ -912,8 +912,18 @@ async function handleLectureQualityRecheck(req, res) {
   const maxPage = chapters.length
     ? Math.max(...chapters.map((chapter) => Number(chapter.to) || 1))
     : doc.slidesDoc.slides.length;
+  const previous = doc.slidesDoc.quality || doc.lecture.quality || {};
   const quality = auditSections(doc.slidesDoc.slides, planLecture, maxPage);
-  quality.repair = (doc.slidesDoc.quality && doc.slidesDoc.quality.repair) || {};
+  quality.repair = previous.repair || {};
+  if (previous.review) {
+    const stale = previous.review.stale === true
+      || !previous.review.audit_digest
+      || previous.review.audit_digest !== qualityDigest(quality);
+    quality.review = Object.assign({}, previous.review, {
+      stale,
+      stale_reason: stale ? '机检结果已刷新，AI 审阅基于旧快照；建议重新 AI 审阅。' : '',
+    });
+  }
   quality.rechecked_at = new Date().toISOString();
   doc.slidesDoc.quality = quality;
   doc.lecture.quality = quality;

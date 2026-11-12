@@ -147,6 +147,22 @@ test('3.2：POST /lecture/quality/review 只写 review，不改 slides', async (
   const after = JSON.parse(fs.readFileSync(path.join(seriesDir(book.id, series.id), 'lectures/1/slides.json'), 'utf8'));
   assert.equal(JSON.stringify(after.slides), beforeHash);
   assert.equal(after.quality.review.prompt_version, 'quality-review-v1');
+  assert.ok(after.quality.review.audit_digest);
+
+  // 刷新机检必须保留 review，并因机检快照变化标记 stale。
+  const recheck = await fetch(baseUrl + '/dsh-book-slides/lecture/quality/recheck', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ seriesId: series.id, n: 1 }),
+  });
+  assert.equal(recheck.status, 200);
+  const rechecked = await recheck.json();
+  assert.equal(rechecked.quality.review.verdict, 'needs_human');
+  assert.equal(rechecked.quality.review.stale, true);
+  assert.match(rechecked.quality.review.stale_reason, /机检结果已刷新/);
+  const afterRecheck = JSON.parse(fs.readFileSync(path.join(seriesDir(book.id, series.id), 'lectures/1/slides.json'), 'utf8'));
+  assert.equal(JSON.stringify(afterRecheck.slides), beforeHash);
+  assert.equal(afterRecheck.quality.review.stale, true);
 });
 
 test.after(() => {

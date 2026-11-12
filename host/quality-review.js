@@ -4,6 +4,7 @@
  * 输入契约见 doc/requirements/AI审阅-需求规范化.md；
  * 系统提示词见 prompts/quality-review-v1.md。
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import { readMustKeepAliases } from './aliases.js';
@@ -13,6 +14,29 @@ export const QUALITY_REVIEW_VERSION = 'quality-review-v1';
 const PROMPT = new URL('../prompts/quality-review-v1.md', import.meta.url);
 const MAX_SOURCE_CHARS = 12000;
 const MAX_SECTION_CHARS = 2600;
+const REVIEW_MAX_TOKENS = 16000;
+const REVIEW_RETRY_MAX_TOKENS = 32000;
+
+/** 只对会影响审阅结论的机检字段做摘要；用于判断旧 review 是否过期。 */
+export function qualityDigest(quality) {
+  const value = quality && typeof quality === 'object' ? quality : {};
+  const payload = {
+    content_ok: value.content_ok === true,
+    density_ok: value.density_ok === true,
+    planned_pages: Number(value.planned_pages) || 0,
+    actual_pages: Number(value.actual_pages) || 0,
+    missing_sections: value.missing_sections || [],
+    must_keep_real_missing: value.must_keep_real_missing || [],
+    must_keep_aliases: value.must_keep_aliases || [],
+    hard_impersonations: value.hard_impersonations || [],
+    soft_impersonations: value.soft_impersonations || [],
+    placeholders: value.placeholders || [],
+    summary_pages: value.summary_pages || [],
+    duplicate_pairs: Number(value.duplicate_pairs) || 0,
+    density: value.density || {},
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
 
 export class QualityReviewError extends Error {
   constructor(code, message, hint) {
@@ -250,27 +274,74 @@ export function validateQualityReview(input, { lecture = 1 } = {}) {
   };
 }
 
+async function callReviewAttempt(ctx, system, user, maxTokens) {
+  const reply = await callModel(ctx, system, user, {
+    maxTokens,
+    timeoutMs: 180000,
+    stage: 'quality-review',
+  });
+  const text = String(reply.text || '');
+  let parseError = '';
+  if (text.trim()) {
+    try {
+      return { reply, parsed: readJsonBlock(text) };
+    } catch (err) {
+      parseError = String((err && err.message) || err);
+    }
+  }
+  if (/max[-_]?tokens/i.test(String(reply.stopReason || ''))) {
+    throw new QualityReviewError(
+      'E_REVIEW_TRUNCATED',
+      '模型输出预算不足（' + maxTokens + ' tokens），没有生成完整 JSON；已尝试重试。',
+      '请重试、换模型或缩短讲义/原文输入。',
+    );
+  }
+  throw new QualityReviewError(
+    'E_REVIEW_INVALID',
+    '模型没有返回可解析的 JSON（stop=' + (reply.stopReason || '—') + '，len=' + text.length + '）。',
+    parseError || '让模型只输出 JSON 对象后重试。',
+  );
+}
+
 export async function reviewLectureQuality({ ctx, book, lecture, slides, quality, pages, aliases }) {
   const system = reviewPrompt();
   if (!system) throw new QualityReviewError('E_REVIEW_FAILED', '缺少 AI 审阅提示词', '');
   const payload = buildQualityReviewPayload({ book, lecture, slides, quality, pages, aliases });
-  const reply = await callModel(ctx, system, JSON.stringify(payload), {
-    maxTokens: 8000,
-    timeoutMs: 180000,
-    stage: 'quality-review',
-  });
-  let parsed;
+  const user = JSON.stringify(payload);
+  let attempt;
   try {
-    parsed = readJsonBlock(reply.text);
+    attempt = await callReviewAttempt(ctx, system, user, REVIEW_MAX_TOKENS);
   } catch (err) {
-    throw new QualityReviewError('E_REVIEW_INVALID', 'AI 审阅没有返回合法 JSON', String(err.message || err).slice(0, 200));
+    if (!(err instanceof QualityReviewError) || err.code !== 'E_REVIEW_TRUNCATED') throw err;
+    try {
+      attempt = await callReviewAttempt(ctx, system, user, REVIEW_RETRY_MAX_TOKENS);
+    } catch (retryErr) {
+      if (retryErr instanceof QualityReviewError && retryErr.code === 'E_REVIEW_TRUNCATED') {
+        throw new QualityReviewError(
+          'E_REVIEW_TRUNCATED',
+          '模型在 16000 / 32000 tokens 预算内都没有生成完整 JSON。',
+          '请缩短讲义或原文输入，或换一个模型后重试。',
+        );
+      }
+      throw retryErr;
+    }
   }
-  const review = validateQualityReview(parsed, { lecture: lecture.n });
+  let review;
+  try {
+    review = validateQualityReview(attempt.parsed, { lecture: lecture.n });
+  } catch (err) {
+    throw new QualityReviewError(
+      'E_REVIEW_INVALID',
+      'AI 审阅返回了 JSON，但结构不合法：' + String((err && err.message) || err),
+      '重试或换模型；不要应用该结果。',
+    );
+  }
   return Object.assign(review, {
-    model: reply.model,
-    provider: reply.provider,
+    model: attempt.reply.model,
+    provider: attempt.reply.provider,
     prompt_version: QUALITY_REVIEW_VERSION,
     reviewed_at: new Date().toISOString(),
+    audit_digest: qualityDigest(quality),
   });
 }
 

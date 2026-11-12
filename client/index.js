@@ -4587,8 +4587,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             { className: 'blm-row' },
             h('strong', null, '质量与密度 · 第 ' + state.n + ' 讲'),
             h('div', { style: { flex: 1 } }),
-            onAiReview ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onAiReview }, 'AI 审阅') : null,
-            onRecheck ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onRecheck }, '重新审计') : null,
+            onAiReview ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onAiReview }, review ? '重新 AI 审阅' : 'AI 审阅') : null,
+            onRecheck ? h('button', {
+              className: 'blm-btn',
+              disabled: state.loading,
+              title: '用当前别名重算本讲机检；不调用模型，不改讲义',
+              onClick: onRecheck,
+            }, '刷新机检') : null,
             onRegenerate ? h('button', { className: 'blm-btn', disabled: state.loading, onClick: onRegenerate }, '重新生成本讲') : null,
             h('button', { className: 'blm-btn', onClick: onClose }, '关闭'),
           ),
@@ -4631,8 +4636,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                 review
                   ? h('div', { style: { marginTop: 10, borderTop: '1px dashed var(--blm-line)', paddingTop: 8 } },
                       line('AI 审阅', (verdictLabel[review.verdict] || review.verdict || '—')
+                        + (review.stale ? ' · 旧快照' : '')
                         + (review.model ? ' · ' + review.model : '')
                         + (review.prompt_version ? ' · ' + review.prompt_version : '')),
+                      review.stale
+                        ? h('div', { className: 'blm-note warn', style: { marginTop: 4 } },
+                            review.stale_reason || '机检已刷新，AI 审阅基于旧快照；建议重新 AI 审阅。')
+                        : null,
                       review.summary ? h('div', { className: 'blm-note', style: { marginTop: 4 } }, review.summary) : null,
                       (review.items || []).slice(0, 20).map((item) => h('div', { className: 'blm-plan-line', key: item.id || item.page + '-' + item.judgment },
                         '第 ' + (item.page || '—') + ' 页 · '
@@ -4647,11 +4657,11 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
                           : '',
                       )),
                       h('div', { className: 'blm-dim', style: { marginTop: 4, fontSize: 11 } },
-                        'AI 审阅是只读建议，不会改 slides；最终仍以「重新审计」的 content_ok 为准。'),
+                        'AI 审阅是只读建议，不会改 slides；最终仍以「刷新机检」的 content_ok 为准。'),
                     )
                   : null,
                 h('div', { className: 'blm-note', style: { marginTop: 8 } },
-                  '“自动未覆盖”是机器审计，不是人工结论：同义说法请加到设置→must_keep 别名，确实没讲请重新生成本讲；重新审计通过后 content_ok 才会变 true。'),
+                  '“自动未覆盖”是机器审计，不是人工结论：同义说法请加到设置→must_keep 别名，确实没讲请重新生成本讲；改完点「刷新机检」，content_ok 才会按当前别名重算。'),
                 h('div', { className: 'blm-dim', style: { marginTop: 6, fontSize: 11 } }, '质量/密度只作审查提示，不阻断播放；不会自动压回计划页数。'),
               )
             : null,
@@ -4683,8 +4693,8 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
       const imageJobActive = imageJob != null && IMAGE_ACTIVE.includes(String(imageJob.status || ''));
       const imageActive = imageJobActive || (imageJob == null && IMAGE_ACTIVE.includes(imageStatus));
       const playable = lectures.filter((lec) => READY_LECTURE.includes(String(lec.status)));
-      const qualityWarnings = lectures.filter((lec) => lec.quality_summary
-        && (lec.quality_summary.content_ok === false || lec.quality_summary.density_ok === false));
+      const contentWarnings = lectures.filter((lec) => lec.quality_summary && lec.quality_summary.content_ok === false);
+      const densityWarnings = lectures.filter((lec) => lec.quality_summary && lec.quality_summary.density_ok === false);
       const overBudgetCount = lectures.filter((lec) => lec.quality_summary && lec.quality_summary.over_budget).length;
       const pagesStale = lectures.filter((lec) => lec.plan_pages_stale || (lec.quality_summary && lec.quality_summary.plan_pages_stale));
       const plannedTotal = Number(series.planned_total_pages)
@@ -4805,9 +4815,13 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ seriesId: series.id, n }),
           });
-          if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || '重新审计失败');
+          if (!out || out.ok !== true) throw new Error((out && (out.error || out.code)) || '刷新机检失败');
           setQualityState({ n, loading: false, error: '', quality: out.quality || {}, sections: qualityState.sections || [] });
-          notify(out.quality && out.quality.content_ok ? '重新审计通过' : '重新审计完成，仍有待处理项');
+          const contentOk = out.quality && out.quality.content_ok === true;
+          const densityOk = out.quality && out.quality.density_ok === true;
+          if (contentOk && densityOk) notify('本讲内容与密度机检通过');
+          else if (contentOk) notify('本讲内容机检通过；密度仍偏低（软目标）');
+          else notify('本讲内容仍有待处理项' + (densityOk ? '' : '；密度也偏低'));
           await onReload();
         } catch (err) {
           setQualityState(Object.assign({}, qualityState, { loading: false, error: err.message || String(err) }));
@@ -5347,13 +5361,21 @@ body[data-ds-dark-theme] .blm-note.tip{color:#ffcc80}
             ? h('span', { className: 'blm-badge' + (['stitched', 'verified'].includes(series.stitch) ? ' ok' : '') },
                 series.stitch === 'verified' ? '已验收' : series.stitch === 'stitched' ? '已衔接' : '未衔接')
             : null,
-          qualityWarnings.length
+          contentWarnings.length
             ? h('button', {
                 className: 'blm-badge warn',
                 style: { cursor: 'pointer' },
-                title: '点击查看质量与密度明细',
-                onClick: () => openQuality(qualityWarnings[0]),
-              }, '内容告警 ' + qualityWarnings.length + ' 讲')
+                title: '自动机检发现内容待处理项；点击查看明细',
+                onClick: () => openQuality(contentWarnings[0]),
+              }, '内容告警 ' + contentWarnings.length + ' 讲')
+            : null,
+          densityWarnings.length
+            ? h('button', {
+                className: 'blm-badge warn',
+                style: { cursor: 'pointer' },
+                title: '密度偏低是软目标，不阻断播放；点击查看明细',
+                onClick: () => openQuality(densityWarnings[0]),
+              }, '密度偏低 ' + densityWarnings.length + ' 讲')
             : null,
           overBudgetCount
             ? h('span', { className: 'blm-badge warn', title: '计划/实际页数差，不自动压页' }, '超预算 ' + overBudgetCount + ' 讲')
